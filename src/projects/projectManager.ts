@@ -8,6 +8,7 @@ import { ServiceManager } from "../services/serviceManager";
 import type { GlobalStore } from "../storage/globalStore";
 import { Store } from "../storage/store";
 import type { Feature, Project } from "../types";
+import { loadProjectConfig, resolveWorktreeBaseDir } from "./projectConfig";
 
 export interface ProjectContext {
 	project: Project;
@@ -218,20 +219,27 @@ export class ProjectManager {
 	private initializeContext(project: Project): ProjectContext {
 		const storeDir = path.join(this.storagePath, "projects", project.id);
 		const store = new Store(storeDir);
-		const worktreeBase = path.resolve(
+
+		// Per-repository configuration (base branch, branch kinds, dedicated
+		// worktrees dir, local tools) read from `<repo>/.agentspace/config.json`.
+		const config = loadProjectConfig(project.repoPath);
+		const worktreeBase = resolveWorktreeBaseDir(
 			project.repoPath,
+			config,
 			this.worktreeRelativePath,
 		);
 		const featureManager = new FeatureManager(
 			store,
 			project.repoPath,
 			worktreeBase,
+			config,
 		);
 		const agentManager = new AgentManager(
 			store,
 			project.repoPath,
 			worktreeBase,
 			this.tmux,
+			config,
 		);
 		const serviceManager = new ServiceManager(
 			store,

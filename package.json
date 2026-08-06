@@ -197,41 +197,59 @@
 				"agentSpace.codingTools": {
 					"type": "array",
 					"default": [],
-					"items": {
-						"type": "object",
-						"required": [
-							"id",
-							"name",
-							"command"
-						],
-						"properties": {
-							"id": {
-								"type": "string",
-								"description": "Unique identifier"
-							},
-							"name": {
-								"type": "string",
-								"description": "Display name"
-							},
-							"command": {
-								"type": "string",
-								"description": "CLI command to execute"
-							},
-							"args": {
-								"type": "array",
-								"items": {
-									"type": "string"
+"items": {
+							"type": "object",
+							"required": [
+								"id",
+								"name",
+								"command"
+							],
+							"properties": {
+								"id": {
+									"type": "string",
+									"description": "Unique identifier"
 								},
-								"description": "CLI arguments"
+								"name": {
+									"type": "string",
+									"description": "Display name"
+								},
+								"command": {
+									"type": "string",
+									"description": "CLI command to execute"
+								},
+								"args": {
+									"type": "array",
+									"items": {
+										"type": "string"
+									},
+									"description": "CLI arguments"
+								},
+								"env": {
+									"type": "object",
+									"description": "Environment variables merged into the launched CLI process (e.g. a personal profile config dir)"
+								},
+								"family": {
+									"type": "string",
+									"enum": ["claude", "codex", "opencode", "generic"],
+									"description": "Session-handling family. claude-family CLIs are launched with --session-id and resumed with --resume <sessionId>."
+								},
+								"sessionsDir": {
+									"type": "string",
+									"description": "Directory where the CLI stores its session index (used for name/rename discovery)"
+								},
+								"resumeCommand": {
+									"type": "string",
+									"description": "Explicit resume template using {command} and {sessionId} placeholders"
+								}
 							}
-						}
-					},
-					"description": "Custom coding CLI tools. Built-in tools (claude, codex, copilot, opencode) are always available."
+						},
+					"description": "Custom coding CLI tools. Built-in tools (claude, claude-perso, codex, copilot, opencode, hermes) are always available."
 				},
 				"agentSpace.defaultTool": {
 					"type": "string",
-					"markdownDescription": "Default coding tool ID for new agents. On first start, Agent Space prompts you to choose from the coding CLIs available on PATH. Built-in IDs include `claude`, `codex`, `copilot`, and `opencode`.",
+					"markdownDescription": "Default coding tool ID for new agents. On first start, Agent Space prompts you to choose from the coding CLIs available on PATH. Built-in IDs include `claude`, `claude-perso`, `codex`, `copilot`, `opencode`, and `hermes`.",
 					"examples": [
+						"claude-perso",
 						"codex",
 						"claude",
 						"copilot",
