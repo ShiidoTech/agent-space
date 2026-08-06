@@ -40,14 +40,16 @@ describe("CodingToolRegistry", () => {
 	});
 
 	describe("getTools", () => {
-		it("returns 4 built-in tools by default", () => {
+		it("returns 6 built-in tools by default", () => {
 			const tools = registry.getTools();
-			expect(tools).toHaveLength(4);
+			expect(tools).toHaveLength(6);
 			expect(tools.map((t) => t.id)).toEqual([
 				"claude",
 				"codex",
 				"copilot",
 				"opencode",
+				"claude-perso",
+				"hermes",
 			]);
 		});
 
@@ -56,8 +58,8 @@ describe("CodingToolRegistry", () => {
 				codingTools: [{ id: "aider", name: "Aider", command: "aider" }],
 			});
 			const tools = registry.getTools();
-			expect(tools).toHaveLength(5);
-			expect(tools[4].id).toBe("aider");
+			expect(tools).toHaveLength(7);
+			expect(tools[6].id).toBe("aider");
 		});
 
 		it("user tools override builtins by id", () => {
@@ -72,7 +74,7 @@ describe("CodingToolRegistry", () => {
 				],
 			});
 			const tools = registry.getTools();
-			expect(tools).toHaveLength(4);
+			expect(tools).toHaveLength(6);
 			const claude = tools.find((t) => t.id === "claude");
 			expect(claude?.name).toBe("My Claude");
 			expect(claude?.args).toEqual(["--model", "opus"]);
@@ -242,6 +244,25 @@ describe("CodingToolRegistry", () => {
 			const tool = BUILTIN_CODING_TOOLS[0];
 			expect(registry.buildLaunchCommand(tool, null)).toBe("claude");
 		});
+
+		it("uses claude-perso executable with --session-id for claude-perso tool", () => {
+			const tool = registry.resolveAgentTool("claude-perso");
+			expect(registry.buildLaunchCommand(tool, "perso-123")).toBe(
+				"claude-perso --session-id perso-123",
+			);
+		});
+
+		it("prefixes env vars as shell assignments when launching", () => {
+			const tool = {
+				id: "custom",
+				name: "Custom",
+				command: "my-tool",
+				env: { CLAUDE_CONFIG_DIR: "/home/u/.claude-perso" },
+			};
+			expect(registry.buildLaunchCommand(tool)).toBe(
+				"CLAUDE_CONFIG_DIR='/home/u/.claude-perso' my-tool",
+			);
+		});
 	});
 
 	describe("buildResumeLaunchCommand", () => {
@@ -277,6 +298,41 @@ describe("CodingToolRegistry", () => {
 			};
 			expect(registry.buildResumeLaunchCommand(tool)).toBe(
 				"aider --model opus",
+			);
+		});
+
+		it("resumes claude-perso with the same executable and profile, never plain claude", () => {
+			const tool = registry.resolveAgentTool("claude-perso");
+			expect(registry.buildResumeLaunchCommand(tool, "perso-123")).toBe(
+				"claude-perso --resume perso-123",
+			);
+			expect(
+				registry.buildResumeLaunchCommand(tool, "perso-123"),
+			).not.toContain("claude --resume");
+		});
+
+		it("applies env vars on resume as well", () => {
+			const tool = {
+				id: "claude-perso",
+				name: "Claude Perso",
+				command: "claude-perso",
+				family: "claude" as const,
+				env: { CLAUDE_CONFIG_DIR: "/home/u/.claude-perso" },
+			};
+			expect(registry.buildResumeLaunchCommand(tool, "perso-123")).toBe(
+				"CLAUDE_CONFIG_DIR='/home/u/.claude-perso' claude-perso --resume perso-123",
+			);
+		});
+
+		it("uses an explicit resumeCommand template when provided", () => {
+			const tool = {
+				id: "custom",
+				name: "Custom",
+				command: "my-tool",
+				resumeCommand: "{command} continue {sessionId}",
+			};
+			expect(registry.buildResumeLaunchCommand(tool, "sess-1")).toBe(
+				"my-tool continue sess-1",
 			);
 		});
 	});

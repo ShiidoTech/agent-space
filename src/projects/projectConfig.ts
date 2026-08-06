@@ -1,0 +1,91 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import type { CodingTool } from "../types";
+
+/**
+ * Per-repository Agent Space configuration, read from `<repo>/.agentspace/config.json`.
+ *
+ * The file is intentionally kept out of the product tree (gitignored). It lets
+ * a project declare:
+ * - the real base branch (e.g. `v2_ia_first`), independent of whatever branch
+ *   happens to be checked out in the main checkout;
+ * - the branch kinds offered at feature creation (e.g. `feature`/`fix`);
+ * - a dedicated worktrees directory, distinct from the main checkout;
+ * - project-local coding tools and session locations.
+ */
+export interface ProjectConfig {
+	baseBranch?: string;
+	branchKinds?: string[];
+	defaultBranchKind?: string;
+	worktreesDir?: string;
+	tools?: CodingTool[];
+}
+
+const CONFIG_DIR_NAME = ".agentspace";
+const CONFIG_FILE_NAME = "config.json";
+
+let cachedConfig:
+	| {
+			key: string;
+			mtimeMs: number;
+			config: ProjectConfig;
+	  }
+	| undefined;
+
+/** Expand a leading `~` to the current user home directory. */
+export function expandHome(p: string): string {
+	if (!p) return p;
+	if (p === "~") return process.env.HOME || "~";
+	if (p.startsWith("~/") || p.startsWith("~\\")) {
+		return path.join(process.env.HOME || "~", p.slice(2));
+	}
+	return p;
+}
+
+/**
+ * Read the project config for a repository. Falls back to an empty config
+ * when the file does not exist or is unparseable (fail-open for config,
+ * fail-closed for deletion).
+ */
+export function loadProjectConfig(repoRoot: string): ProjectConfig {
+	const dir = path.join(repoRoot, CONFIG_DIR_NAME);
+	const file = path.join(dir, CONFIG_FILE_NAME);
+
+	let mtimeMs = 0;
+	try {
+		mtimeMs = fs.statSync(file).mtimeMs;
+	} catch {
+		cachedConfig = undefined;
+		return {};
+	}
+
+	if (cachedConfig?.key === file && cachedConfig.mtimeMs === mtimeMs) {
+		return cachedConfig.config;
+	}
+
+	try {
+		const raw = fs.readFileSync(file, "utf-8");
+		const parsed = JSON.parse(raw) as ProjectConfig;
+		cachedConfig = { key: file, mtimeMs, config: parsed };
+		return parsed;
+	} catch {
+		return {};
+	}
+}
+
+/** Resolve the effective worktree base for a project. */
+export function resolveWorktreeBaseDir(
+	repoRoot: string,
+	config: ProjectConfig,
+	worktreeRelativePath: string,
+): string {
+	if (config.worktreesDir) {
+		return path.resolve(expandHome(config.worktreesDir));
+	}
+	return path.resolve(repoRoot, worktreeRelativePath);
+}
+
+/** True when the project config declares at least one base branch. */
+export function hasConfiguredBaseBranch(config: ProjectConfig): boolean {
+	return Boolean(config.baseBranch?.trim());
+}

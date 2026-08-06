@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
@@ -13,16 +14,50 @@ import {
 	openFeatureGitView,
 	PENDING_GIT_VIEW_HANDOFF_PREF,
 } from "./git/gitViewHandoff";
+import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
 import { PrerequisiteChecker } from "./prerequisites";
+import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
 import { GlobalStore } from "./storage/globalStore";
+import type { Feature } from "./types";
 import { execAsync, execAsyncSilent } from "./utils/platform";
 import { ContextOnlyIsolation } from "./workspace/agentWorkspaceIsolation";
 
 let activeFeatureId: string | null = null;
 let featureActivationInProgress = false;
+
+/**
+ * Collect every reason why a feature (and its per-agent worktrees) cannot be
+ * deleted without risking work loss. Empty array = safe nominal delete.
+ */
+function collectFeatureDeletionBlockers(
+	ctx: ProjectContext,
+	feature: Feature,
+): string[] {
+	const baseBranch = ctx.featureManager.getBaseBranchName();
+	const reasons: string[] = [];
+
+	const check = (worktreePath: string, branch?: string) => {
+		const safety = checkWorktreeDeletionSafety({
+			repoRoot: ctx.project.repoPath,
+			worktreeBase: ctx.featureManager.getWorktreeBase(),
+			worktreePath,
+			branch,
+			baseBranch,
+		});
+		if (!safety.safe) {
+			reasons.push(...safety.reasons);
+		}
+	};
+
+	check(feature.worktreePath, feature.branch);
+	for (const agent of ctx.agentManager.getAgents(feature.id)) {
+		if (agent.worktreePath) check(agent.worktreePath);
+	}
+	return reasons;
+}
 
 export async function activate(
 	context: vscode.ExtensionContext,
@@ -97,7 +132,7 @@ export async function activate(
 	const availableTools = toolRegistry.getAvailableTools();
 	if (availableTools.length === 0) {
 		vscode.window.showWarningMessage(
-			"No coding tools found on PATH. Install one of: claude, copilot, codex, opencode.",
+			"No coding tools found on PATH. Install one of: claude, claude-perso, codex, copilot, opencode, hermes.",
 		);
 	} else if (defaultToolId) {
 		const defaultTool = toolRegistry.resolveAgentTool(defaultToolId);
@@ -195,7 +230,7 @@ export async function activate(
 				const initialTool = toolRegistry.getPreferredAvailableTool();
 				if (!initialTool) {
 					vscode.window.showErrorMessage(
-						"No coding tools found on PATH. Install one of: claude, copilot, codex, opencode.",
+						"No coding tools found on PATH. Install one of: claude, claude-perso, codex, copilot, opencode, hermes.",
 					);
 					return;
 				}
@@ -258,9 +293,14 @@ export async function activate(
 	});
 
 	const claudeProvider = new ClaudeSessionProvider();
+	const claudePersoProvider = new ClaudeSessionProvider(
+		path.join(process.env.HOME || "~", ".claude-perso", "projects"),
+		"claude-perso",
+	);
 	const codexProvider = new CodexSessionProvider();
 	const sessionNameSyncer = new SessionNameSyncer([
 		claudeProvider,
+		claudePersoProvider,
 		codexProvider,
 	]);
 	sessionNameSyncer.onAgentRenamed((agentId, featureId) => {
@@ -372,6 +412,24 @@ export async function activate(
 				});
 				if (!name) return;
 
+				// Project-declared branch kinds → ask which prefix to use
+				// (e.g. feature/ vs fix/), otherwise the project default.
+				let branchKind: string | undefined;
+				const branchKinds = ctx.featureManager.getBranchKinds();
+				if (branchKinds.length > 1) {
+					const kindPick = await vscode.window.showQuickPick(
+						branchKinds.map((k) => ({ label: k, value: k })),
+						{
+							placeHolder: "Branch kind",
+							title: `Branch prefix for "${name}"`,
+						},
+					);
+					if (!kindPick) return;
+					branchKind = kindPick.value;
+				} else if (branchKinds.length === 1) {
+					branchKind = branchKinds[0];
+				}
+
 				const perAgentEnabled = vscode.workspace
 					.getConfiguration("agentSpace")
 					.get<boolean>("enablePerAgentIsolation", false);
@@ -400,7 +458,11 @@ export async function activate(
 				}
 
 				try {
-					const feature = ctx.featureManager.createFeature(name, isolation);
+					const feature = ctx.featureManager.createFeature(
+						name,
+						isolation,
+						branchKind,
+					);
 					activeFeatureId = feature.id;
 
 					const initialTool = toolRegistry.getPreferredAvailableTool();
@@ -462,7 +524,7 @@ export async function activate(
 				const tools = toolRegistry.getAvailableToolsPreferredFirst();
 				if (tools.length === 0) {
 					vscode.window.showErrorMessage(
-						"No coding tools found on PATH. Install one of: claude, copilot, codex, opencode.",
+						"No coding tools found on PATH. Install one of: claude, claude-perso, codex, copilot, opencode, hermes.",
 					);
 					return;
 				}
@@ -617,6 +679,24 @@ export async function activate(
 				);
 				if (confirm !== "Delete") return;
 
+				// Fail-closed: refuse when the agent's worktree would lose work.
+				if (agent.worktreePath) {
+					const safety = checkWorktreeDeletionSafety({
+						repoRoot: ctx.project.repoPath,
+						worktreeBase: ctx.featureManager.getWorktreeBase(),
+						worktreePath: agent.worktreePath,
+					});
+					if (!safety.safe) {
+						const choice = await vscode.window.showWarningMessage(
+							`Cannot delete agent "${agent.name}" safely:\n\n${safety.reasons.join("\n\n")}\n\nForce deletion may lose work.`,
+							{ modal: true },
+							"Delete Anyway (force)",
+							"Cancel",
+						);
+						if (choice !== "Delete Anyway (force)") return;
+					}
+				}
+
 				terminalController.killAgentTerminal(agentIdArg, featureIdArg);
 				ctx.agentManager.deleteAgent(agentIdArg, featureIdArg);
 				sidebarProvider.refresh();
@@ -697,6 +777,7 @@ export async function activate(
 				const feature = ctx.featureManager.getFeature(featureId);
 				if (!feature) return;
 
+				// Fail-closed: show a first confirmation naming the worktree.
 				const confirm = await vscode.window.showWarningMessage(
 					`Delete feature "${feature.name}"?\n\nWorktree: ${feature.worktreePath}\n\nThis removes the worktree and all agent data.`,
 					{ modal: true },
@@ -704,11 +785,25 @@ export async function activate(
 				);
 				if (confirm !== "Delete") return;
 
+				// Check every worktree (feature + per-agent) for loss risk.
+				const blockers = collectFeatureDeletionBlockers(ctx, feature);
+				if (blockers.length > 0) {
+					const choice = await vscode.window.showWarningMessage(
+						`Cannot delete "${feature.name}" safely:\n\n${blockers.join("\n\n")}\n\nForce deletion may lose work.`,
+						{ modal: true },
+						"Delete Anyway (force)",
+						"Cancel",
+					);
+					if (choice !== "Delete Anyway (force)") return;
+				}
+
 				sessionNameSyncer.clearFeature(featureId);
 				terminalController.killFeatureTerminals(featureId);
 				ctx.serviceManager.deleteAllServices(featureId);
 				ctx.agentManager.deleteAllAgents(featureId);
-				ctx.featureManager.deleteFeature(featureId);
+				ctx.featureManager.deleteFeature(featureId, {
+					force: blockers.length > 0,
+				});
 				sidebarProvider.refresh();
 
 				if (activeFeatureId === featureId) {
@@ -763,6 +858,9 @@ export async function activate(
 				}
 
 				try {
+					// Target the project's configured base branch (e.g.
+					// v2_ia_first), never an implicit main.
+					const baseBranch = ctx.featureManager.getBaseBranchName();
 					await vscode.window.withProgress(
 						{
 							location: vscode.ProgressLocation.Notification,
@@ -770,13 +868,25 @@ export async function activate(
 							cancellable: false,
 						},
 						async () => {
+							// Anchor the upstream so push/PR flows default to the
+							// configured base instead of the repo default.
+							await execAsync(
+								`git config branch."${feature.branch}".remote origin`,
+								{ cwd: feature.worktreePath },
+							);
+							await execAsync(
+								`git config branch."${feature.branch}".merge refs/heads/${baseBranch}`,
+								{ cwd: feature.worktreePath },
+							);
 							await execAsync(`git push -u origin "${feature.branch}"`, {
 								cwd: feature.worktreePath,
 							});
 						},
 					);
+					// The GH PR extension form is opened but the user keeps the
+					// final validation: they pick/confirm the base and submit.
 					vscode.window.showInformationMessage(
-						`Branch "${feature.branch}" pushed. Opening PR creation...`,
+						`Branch "${feature.branch}" pushed. Opening PR creation against "${baseBranch}" — verify the target before submitting.`,
 					);
 					// Opens the GH PR extension form — user may still cancel,
 					// so we intentionally don't mark the feature as "done" here.

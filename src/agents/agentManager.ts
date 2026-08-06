@@ -3,6 +3,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { normalizeFeatureName } from "../features/featureName";
+import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
 import type { Agent, AgentStatus, Feature } from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
@@ -18,6 +19,7 @@ export class AgentManager {
 		private readonly repoRoot: string,
 		private readonly worktreeBase: string,
 		private readonly tmux: TmuxIntegration,
+		private readonly config: ProjectConfig = {},
 	) {}
 
 	invalidateFeature(featureId: string): void {
@@ -288,7 +290,7 @@ export class AgentManager {
 		return agents;
 	}
 
-	private removeWorktree(worktreePath: string): void {
+	private removeWorktree(worktreePath: string, force = false): void {
 		if (!isWorktreePathSafe(worktreePath, this.worktreeBase)) {
 			console.error(
 				`[AgentManager] Refusing to remove worktree outside base: "${worktreePath}"`,
@@ -296,11 +298,17 @@ export class AgentManager {
 			return;
 		}
 		try {
-			execSync(`git worktree remove "${worktreePath}" --force`, {
-				cwd: this.repoRoot,
-				encoding: "utf-8",
-				stdio: ["ignore", "pipe", "pipe"],
-			});
+			// Fail-closed by default: git refuses to remove a worktree that
+			// contains modified/untracked files unless --force is passed.
+			// We never force as the nominal path.
+			execSync(
+				`git worktree remove "${worktreePath}"${force ? " --force" : ""}`,
+				{
+					cwd: this.repoRoot,
+					encoding: "utf-8",
+					stdio: ["ignore", "pipe", "pipe"],
+				},
+			);
 		} catch (err) {
 			console.error(`[AgentManager] Failed to remove worktree: ${err}`);
 		}
@@ -344,6 +352,11 @@ export class AgentManager {
 	private getDefaultBranch(): string {
 		if (this.cachedDefaultBranch !== undefined) {
 			return this.cachedDefaultBranch;
+		}
+		const configured = this.config.baseBranch?.trim();
+		if (configured) {
+			this.cachedDefaultBranch = configured;
+			return configured;
 		}
 		let branch: string;
 		try {
