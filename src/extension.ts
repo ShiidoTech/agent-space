@@ -1,6 +1,9 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { CodingToolRegistry } from "./agents/codingToolRegistry";
+import {
+	CodingToolRegistry,
+	isClaudeFamily,
+} from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { ClaudeSessionProvider } from "./agents/sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./agents/sessionProviders/codexSessionProvider";
@@ -17,6 +20,7 @@ import {
 import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
 import { PrerequisiteChecker } from "./prerequisites";
+import { expandHome } from "./projects/projectConfig";
 import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
@@ -93,11 +97,14 @@ export async function activate(
 		.getConfiguration("agentSpace")
 		.get<string>("worktreeBasePath", ".worktrees");
 
+	const toolRegistry = new CodingToolRegistry();
+
 	const projectManager = new ProjectManager(
 		globalStore,
 		storagePath,
 		worktreeRelativePath,
 		tmux,
+		toolRegistry,
 	);
 	const gitViewHandoffAction = getGitViewHandoffAction(
 		globalStore.getPreference(PENDING_GIT_VIEW_HANDOFF_PREF),
@@ -125,14 +132,16 @@ export async function activate(
 	);
 	context.subscriptions.push(storageWatcher);
 
-	const toolRegistry = new CodingToolRegistry();
 	await ensureDefaultToolConfigured(toolRegistry, globalStore);
 
 	const defaultToolId = toolRegistry.getDefaultToolId();
 	const availableTools = toolRegistry.getAvailableTools();
 	if (availableTools.length === 0) {
 		vscode.window.showWarningMessage(
-			"No coding tools found on PATH. Install one of: claude, claude-perso, codex, copilot, opencode, hermes.",
+			`No coding tools found on PATH. Install one of: ${toolRegistry
+				.getTools()
+				.map((t) => t.command)
+				.join(", ")}.`,
 		);
 	} else if (defaultToolId) {
 		const defaultTool = toolRegistry.resolveAgentTool(defaultToolId);
@@ -273,14 +282,27 @@ export async function activate(
 	});
 
 	const claudeProvider = new ClaudeSessionProvider();
-	const claudePersoProvider = new ClaudeSessionProvider(
-		path.join(process.env.HOME || "~", ".claude-perso", "projects"),
-		"claude-perso",
-	);
+	// Any claude-family tool declaring a `sessionsDir` gets its own session
+	// provider, so a wrapped/custom Claude variant is resumed and renamed via
+	// its own profile directory — configured declaratively, not hard-coded.
+	// Family uses the same `isClaudeFamily` resolution as the registry.
+	const extraClaudeProviders = toolRegistry
+		.getTools()
+		.filter((t) => isClaudeFamily(t) && t.id !== "claude")
+		.flatMap((t) =>
+			t.sessionsDir
+				? [
+						new ClaudeSessionProvider(
+							path.join(expandHome(t.sessionsDir), "projects"),
+							t.id,
+						),
+					]
+				: [],
+		);
 	const codexProvider = new CodexSessionProvider();
 	const sessionNameSyncer = new SessionNameSyncer([
 		claudeProvider,
-		claudePersoProvider,
+		...extraClaudeProviders,
 		codexProvider,
 	]);
 	sessionNameSyncer.onAgentRenamed((agentId, featureId) => {
@@ -524,7 +546,10 @@ export async function activate(
 				const tools = toolRegistry.getAvailableToolsPreferredFirst();
 				if (tools.length === 0) {
 					vscode.window.showErrorMessage(
-						"No coding tools found on PATH. Install one of: claude, claude-perso, codex, copilot, opencode, hermes.",
+						`No coding tools found on PATH. Install one of: ${toolRegistry
+							.getTools()
+							.map((t) => t.command)
+							.join(", ")}.`,
 					);
 					return;
 				}

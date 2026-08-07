@@ -1,24 +1,27 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { CodingTool } from "../types";
 
 /**
  * Per-repository Agent Space configuration, read from `<repo>/.agentspace/config.json`.
  *
- * The file is intentionally kept out of the product tree (gitignored). It lets
- * a project declare:
+ * This file holds *shareable project conventions* and may be committed to the
+ * repository so the whole team branches where the project actually works:
  * - the real base branch (e.g. `v2_ia_first`), independent of whatever branch
  *   happens to be checked out in the main checkout;
  * - the branch kinds offered at feature creation (e.g. `feature`/`fix`);
- * - a dedicated worktrees directory, distinct from the main checkout;
- * - project-local coding tools and session locations.
+ * - a dedicated worktrees directory, distinct from the main checkout.
+ *
+ * Coding tools are NOT part of this file: their identity and family are
+ * resolved exclusively through `agentSpace.codingTools` (built-ins merged with
+ * user/workspace settings). User-local values (a personal CLI profile, a
+ * private sessions directory, machine-specific `env`) belong in that setting,
+ * in user configuration or workspace settings you keep explicitly untracked.
  */
 export interface ProjectConfig {
 	baseBranch?: string;
 	branchKinds?: string[];
 	defaultBranchKind?: string;
 	worktreesDir?: string;
-	tools?: CodingTool[];
 }
 
 const CONFIG_DIR_NAME = ".agentspace";

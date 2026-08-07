@@ -7,6 +7,7 @@ import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
 import type { Agent, AgentStatus, Feature } from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
+import { CodingToolRegistry } from "./codingToolRegistry";
 import type { TmuxIntegration } from "./tmux";
 
 export class AgentManager {
@@ -20,6 +21,7 @@ export class AgentManager {
 		private readonly worktreeBase: string,
 		private readonly tmux: TmuxIntegration,
 		private readonly config: ProjectConfig = {},
+		private readonly toolRegistry: CodingToolRegistry = new CodingToolRegistry(),
 	) {}
 
 	invalidateFeature(featureId: string): void {
@@ -44,6 +46,17 @@ export class AgentManager {
 			this.invalidateTimers.delete(featureId);
 		}
 		this.agentsByFeature.delete(featureId);
+	}
+
+	/**
+	 * True when the tool resolved by the registry is a claude-family CLI
+	 * (built-in "claude", or a wrapped variant declared via
+	 * `agentSpace.codingTools` with an explicit `family: "claude"` or a
+	 * claude-prefixed id). Delegates to the registry — the single source of
+	 * truth for tool identity and family.
+	 */
+	private isClaudeFamilyTool(toolId?: string): boolean {
+		return this.toolRegistry.isClaudeFamilyTool(toolId);
 	}
 
 	getAgents(featureId: string): Agent[] {
@@ -74,10 +87,13 @@ export class AgentManager {
 			);
 		}
 
-		// Claude gets a pre-assigned session ID; Codex auto-generates its own
-		// (discovered post-launch by CodexSessionWatcher); others get none
-		const sessionId =
-			!toolId || toolId === "claude" ? crypto.randomUUID() : null;
+		// Claude-family CLIs (built-in "claude" or a wrapped variant declared
+		// in project config) get a pre-assigned session ID so a later resume
+		// targets the exact same session. Codex auto-generates its own
+		// (discovered post-launch); opencode/generic manage their own.
+		const sessionId = this.isClaudeFamilyTool(toolId)
+			? crypto.randomUUID()
+			: null;
 
 		const agent: Agent = {
 			id,

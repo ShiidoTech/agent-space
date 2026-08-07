@@ -12,20 +12,20 @@ export const BUILTIN_CODING_TOOLS: CodingTool[] = [
 		family: "generic",
 	},
 	{ id: "opencode", name: "OpenCode", command: "opencode", family: "opencode" },
-	{
-		id: "claude-perso",
-		name: "Claude Perso",
-		command: "claude-perso",
-		family: "claude",
-		sessionsDir: "~/.claude-perso",
-	},
 	{ id: "hermes", name: "Hermes", command: "hermes", family: "generic" },
 ];
 
-function isClaudeFamily(tool: CodingTool): boolean {
+export function isClaudeFamily(tool: {
+	command: string;
+	family?: CodingTool["family"];
+}): boolean {
 	const family =
 		tool.family ?? (tool.command.startsWith("claude") ? "claude" : "generic");
 	return family === "claude";
+}
+
+export function isOpenCodeFamily(tool: CodingTool): boolean {
+	return (tool.family ?? tool.command) === "opencode";
 }
 
 function isCodexFamily(tool: CodingTool): boolean {
@@ -41,10 +41,7 @@ function shellQuote(value: string): string {
  * Fields provided by the custom entry win; anything else keeps the built-in
  * default, so personal/`args` overrides don't need to restate the tool.
  */
-function mergeTool(
-	base: CodingTool | undefined,
-	over: CodingTool,
-): CodingTool {
+function mergeTool(base: CodingTool | undefined, over: CodingTool): CodingTool {
 	return {
 		id: over.id,
 		name: over.name ?? base?.name ?? over.id,
@@ -77,8 +74,7 @@ export class CodingToolRegistry {
 		}
 		for (const tool of custom) {
 			if (tool.enabled === false) {
-				// Allow removing a built-in (e.g. hide the generic "claude"
-				// tool while keeping "claude-perso").
+				// Allow removing a built-in entirely.
 				merged.delete(tool.id);
 				continue;
 			}
@@ -133,7 +129,18 @@ export class CodingToolRegistry {
 
 	resolveAgentTool(toolId?: string): CodingTool {
 		const id = toolId ?? "claude";
-		return this.getTool(id) ?? BUILTIN_CODING_TOOLS[0];
+		const resolved = this.getTool(id);
+		if (resolved) return resolved;
+		// Never silently substitute a different tool (e.g. the built-in
+		// claude) for one that cannot be resolved: preserve the requested
+		// identity so the wrong executable is never launched. Family inference
+		// stays on the same isClaudeFamily path used everywhere else.
+		return {
+			id,
+			name: id,
+			command: id,
+			family: isClaudeFamily({ command: id }) ? "claude" : "generic",
+		};
 	}
 
 	isToolAvailable(tool: CodingTool): boolean {
@@ -141,11 +148,22 @@ export class CodingToolRegistry {
 	}
 
 	/**
+	 * Canonical claude-family check for a tool id: resolve the tool through
+	 * the same merge (built-ins + `agentSpace.codingTools`) used everywhere
+	 * else, then apply `isClaudeFamily`. Single source of truth so no caller
+	 * re-derives family with its own heuristic.
+	 */
+	isClaudeFamilyTool(toolId?: string): boolean {
+		return isClaudeFamily(this.resolveAgentTool(toolId));
+	}
+
+	/**
 	 * Build the first-launch command for an agent.
 	 *
-	 * A claude-family CLI (including `claude-perso`) is started with the
-	 * pre-assigned `--session-id` so a later resume targets the exact same
-	 * session, launched through the exact same executable and profile.
+	 * A claude-family CLI (including a wrapped/custom Claude variant) is
+	 * started with the pre-assigned `--session-id` so a later resume targets
+	 * the exact same session, launched through the exact same executable and
+	 * profile.
 	 */
 	buildLaunchCommand(tool: CodingTool, sessionId?: string | null): string {
 		const parts = [tool.command];
@@ -164,8 +182,8 @@ export class CodingToolRegistry {
 	 *
 	 * `resumeCommand` (when set) is an explicit template with `{command}` and
 	 * `{sessionId}` placeholders. Otherwise the CLI family drives the syntax,
-	 * always through `tool.command` — a `claude-perso` agent is resumed with
-	 * `claude-perso --resume <id>`, never the plain `claude` executable.
+	 * always through `tool.command` — a wrapped Claude variant is resumed with
+	 * its own executable, never the plain `claude` binary.
 	 */
 	buildResumeLaunchCommand(
 		tool: CodingTool,
@@ -185,6 +203,16 @@ export class CodingToolRegistry {
 		}
 		if (isCodexFamily(tool) && sessionId) {
 			return `${envPrefix(tool)}${tool.command} resume ${sessionId}`;
+		}
+		if (isOpenCodeFamily(tool)) {
+			// opencode generates its own session ids. Resume the exact session
+			// when one is known; otherwise continue the latest one for the
+			// current directory (which is the right session in a per-worktree
+			// setup). Never fall back to a fresh launch.
+			if (sessionId) {
+				return `${envPrefix(tool)}${tool.command} --session ${sessionId}`;
+			}
+			return `${envPrefix(tool)}${tool.command} --continue`;
 		}
 		// No sessionId — launch fresh so each agent gets its own session
 		return this.buildLaunchCommand(tool);

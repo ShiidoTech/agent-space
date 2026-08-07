@@ -40,15 +40,14 @@ describe("CodingToolRegistry", () => {
 	});
 
 	describe("getTools", () => {
-		it("returns 6 built-in tools by default", () => {
+		it("returns 5 built-in tools by default", () => {
 			const tools = registry.getTools();
-			expect(tools).toHaveLength(6);
+			expect(tools).toHaveLength(5);
 			expect(tools.map((t) => t.id)).toEqual([
 				"claude",
 				"codex",
 				"copilot",
 				"opencode",
-				"claude-perso",
 				"hermes",
 			]);
 		});
@@ -58,8 +57,8 @@ describe("CodingToolRegistry", () => {
 				codingTools: [{ id: "aider", name: "Aider", command: "aider" }],
 			});
 			const tools = registry.getTools();
-			expect(tools).toHaveLength(7);
-			expect(tools[6].id).toBe("aider");
+			expect(tools).toHaveLength(6);
+			expect(tools[5].id).toBe("aider");
 		});
 
 		it("user tools override builtins by id", () => {
@@ -74,7 +73,7 @@ describe("CodingToolRegistry", () => {
 				],
 			});
 			const tools = registry.getTools();
-			expect(tools).toHaveLength(6);
+			expect(tools).toHaveLength(5);
 			const claude = tools.find((t) => t.id === "claude");
 			expect(claude?.name).toBe("My Claude");
 			expect(claude?.args).toEqual(["--model", "opus"]);
@@ -89,7 +88,6 @@ describe("CodingToolRegistry", () => {
 				"codex",
 				"copilot",
 				"opencode",
-				"claude-perso",
 				"hermes",
 			]);
 		});
@@ -189,9 +187,18 @@ describe("CodingToolRegistry", () => {
 			expect(tool.command).toBe("opencode");
 		});
 
-		it("falls back to claude for unknown toolId", () => {
+		it("never substitutes builtin claude for an unknown toolId", () => {
 			const tool = registry.resolveAgentTool("nonexistent");
-			expect(tool.id).toBe("claude");
+			expect(tool.id).toBe("nonexistent");
+			expect(tool.command).toBe("nonexistent");
+			expect(tool.family).toBe("generic");
+		});
+
+		it("preserves a claude-prefixed identity for an unresolved tool", () => {
+			const tool = registry.resolveAgentTool("claude-variant");
+			expect(tool.id).toBe("claude-variant");
+			expect(tool.command).toBe("claude-variant");
+			expect(tool.family).toBe("claude");
 		});
 	});
 
@@ -259,31 +266,48 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildLaunchCommand(tool, null)).toBe("claude");
 		});
 
-		it("deep-merges custom args over the claude-perso built-in (delta-only config)", () => {
+		it("deep-merges custom args over a built-in (delta-only config)", () => {
 			mockConfig({
 				codingTools: [
 					{
-						id: "claude-perso",
-						args: ["--model", "sonnet", "--permission-mode", "auto"],
+						id: "claude",
+						args: ["--model", "opus"],
 					},
 				],
 			});
-			const tool = registry.resolveAgentTool("claude-perso");
+			const tool = registry.resolveAgentTool("claude");
 			// Built-in identity/fields kept, args overridden, then session-id.
 			expect(tool).toMatchObject({
-				id: "claude-perso",
-				name: "Claude Perso",
-				command: "claude-perso",
+				id: "claude",
+				name: "Claude Code",
+				command: "claude",
 			});
 			expect(registry.buildLaunchCommand(tool, "abc-123")).toBe(
-				"claude-perso --model sonnet --permission-mode auto --session-id abc-123",
+				"claude --model opus --session-id abc-123",
 			);
 		});
 
-		it("uses claude-perso executable with --session-id for claude-perso tool", () => {
-			const tool = registry.resolveAgentTool("claude-perso");
-			expect(registry.buildLaunchCommand(tool, "perso-123")).toBe(
-				"claude-perso --session-id perso-123",
+		it("supports a wrapped/custom claude-family CLI declared via config", () => {
+			mockConfig({
+				codingTools: [
+					{
+						id: "wrapped-claude",
+						command: "my-claude",
+						args: ["--profile", "work"],
+						family: "claude",
+					},
+				],
+			});
+			const tool = registry.resolveAgentTool("wrapped-claude");
+			// Resumed through its own executable, never the plain `claude`.
+			expect(registry.buildLaunchCommand(tool, "abc-123")).toBe(
+				"my-claude --profile work --session-id abc-123",
+			);
+			expect(registry.buildResumeLaunchCommand(tool, "abc-123")).toBe(
+				"my-claude --resume abc-123",
+			);
+			expect(registry.buildResumeLaunchCommand(tool, "abc-123")).toContain(
+				"my-claude --resume",
 			);
 		});
 
@@ -292,10 +316,10 @@ describe("CodingToolRegistry", () => {
 				id: "custom",
 				name: "Custom",
 				command: "my-tool",
-				env: { CLAUDE_CONFIG_DIR: "/home/u/.claude-perso" },
+				env: { CLAUDE_CONFIG_DIR: "/home/user/.config/my-claude" },
 			};
 			expect(registry.buildLaunchCommand(tool)).toBe(
-				"CLAUDE_CONFIG_DIR='/home/u/.claude-perso' my-tool",
+				"CLAUDE_CONFIG_DIR='/home/user/.config/my-claude' my-tool",
 			);
 		});
 	});
@@ -319,9 +343,21 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildResumeLaunchCommand(tool)).toBe("copilot");
 		});
 
-		it("returns plain launch for opencode (no resume support)", () => {
+		it("continues the latest opencode session when no sessionId is known", () => {
 			const tool = registry.resolveAgentTool("opencode");
-			expect(registry.buildResumeLaunchCommand(tool)).toBe("opencode");
+			expect(registry.buildResumeLaunchCommand(tool)).toBe(
+				"opencode --continue",
+			);
+			expect(registry.buildResumeLaunchCommand(tool, null)).toBe(
+				"opencode --continue",
+			);
+		});
+
+		it("resumes the exact opencode session by id when one is known", () => {
+			const tool = registry.resolveAgentTool("opencode");
+			expect(registry.buildResumeLaunchCommand(tool, "sess-456")).toBe(
+				"opencode --session sess-456",
+			);
 		});
 
 		it("returns plain launch for custom tools", () => {
@@ -336,26 +372,31 @@ describe("CodingToolRegistry", () => {
 			);
 		});
 
-		it("resumes claude-perso with the same executable and profile, never plain claude", () => {
-			const tool = registry.resolveAgentTool("claude-perso");
-			expect(registry.buildResumeLaunchCommand(tool, "perso-123")).toBe(
-				"claude-perso --resume perso-123",
+		it("resumes a wrapped claude-family CLI with its own executable and profile, never plain claude", () => {
+			const tool = {
+				id: "wrapped-claude",
+				name: "Wrapped Claude",
+				command: "my-claude",
+				family: "claude" as const,
+			};
+			expect(registry.buildResumeLaunchCommand(tool, "sess-123")).toBe(
+				"my-claude --resume sess-123",
 			);
-			expect(
-				registry.buildResumeLaunchCommand(tool, "perso-123"),
-			).not.toContain("claude --resume");
+			expect(registry.buildResumeLaunchCommand(tool, "sess-123")).toContain(
+				"my-claude --resume",
+			);
 		});
 
 		it("applies env vars on resume as well", () => {
 			const tool = {
-				id: "claude-perso",
-				name: "Claude Perso",
-				command: "claude-perso",
+				id: "wrapped-claude",
+				name: "Wrapped Claude",
+				command: "my-claude",
 				family: "claude" as const,
-				env: { CLAUDE_CONFIG_DIR: "/home/u/.claude-perso" },
+				env: { CLAUDE_CONFIG_DIR: "/home/user/.config/my-claude" },
 			};
-			expect(registry.buildResumeLaunchCommand(tool, "perso-123")).toBe(
-				"CLAUDE_CONFIG_DIR='/home/u/.claude-perso' claude-perso --resume perso-123",
+			expect(registry.buildResumeLaunchCommand(tool, "sess-123")).toBe(
+				"CLAUDE_CONFIG_DIR='/home/user/.config/my-claude' my-claude --resume sess-123",
 			);
 		});
 
@@ -368,6 +409,54 @@ describe("CodingToolRegistry", () => {
 			};
 			expect(registry.buildResumeLaunchCommand(tool, "sess-1")).toBe(
 				"my-tool continue sess-1",
+			);
+		});
+	});
+
+	describe("isClaudeFamilyTool", () => {
+		it("is true for the default tool", () => {
+			expect(registry.isClaudeFamilyTool(undefined)).toBe(true);
+		});
+
+		it("is true for a custom tool with arbitrary id/command and family claude", () => {
+			mockConfig({
+				codingTools: [
+					{
+						id: "wrapped-claude",
+						name: "Wrapped",
+						command: "my-claude",
+						family: "claude",
+					},
+				],
+			});
+			expect(registry.isClaudeFamilyTool("wrapped-claude")).toBe(true);
+		});
+
+		it("is false for non-claude tools", () => {
+			expect(registry.isClaudeFamilyTool("codex")).toBe(false);
+			expect(registry.isClaudeFamilyTool("copilot")).toBe(false);
+		});
+
+		it("custom claude-family tool gets full Claude behavior via own executable", () => {
+			mockConfig({
+				codingTools: [
+					{
+						id: "wrapped-claude",
+						name: "Wrapped",
+						command: "my-claude",
+						family: "claude",
+					},
+				],
+			});
+			const tool = registry.resolveAgentTool("wrapped-claude");
+			// session ID preassigned (the caller assigns it), then launch and
+			// resume go through the tool's own executable, never plain claude.
+			expect(registry.isClaudeFamilyTool("wrapped-claude")).toBe(true);
+			expect(registry.buildLaunchCommand(tool, "abc-123")).toBe(
+				"my-claude --session-id abc-123",
+			);
+			expect(registry.buildResumeLaunchCommand(tool, "abc-123")).toBe(
+				"my-claude --resume abc-123",
 			);
 		});
 	});
