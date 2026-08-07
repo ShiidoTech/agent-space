@@ -12,7 +12,7 @@ Organize your real coding agents — real CLIs, real terminals, real Git worktre
 - Sidebar + home dashboard: features, agents, services and status at a glance
 - Feature workspaces and PR handoff from inside VS Code
 
-It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`, `copilot`, `opencode`. Add any other tool with `agentSpace.codingTools`.
+It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`, `copilot`, `opencode`, `hermes`. Add any other tool with `agentSpace.codingTools`.
 
 ## Philosophy
 
@@ -37,7 +37,7 @@ When several agents work in the same repository they can overwrite each other or
 
 - **Git** for branch and worktree management
 - **tmux** for persistent agent sessions
-- **One coding CLI tool on PATH**: works out of the box with `claude`, `codex`, `copilot`, `opencode`
+- **One coding CLI tool on PATH**: works out of the box with `claude`, `codex`, `copilot`, `opencode`, `hermes`
 - **Optional custom CLI tools**: add any other terminal-based tool with `agentSpace.codingTools`
 - **Windows**: use Git for Windows (Git Bash). Install tmux with `pacman -S tmux` inside Git Bash.
 
@@ -78,7 +78,9 @@ Launch package scripts such as dev servers and watch tasks, or open an interacti
 
 ### Project-Scoped Configuration
 
-Some repositories do not branch off `main`. A per-repository `.agentspace/config.json` lets a project declare the real **base branch**, the **branch kinds** offered at feature creation, and a dedicated **worktrees directory** — so Agent Space branches and creates worktrees where the project actually works, without touching your personal environment.
+Some repositories do not branch off `main`. A `.agentspace/config.json` at the repository root lets a project declare the real **base branch**, the **branch kinds** offered at feature creation, and a dedicated **worktrees directory** — so Agent Space branches and creates worktrees where the project actually works.
+
+This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It is not implicitly gitignored. User-local values — a personal CLI profile, a private sessions directory, machine-specific `env` — do not belong here: declare those in your user or workspace settings via `agentSpace.codingTools`, which stays out of the repository.
 
 ### Custom Coding Tools
 
@@ -121,7 +123,7 @@ All commands are available from the Command Palette.
 | `agentSpace.enablePerAgentIsolation` | `false` | Give each agent its own worktree instead of sharing one per feature |
 | `agentSpace.syncSessionNames` | `true` | Sync agent display names from supported CLI rename metadata |
 
-Projects can also override branching defaults per repository via `.agentspace/config.json`.
+Projects can also override branching defaults via a committed `.agentspace/config.json` at the repository root.
 
 ## GitHub
 

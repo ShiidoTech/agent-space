@@ -4,6 +4,8 @@ import type { ProjectManager } from "../projects/projectManager";
 import type { Agent, Feature, Service } from "../types";
 import { exec, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
+import { isOpenCodeFamily } from "./codingToolRegistry";
+import { newestSessionIdForDirectory } from "./sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "./tmux";
 
 const AGENT_COLORS = getThemeColors();
@@ -111,6 +113,15 @@ export class TerminalController implements vscode.Disposable {
 		if (ctx) {
 			ctx.agentManager.markAgentStarted(agent.id, feature.id);
 			this.projectManager.notifyChange();
+		}
+
+		// opencode generates its own ids. Discover the id it created for this
+		// agent's directory so a later resume uses `--session <id>` instead of
+		// continuing the latest session (which would be ambiguous across
+		// several agents sharing a worktree).
+		const launchedTool = this.toolRegistry.resolveAgentTool(agent.toolId);
+		if (isOpenCodeFamily(launchedTool) && !agent.sessionId) {
+			void this.captureOpenCodeSessionId(feature, agent, cwd);
 		}
 
 		return terminal;
@@ -368,6 +379,34 @@ export class TerminalController implements vscode.Disposable {
 		const ctx = this.projectManager.findContextByFeatureId(featureId);
 		const agent = ctx?.agentManager.getAgent(featureId, agentId);
 		return agent?.tmuxSession ?? this.tmux.sessionName(featureId, agentId);
+	}
+
+	/**
+	 * Best-effort: poll the opencode session store until the session created
+	 * for `cwd` appears, then persist its id on the agent. Never blocks the
+	 * UI and swallows failures (e.g. opencode not installed).
+	 */
+	private async captureOpenCodeSessionId(
+		feature: Feature,
+		agent: Agent,
+		cwd: string,
+	): Promise<void> {
+		for (let attempt = 0; attempt < 10; attempt += 1) {
+			let sessionId: string | undefined;
+			try {
+				sessionId = newestSessionIdForDirectory(cwd);
+			} catch {
+				// opencode CLI unavailable — nothing to discover
+				return;
+			}
+			if (sessionId) {
+				const ctx = this.projectManager.findContextByFeatureId(feature.id);
+				ctx?.agentManager.updateAgentSessionId(agent.id, feature.id, sessionId);
+				this.projectManager.notifyChange();
+				return;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 750));
+		}
 	}
 
 	private disposeTrackedTerminal(entityId: string): void {
