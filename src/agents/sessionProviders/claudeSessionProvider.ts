@@ -21,6 +21,10 @@ export class ClaudeSessionProvider
 	readonly toolId: string;
 	private readonly projectsDir: string;
 	private readonly pathCache = new Map<string, string>();
+	private readonly indexCache = new Map<
+		string,
+		{ mtimeMs: number; titles: Map<string, string> }
+	>();
 
 	constructor(projectsDir?: string, toolId = "claude") {
 		this.toolId = toolId;
@@ -108,11 +112,15 @@ export class ClaudeSessionProvider
 	readName(sessionId: string): string | null {
 		const filePath = this.findSessionFile(sessionId);
 		if (!filePath) return null;
-		return this.readTitle(filePath);
+		return (
+			this.readTitle(filePath) ??
+			this.readIndexFallback(path.dirname(filePath), sessionId)
+		);
 	}
 
 	readTitle(filePath: string): string | null {
 		let fd: number | undefined;
+		let aiTitle: string | null = null;
 		try {
 			fd = fs.openSync(filePath, "r");
 			const stat = fs.fstatSync(fd);
@@ -141,8 +149,10 @@ export class ClaudeSessionProvider
 					if (!trimmed) continue;
 					try {
 						const parsed = JSON.parse(trimmed);
-						if (parsed.type === "custom-title" && parsed.customTitle) {
-							return parsed.customTitle;
+						const title = titleFromEvent(parsed);
+						if (title?.kind === "custom" && title.value) return title.value;
+						if (title?.kind === "ai" && title.value && !aiTitle) {
+							aiTitle = title.value;
 						}
 					} catch {
 						// Skip non-JSON lines
@@ -154,15 +164,17 @@ export class ClaudeSessionProvider
 			if (remainder.trim()) {
 				try {
 					const parsed = JSON.parse(remainder.trim());
-					if (parsed.type === "custom-title" && parsed.customTitle) {
-						return parsed.customTitle;
+					const title = titleFromEvent(parsed);
+					if (title?.kind === "custom" && title.value) return title.value;
+					if (title?.kind === "ai" && title.value && !aiTitle) {
+						aiTitle = title.value;
 					}
 				} catch {
 					// Skip
 				}
 			}
 
-			return null;
+			return aiTitle;
 		} catch {
 			return null;
 		} finally {
@@ -176,7 +188,60 @@ export class ClaudeSessionProvider
 
 	dispose(): void {
 		this.pathCache.clear();
+		this.indexCache.clear();
 	}
+
+	private readIndexFallback(
+		projectDir: string,
+		sessionId: string,
+	): string | null {
+		const indexPath = path.join(projectDir, "sessions-index.json");
+		if (!fs.existsSync(indexPath)) return null;
+
+		try {
+			const stat = fs.statSync(indexPath);
+			let cached = this.indexCache.get(projectDir);
+			if (!cached || cached.mtimeMs !== stat.mtimeMs) {
+				const parsed = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+				const entries = Array.isArray(parsed)
+					? parsed
+					: Array.isArray(parsed?.entries)
+						? parsed.entries
+						: [];
+				const titles = new Map<string, string>();
+				for (const entry of entries) {
+					if (typeof entry?.sessionId !== "string") continue;
+					const title =
+						typeof entry.summary === "string" && entry.summary.trim()
+							? entry.summary.trim()
+							: typeof entry.firstPrompt === "string"
+								? entry.firstPrompt.trim()
+								: "";
+					if (title) titles.set(entry.sessionId, title);
+				}
+				cached = { mtimeMs: stat.mtimeMs, titles };
+				this.indexCache.set(projectDir, cached);
+			}
+			return cached.titles.get(sessionId) ?? null;
+		} catch {
+			return null;
+		}
+	}
+}
+
+function titleFromEvent(
+	parsed: Record<string, unknown>,
+): { kind: "custom" | "ai"; value: string } | null {
+	if (
+		parsed.type === "custom-title" &&
+		typeof parsed.customTitle === "string"
+	) {
+		return { kind: "custom", value: parsed.customTitle.trim() };
+	}
+	if (parsed.type === "ai-title" && typeof parsed.aiTitle === "string") {
+		return { kind: "ai", value: parsed.aiTitle.trim() };
+	}
+	return null;
 }
 
 function decodeProjectPath(encoded: string): string {

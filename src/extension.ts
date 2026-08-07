@@ -8,6 +8,7 @@ import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { ClaudeSessionProvider } from "./agents/sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./agents/sessionProviders/codexSessionProvider";
 import { CodexSessionWatcher } from "./agents/sessionProviders/codexSessionWatcher";
+import { OpenCodeSessionProvider } from "./agents/sessionProviders/openCodeSessionProvider";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
 import { validateFeatureNameInput } from "./features/featureName";
@@ -300,10 +301,12 @@ export async function activate(
 				: [],
 		);
 	const codexProvider = new CodexSessionProvider();
+	const openCodeProvider = new OpenCodeSessionProvider();
 	const sessionNameSyncer = new SessionNameSyncer([
 		claudeProvider,
 		...extraClaudeProviders,
 		codexProvider,
+		openCodeProvider,
 	]);
 	sessionNameSyncer.onAgentRenamed((agentId, featureId) => {
 		projectManager.notifyChange();
@@ -342,6 +345,7 @@ export async function activate(
 	const config = vscode.workspace.getConfiguration("agentSpace");
 	if (config.get("syncSessionNames", config.get("autoNameAgents", true))) {
 		sessionNameSyncer.start(projectManager);
+		sessionNameSyncer.syncAll();
 	}
 	context.subscriptions.push({ dispose: () => sessionNameSyncer.dispose() });
 	context.subscriptions.push({ dispose: () => codexWatcher.dispose() });
@@ -893,8 +897,12 @@ export async function activate(
 							cancellable: false,
 						},
 						async () => {
-							// Anchor the upstream so push/PR flows default to the
-							// configured base instead of the repo default.
+							// Push without -u: -u would overwrite the merge target with
+							// origin/<feature>. The PR extension uses this branch config
+							// to keep the configured base instead of an implicit default.
+							await execAsync(`git push origin "${feature.branch}"`, {
+								cwd: feature.worktreePath,
+							});
 							await execAsync(
 								`git config branch."${feature.branch}".remote origin`,
 								{ cwd: feature.worktreePath },
@@ -903,9 +911,6 @@ export async function activate(
 								`git config branch."${feature.branch}".merge refs/heads/${baseBranch}`,
 								{ cwd: feature.worktreePath },
 							);
-							await execAsync(`git push -u origin "${feature.branch}"`, {
-								cwd: feature.worktreePath,
-							});
 						},
 					);
 					// The GH PR extension form is opened but the user keeps the
@@ -915,7 +920,10 @@ export async function activate(
 					);
 					// Opens the GH PR extension form — user may still cancel,
 					// so we intentionally don't mark the feature as "done" here.
-					await vscode.commands.executeCommand("pr.create");
+					await vscode.commands.executeCommand("pr.create", {
+						repoPath: ctx.project.repoPath,
+						compareBranch: feature.branch,
+					});
 				} catch (err) {
 					const msg =
 						err instanceof Error ? err.message : "Failed to push branch";

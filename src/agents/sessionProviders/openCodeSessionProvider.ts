@@ -1,5 +1,9 @@
 import { execSync } from "node:child_process";
-import type { SessionInfo, SessionProvider } from "./types";
+import type {
+	SessionInfo,
+	SessionProvider,
+	SessionRenameAdapter,
+} from "./types";
 
 /**
  * In-memory reservation of opencode session ids picked by a capture. opencode
@@ -15,7 +19,9 @@ export function resetClaimedOpenCodeSessionIds(): void {
 	claimedSessionIds.clear();
 }
 
-export class OpenCodeSessionProvider implements SessionProvider {
+export class OpenCodeSessionProvider
+	implements SessionProvider, SessionRenameAdapter
+{
 	readonly toolId = "opencode";
 
 	scanSessions(): SessionInfo[] {
@@ -38,6 +44,24 @@ export class OpenCodeSessionProvider implements SessionProvider {
 		} catch {
 			// opencode CLI not available or query failed
 			return [];
+		}
+	}
+
+	readName(sessionId: string): string | null {
+		if (!/^[-_a-zA-Z0-9]+$/.test(sessionId)) return null;
+
+		try {
+			const raw = execSync(
+				`opencode db "SELECT title FROM session WHERE id = '${sessionId}'" --format json`,
+				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
+			);
+			const rows = JSON.parse(raw);
+			if (!Array.isArray(rows)) return null;
+			const title = rows[0]?.title;
+			if (typeof title !== "string" || !title.trim()) return null;
+			return title.trim();
+		} catch {
+			return null;
 		}
 	}
 }
