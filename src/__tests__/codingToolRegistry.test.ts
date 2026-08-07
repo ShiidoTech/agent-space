@@ -79,6 +79,20 @@ describe("CodingToolRegistry", () => {
 			expect(claude?.name).toBe("My Claude");
 			expect(claude?.args).toEqual(["--model", "opus"]);
 		});
+
+		it("removes a built-in tool when disabled via enabled:false", () => {
+			mockConfig({
+				codingTools: [{ id: "claude", enabled: false }],
+			});
+			const tools = registry.getTools();
+			expect(tools.map((t) => t.id)).toEqual([
+				"codex",
+				"copilot",
+				"opencode",
+				"claude-perso",
+				"hermes",
+			]);
+		});
 	});
 
 	describe("getTool", () => {
@@ -245,10 +259,17 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildLaunchCommand(tool, null)).toBe("claude");
 		});
 
+		it("claude-perso launches with sonnet + auto approval, then session-id", () => {
+			const tool = registry.resolveAgentTool("claude-perso");
+			expect(registry.buildLaunchCommand(tool, "abc-123")).toBe(
+				"claude-perso --model sonnet --permission-mode auto --session-id abc-123",
+			);
+		});
+
 		it("uses claude-perso executable with --session-id for claude-perso tool", () => {
 			const tool = registry.resolveAgentTool("claude-perso");
 			expect(registry.buildLaunchCommand(tool, "perso-123")).toBe(
-				"claude-perso --session-id perso-123",
+				"claude-perso --model sonnet --permission-mode auto --session-id perso-123",
 			);
 		});
 

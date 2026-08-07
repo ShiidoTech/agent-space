@@ -3,7 +3,7 @@
 	"displayName": "Agent Space",
 	"publisher": "paql4711",
 	"description": "Run any coding CLI per feature with isolated Git worktrees and persistent sessions in VS Code",
-	"version": "0.5.0",
+	"version": "0.5.2",
 	"icon": "media/marketplace/icon.png",
 	"license": "MIT",
 	"repository": {
@@ -199,15 +199,21 @@
 					"default": [],
 "items": {
 							"type": "object",
-							"required": [
-								"id",
-								"name",
-								"command"
-							],
+							"if": {
+								"properties": {
+									"enabled": { "const": false }
+								}
+							},
+							"then": { "required": ["id"] },
+							"else": { "required": ["id", "name", "command"] },
 							"properties": {
 								"id": {
 									"type": "string",
 									"description": "Unique identifier"
+								},
+								"enabled": {
+									"type": "boolean",
+									"description": "When false, removes the matching built-in tool (e.g. hide \"claude\" and keep \"claude-perso\")"
 								},
 								"name": {
 									"type": "string",
@@ -243,7 +249,7 @@
 								}
 							}
 						},
-					"description": "Custom coding CLI tools. Built-in tools (claude, claude-perso, codex, copilot, opencode, hermes) are always available."
+  "description": "Custom coding CLI tools. Built-in tools (claude, claude-perso, codex, copilot, opencode, hermes) are available by default; add an entry with \"enabled\": false to hide one."
 				},
 				"agentSpace.defaultTool": {
 					"type": "string",
