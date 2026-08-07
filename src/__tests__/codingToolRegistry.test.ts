@@ -187,9 +187,18 @@ describe("CodingToolRegistry", () => {
 			expect(tool.command).toBe("opencode");
 		});
 
-		it("falls back to claude for unknown toolId", () => {
+		it("never substitutes builtin claude for an unknown toolId", () => {
 			const tool = registry.resolveAgentTool("nonexistent");
-			expect(tool.id).toBe("claude");
+			expect(tool.id).toBe("nonexistent");
+			expect(tool.command).toBe("nonexistent");
+			expect(tool.family).toBe("generic");
+		});
+
+		it("preserves a claude-prefixed identity for an unresolved tool", () => {
+			const tool = registry.resolveAgentTool("claude-variant");
+			expect(tool.id).toBe("claude-variant");
+			expect(tool.command).toBe("claude-variant");
+			expect(tool.family).toBe("claude");
 		});
 	});
 
@@ -400,6 +409,54 @@ describe("CodingToolRegistry", () => {
 			};
 			expect(registry.buildResumeLaunchCommand(tool, "sess-1")).toBe(
 				"my-tool continue sess-1",
+			);
+		});
+	});
+
+	describe("isClaudeFamilyTool", () => {
+		it("is true for the default tool", () => {
+			expect(registry.isClaudeFamilyTool(undefined)).toBe(true);
+		});
+
+		it("is true for a custom tool with arbitrary id/command and family claude", () => {
+			mockConfig({
+				codingTools: [
+					{
+						id: "wrapped-claude",
+						name: "Wrapped",
+						command: "my-claude",
+						family: "claude",
+					},
+				],
+			});
+			expect(registry.isClaudeFamilyTool("wrapped-claude")).toBe(true);
+		});
+
+		it("is false for non-claude tools", () => {
+			expect(registry.isClaudeFamilyTool("codex")).toBe(false);
+			expect(registry.isClaudeFamilyTool("copilot")).toBe(false);
+		});
+
+		it("custom claude-family tool gets full Claude behavior via own executable", () => {
+			mockConfig({
+				codingTools: [
+					{
+						id: "wrapped-claude",
+						name: "Wrapped",
+						command: "my-claude",
+						family: "claude",
+					},
+				],
+			});
+			const tool = registry.resolveAgentTool("wrapped-claude");
+			// session ID preassigned (the caller assigns it), then launch and
+			// resume go through the tool's own executable, never plain claude.
+			expect(registry.isClaudeFamilyTool("wrapped-claude")).toBe(true);
+			expect(registry.buildLaunchCommand(tool, "abc-123")).toBe(
+				"my-claude --session-id abc-123",
+			);
+			expect(registry.buildResumeLaunchCommand(tool, "abc-123")).toBe(
+				"my-claude --resume abc-123",
 			);
 		});
 	});

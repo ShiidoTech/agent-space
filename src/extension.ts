@@ -1,6 +1,9 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { CodingToolRegistry } from "./agents/codingToolRegistry";
+import {
+	CodingToolRegistry,
+	isClaudeFamily,
+} from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { ClaudeSessionProvider } from "./agents/sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./agents/sessionProviders/codexSessionProvider";
@@ -94,11 +97,14 @@ export async function activate(
 		.getConfiguration("agentSpace")
 		.get<string>("worktreeBasePath", ".worktrees");
 
+	const toolRegistry = new CodingToolRegistry();
+
 	const projectManager = new ProjectManager(
 		globalStore,
 		storagePath,
 		worktreeRelativePath,
 		tmux,
+		toolRegistry,
 	);
 	const gitViewHandoffAction = getGitViewHandoffAction(
 		globalStore.getPreference(PENDING_GIT_VIEW_HANDOFF_PREF),
@@ -126,7 +132,6 @@ export async function activate(
 	);
 	context.subscriptions.push(storageWatcher);
 
-	const toolRegistry = new CodingToolRegistry();
 	await ensureDefaultToolConfigured(toolRegistry, globalStore);
 
 	const defaultToolId = toolRegistry.getDefaultToolId();
@@ -280,9 +285,10 @@ export async function activate(
 	// Any claude-family tool declaring a `sessionsDir` gets its own session
 	// provider, so a wrapped/custom Claude variant is resumed and renamed via
 	// its own profile directory — configured declaratively, not hard-coded.
+	// Family uses the same `isClaudeFamily` resolution as the registry.
 	const extraClaudeProviders = toolRegistry
 		.getTools()
-		.filter((t) => t.family === "claude" && t.id !== "claude")
+		.filter((t) => isClaudeFamily(t) && t.id !== "claude")
 		.flatMap((t) =>
 			t.sessionsDir
 				? [

@@ -5,7 +5,10 @@ import type { Agent, Feature, Service } from "../types";
 import { exec, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import { isOpenCodeFamily } from "./codingToolRegistry";
-import { newestSessionIdForDirectory } from "./sessionProviders/openCodeSessionProvider";
+import {
+	newestSessionIdForDirectory,
+	sessionIdsForDirectory,
+} from "./sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "./tmux";
 
 const AGENT_COLORS = getThemeColors();
@@ -63,6 +66,16 @@ export class TerminalController implements vscode.Disposable {
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
+			// Snapshot the opencode sessions that already exist in this
+			// directory BEFORE launching, so a session created by THIS launch
+			// is the only one that can be attributed to the agent. A
+			// pre-existing session (e.g. another agent in the same worktree)
+			// must never become this agent's id just because it is the most
+			// recent in the same cwd.
+			const openCodeBaseline =
+				isOpenCodeFamily(tool) && !agent.sessionId
+					? sessionIdsForDirectory(cwd)
+					: undefined;
 			try {
 				const launchCommand = shouldResume
 					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
@@ -70,6 +83,14 @@ export class TerminalController implements vscode.Disposable {
 				exec(this.tmux.createCommand(sessionName, launchCommand), { cwd });
 				this.tmux.configureSession(sessionName);
 				sessionReady = this.tmux.isSessionAlive(sessionName);
+				if (openCodeBaseline) {
+					void this.captureOpenCodeSessionId(
+						feature,
+						agent,
+						cwd,
+						openCodeBaseline,
+					);
+				}
 			} catch (err) {
 				console.warn(`[TerminalController] tmux session create failed: ${err}`);
 				sessionReady = false;
@@ -113,15 +134,6 @@ export class TerminalController implements vscode.Disposable {
 		if (ctx) {
 			ctx.agentManager.markAgentStarted(agent.id, feature.id);
 			this.projectManager.notifyChange();
-		}
-
-		// opencode generates its own ids. Discover the id it created for this
-		// agent's directory so a later resume uses `--session <id>` instead of
-		// continuing the latest session (which would be ambiguous across
-		// several agents sharing a worktree).
-		const launchedTool = this.toolRegistry.resolveAgentTool(agent.toolId);
-		if (isOpenCodeFamily(launchedTool) && !agent.sessionId) {
-			void this.captureOpenCodeSessionId(feature, agent, cwd);
 		}
 
 		return terminal;
@@ -382,19 +394,22 @@ export class TerminalController implements vscode.Disposable {
 	}
 
 	/**
-	 * Best-effort: poll the opencode session store until the session created
-	 * for `cwd` appears, then persist its id on the agent. Never blocks the
-	 * UI and swallows failures (e.g. opencode not installed).
+	 * Best-effort: poll the opencode session store until a session created
+	 * after `baseline` appears for `cwd`, then persist its id on the agent.
+	 * Sessions that already existed before the launch (in `baseline`) are
+	 * never attributed to this agent. Never blocks the UI and swallows
+	 * failures (e.g. opencode not installed).
 	 */
 	private async captureOpenCodeSessionId(
 		feature: Feature,
 		agent: Agent,
 		cwd: string,
+		baseline: Set<string>,
 	): Promise<void> {
 		for (let attempt = 0; attempt < 10; attempt += 1) {
 			let sessionId: string | undefined;
 			try {
-				sessionId = newestSessionIdForDirectory(cwd);
+				sessionId = newestSessionIdForDirectory(cwd, baseline);
 			} catch {
 				// opencode CLI unavailable — nothing to discover
 				return;

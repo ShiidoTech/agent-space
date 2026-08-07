@@ -80,7 +80,7 @@ Launch package scripts such as dev servers and watch tasks, or open an interacti
 
 Some repositories do not branch off `main`. A `.agentspace/config.json` at the repository root lets a project declare the real **base branch**, the **branch kinds** offered at feature creation, and a dedicated **worktrees directory** — so Agent Space branches and creates worktrees where the project actually works.
 
-This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It is not implicitly gitignored. User-local values — a personal CLI profile, a private sessions directory, machine-specific `env` — do not belong here: declare those in your user or workspace settings via `agentSpace.codingTools`, which stays out of the repository.
+This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It is not implicitly gitignored. User-local values — a personal CLI profile, a private sessions directory, machine-specific `env` — do not belong here: declare those via `agentSpace.codingTools` in your user settings, or in workspace settings you keep explicitly untracked (e.g. a gitignored `.vscode/settings.json`).
 
 ### Custom Coding Tools
 
