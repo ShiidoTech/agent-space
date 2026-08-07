@@ -2,13 +2,13 @@
 
 Organize your real coding agents — real CLIs, real terminals, real Git worktrees, and VS Code's native Git. Agent Space is a thin layer that keeps parallel work visible and durable. It does **not** replace your coding tools or orchestrate their intelligence: each agent keeps its own native terminal interface and its own session.
 
-> **Philosophy — a layer, not an orchestrator.** Agent Space deliberately stays out of the way of the tools it hosts. You keep using whatever you can run from a terminal — `claude`, `codex`, `opencode`, `aider`, or anything else. Agent Space gives every feature an isolated Git worktree, keeps each agent's terminal alive in tmux across restarts, resumes its session, and shows you exactly where everything stands.
+> **Philosophy — a layer, not an orchestrator.** Agent Space deliberately stays out of the way of the tools it hosts. You keep using whatever you can run from a terminal — `claude`, `codex`, `opencode`, `aider`, or anything else. Agent Space gives every feature an isolated Git worktree, keeps each agent's terminal alive in tmux across restarts, resumes the session when the tool supports it, and shows you exactly where everything stands.
 
 ## What It Does
 
 - Dedicated Git worktree per feature branch
 - Multiple coding CLIs running in parallel on the same feature
-- Agent terminals kept alive in tmux across VS Code restarts, with sessions resumed
+- Agent terminals kept alive in tmux across VS Code restarts, with session resume for supported tools
 - Sidebar + home dashboard: features, agents, services and status at a glance
 - Feature workspaces and PR handoff from inside VS Code
 
@@ -19,7 +19,7 @@ It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`
 - **Your agents, their own minds.** Agent Space does not wrap agents, inject prompts or abstract their interfaces. The CLI you launch in a worktree is the real CLI, in the real terminal, talking to the real model you configured.
 - **Real Git, native VS Code.** Feature isolation is real Git worktrees and branches. Merging, reviewing and raising pull requests stay in VS Code's native Git and GitHub experience.
 - **Nothing is hidden.** Everything Agent Space manages is visible — features, agents, services, terminals, status — in the sidebar and the home dashboard.
-- **Durable by design.** tmux keeps terminals and CLI sessions alive across window reloads and full restarts. Reopening an agent resumes the exact session it had.
+- **Durable by design.** tmux keeps the live terminal alive across window reloads and full restarts. Supported tools can additionally resume their CLI session when a session identifier or a resume command is available.
 
 ## How It Works
 
@@ -66,7 +66,7 @@ Run several coding CLIs on the same feature simultaneously, mixing built-in pres
 
 ### Persistent Sessions
 
-Agent terminals live in tmux sessions, surviving window reloads and full VS Code restarts. Reopening an agent resumes its session instead of starting a blank one.
+Agent terminals live in tmux, which preserves the live terminal across window reloads and full VS Code restarts. Reopening an agent can also resume the CLI's session — for a supported family (e.g. Claude, Codex, OpenCode) or when the tool defines a session identifier or a `resumeCommand`. A generic tool without its own resume protocol starts fresh.
 
 ### Sidebar and Home Dashboard
 
@@ -82,7 +82,7 @@ Some repositories do not branch off `main`. A per-repository `.agentspace/config
 
 ### Custom Coding Tools
 
-Coding tools are plain records: `id`, `name`, `command`, plus optional `args`. This fork also supports `env`, `family`, `sessionsDir` and `resumeCommand`, and `"enabled": false` to hide a built-in. A custom entry **deep-merges** over a built-in, so a config only needs the deltas it changes. A wrapped CLI (for example a variant of a supported tool that uses a separate config folder or profile) is declared the same way, and is resumed through its own executable.
+Coding tools are plain records: `id`, `name`, `command`, plus optional `args`. This fork also supports `env`, `family`, `sessionsDir` and `resumeCommand`, and `"enabled": false` to hide a built-in. A custom entry merges over the matching built-in, keeping any field it does not specify; `env` values are merged by key, while list fields such as `args` are replaced rather than combined. A wrapped CLI (for example a variant of a supported tool that uses a separate config folder or profile) is declared the same way, and is resumed through its own executable when a session identifier or `resumeCommand` is available.
 
 ### Pull Request Handoff
 
