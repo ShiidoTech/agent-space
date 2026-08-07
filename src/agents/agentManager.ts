@@ -46,6 +46,21 @@ export class AgentManager {
 		this.agentsByFeature.delete(featureId);
 	}
 
+	/**
+	 * True when the tool is a claude-family CLI (built-in "claude", or any
+	 * wrapped variant declared in project config with an explicit `family:
+	 * "claude"` or a `claude`-prefixed id). Such tools get a pre-assigned
+	 * session id so their session can be resumed reliably.
+	 */
+	private isClaudeFamilyTool(toolId?: string): boolean {
+		if (!toolId) return true;
+		const custom = this.config.tools?.find((t) => t.id === toolId);
+		const command = custom?.command ?? toolId;
+		const family =
+			custom?.family ?? (command.startsWith("claude") ? "claude" : "generic");
+		return family === "claude";
+	}
+
 	getAgents(featureId: string): Agent[] {
 		return [...this.loadAgents(featureId)];
 	}
@@ -74,10 +89,13 @@ export class AgentManager {
 			);
 		}
 
-		// Claude gets a pre-assigned session ID; Codex auto-generates its own
-		// (discovered post-launch by CodexSessionWatcher); others get none
-		const sessionId =
-			!toolId || toolId === "claude" ? crypto.randomUUID() : null;
+		// Claude-family CLIs (built-in "claude" or a wrapped variant declared
+		// in project config) get a pre-assigned session ID so a later resume
+		// targets the exact same session. Codex auto-generates its own
+		// (discovered post-launch); opencode/generic manage their own.
+		const sessionId = this.isClaudeFamilyTool(toolId)
+			? crypto.randomUUID()
+			: null;
 
 		const agent: Agent = {
 			id,

@@ -101,6 +101,37 @@ describe("AgentManager", () => {
 			expect(agent.toolId).toBeUndefined();
 		});
 
+		it("pre-assigns a session id for the claude-family built-in", () => {
+			const agent = manager.createAgent(feature, "claude");
+			expect(agent.sessionId).toBeTruthy();
+		});
+
+		it("pre-assigns a session id for a claude-family tool declared in config", () => {
+			const claudeManager = new AgentManager(
+				store,
+				tmpDir,
+				path.join(tmpDir, ".worktrees"),
+				tmux as never,
+				{
+					tools: [
+						{
+							id: "claude-work",
+							name: "Claude Work",
+							command: "claude-work",
+							family: "claude",
+						},
+					],
+				},
+			);
+			const agent = claudeManager.createAgent(feature, "claude-work");
+			expect(agent.sessionId).toBeTruthy();
+		});
+
+		it("leaves session id null for non-claude tools", () => {
+			const agent = manager.createAgent(feature, "codex");
+			expect(agent.sessionId).toBeNull();
+		});
+
 		it("normalizes spaced feature names for per-agent git paths", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 

@@ -39,3 +39,18 @@ function epochMsToIso(value: unknown): string {
 	}
 	return "";
 }
+
+/**
+ * Best-effort lookup of the most recent opencode session started in `cwd`.
+ * opencode generates its own session ids, so after launching a fresh agent we
+ * discover the id it created in order to resume that exact session later —
+ * even when several agents share the same worktree.
+ */
+export function newestSessionIdForDirectory(cwd: string): string | undefined {
+	const provider = new OpenCodeSessionProvider();
+	const sessions = provider.scanSessions();
+	for (const s of sessions) {
+		if (s.projectPath === cwd && s.sessionId) return s.sessionId;
+	}
+	return undefined;
+}
