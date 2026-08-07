@@ -7,6 +7,7 @@ import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
 import type { Agent, AgentStatus, Feature } from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
+import { CodingToolRegistry } from "./codingToolRegistry";
 import type { TmuxIntegration } from "./tmux";
 
 export class AgentManager {
@@ -20,6 +21,7 @@ export class AgentManager {
 		private readonly worktreeBase: string,
 		private readonly tmux: TmuxIntegration,
 		private readonly config: ProjectConfig = {},
+		private readonly toolRegistry: CodingToolRegistry = new CodingToolRegistry(),
 	) {}
 
 	invalidateFeature(featureId: string): void {
@@ -47,18 +49,14 @@ export class AgentManager {
 	}
 
 	/**
-	 * True when the tool is a claude-family CLI (built-in "claude", or any
-	 * wrapped variant declared in project config with an explicit `family:
-	 * "claude"` or a `claude`-prefixed id). Such tools get a pre-assigned
-	 * session id so their session can be resumed reliably.
+	 * True when the tool resolved by the registry is a claude-family CLI
+	 * (built-in "claude", or a wrapped variant declared via
+	 * `agentSpace.codingTools` with an explicit `family: "claude"` or a
+	 * claude-prefixed id). Delegates to the registry — the single source of
+	 * truth for tool identity and family.
 	 */
 	private isClaudeFamilyTool(toolId?: string): boolean {
-		if (!toolId) return true;
-		const custom = this.config.tools?.find((t) => t.id === toolId);
-		const command = custom?.command ?? toolId;
-		const family =
-			custom?.family ?? (command.startsWith("claude") ? "claude" : "generic");
-		return family === "claude";
+		return this.toolRegistry.isClaudeFamilyTool(toolId);
 	}
 
 	getAgents(featureId: string): Agent[] {

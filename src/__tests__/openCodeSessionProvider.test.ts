@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { OpenCodeSessionProvider } from "../agents/sessionProviders/openCodeSessionProvider";
+import {
+	newestSessionIdForDirectory,
+	OpenCodeSessionProvider,
+	sessionIdsForDirectory,
+} from "../agents/sessionProviders/openCodeSessionProvider";
 
 // Mock child_process.execSync since we can't run `opencode` in CI
 vi.mock("node:child_process", () => ({
@@ -112,5 +116,80 @@ describe("OpenCodeSessionProvider", () => {
 	it("has toolId opencode", () => {
 		const provider = new OpenCodeSessionProvider();
 		expect(provider.toolId).toBe("opencode");
+	});
+});
+
+describe("sessionIdsForDirectory", () => {
+	it("snapshots the ids of sessions already started in cwd", () => {
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{
+					id: "A",
+					title: "pre-existing",
+					directory: "/work",
+					time_created: 1000,
+				},
+				{
+					id: "B",
+					title: "other dir",
+					directory: "/elsewhere",
+					time_created: 2000,
+				},
+			]),
+		);
+		expect(sessionIdsForDirectory("/work")).toEqual(new Set(["A"]));
+	});
+
+	it("returns an empty set when opencode is unavailable", () => {
+		mockExecSync.mockImplementation(() => {
+			throw new Error("command not found: opencode");
+		});
+		expect(sessionIdsForDirectory("/work")).toEqual(new Set());
+	});
+});
+
+describe("newestSessionIdForDirectory", () => {
+	it("returns the most recent session in cwd when nothing is excluded", () => {
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{ id: "B", title: "", directory: "/work", time_created: 2000 },
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		expect(newestSessionIdForDirectory("/work")).toBe("B");
+	});
+
+	it("never returns a session that existed before the launch (baseline)", () => {
+		// Before launch: only session A exists in the worktree.
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		const baseline = sessionIdsForDirectory("/work");
+		expect(baseline).toEqual(new Set(["A"]));
+
+		// Before the new session appears, discovery finds nothing new.
+		expect(newestSessionIdForDirectory("/work", baseline)).toBeUndefined();
+
+		// After launch, session B appears: the agent must receive B, never A.
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{ id: "B", title: "", directory: "/work", time_created: 2000 },
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		expect(newestSessionIdForDirectory("/work", baseline)).toBe("B");
+	});
+
+	it("ignores pre-existing sessions even when they are still the newest", () => {
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{ id: "A", title: "", directory: "/work", time_created: 2000 },
+				{ id: "B", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		// A is the newest session, but it predates the launch and must not win.
+		expect(newestSessionIdForDirectory("/work", new Set(["A"]))).toBe("B");
 	});
 });

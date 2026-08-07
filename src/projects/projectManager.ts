@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import { AgentManager } from "../agents/agentManager";
+import { CodingToolRegistry } from "../agents/codingToolRegistry";
 import type { TerminalController } from "../agents/terminalController";
 import { TmuxIntegration } from "../agents/tmux";
 import { FeatureManager } from "../features/featureManager";
@@ -28,6 +29,7 @@ export class ProjectManager {
 		private readonly storagePath: string,
 		private readonly worktreeRelativePath: string = ".worktrees",
 		private readonly tmux: TmuxIntegration = new TmuxIntegration(),
+		private readonly toolRegistry: CodingToolRegistry = new CodingToolRegistry(),
 	) {}
 
 	/** Register a callback fired when projects are added/removed. */
@@ -221,7 +223,7 @@ export class ProjectManager {
 		const store = new Store(storeDir);
 
 		// Per-repository configuration (base branch, branch kinds, dedicated
-		// worktrees dir, local tools) read from `<repo>/.agentspace/config.json`.
+		// worktrees dir) read from `<repo>/.agentspace/config.json`.
 		const config = loadProjectConfig(project.repoPath);
 		const worktreeBase = resolveWorktreeBaseDir(
 			project.repoPath,
@@ -240,6 +242,7 @@ export class ProjectManager {
 			worktreeBase,
 			this.tmux,
 			config,
+			this.toolRegistry,
 		);
 		const serviceManager = new ServiceManager(
 			store,

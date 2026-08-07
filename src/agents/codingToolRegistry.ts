@@ -129,11 +129,32 @@ export class CodingToolRegistry {
 
 	resolveAgentTool(toolId?: string): CodingTool {
 		const id = toolId ?? "claude";
-		return this.getTool(id) ?? BUILTIN_CODING_TOOLS[0];
+		const resolved = this.getTool(id);
+		if (resolved) return resolved;
+		// Never silently substitute a different tool (e.g. the built-in
+		// claude) for one that cannot be resolved: preserve the requested
+		// identity so the wrong executable is never launched. Family inference
+		// stays on the same isClaudeFamily path used everywhere else.
+		return {
+			id,
+			name: id,
+			command: id,
+			family: isClaudeFamily({ command: id }) ? "claude" : "generic",
+		};
 	}
 
 	isToolAvailable(tool: CodingTool): boolean {
 		return commandExists(tool.command);
+	}
+
+	/**
+	 * Canonical claude-family check for a tool id: resolve the tool through
+	 * the same merge (built-ins + `agentSpace.codingTools`) used everywhere
+	 * else, then apply `isClaudeFamily`. Single source of truth so no caller
+	 * re-derives family with its own heuristic.
+	 */
+	isClaudeFamilyTool(toolId?: string): boolean {
+		return isClaudeFamily(this.resolveAgentTool(toolId));
 	}
 
 	/**
