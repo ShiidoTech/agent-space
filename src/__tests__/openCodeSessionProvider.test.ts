@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-	newestSessionIdForDirectory,
+	claimNewestSessionIdForDirectory,
 	OpenCodeSessionProvider,
+	resetClaimedOpenCodeSessionIds,
 	sessionIdsForDirectory,
 } from "../agents/sessionProviders/openCodeSessionProvider";
 
@@ -13,6 +14,11 @@ vi.mock("node:child_process", () => ({
 import { execSync } from "node:child_process";
 
 const mockExecSync = vi.mocked(execSync);
+
+beforeEach(() => {
+	mockExecSync.mockReset();
+	resetClaimedOpenCodeSessionIds();
+});
 
 describe("OpenCodeSessionProvider", () => {
 	it("parses opencode db output into SessionInfo[]", () => {
@@ -148,18 +154,18 @@ describe("sessionIdsForDirectory", () => {
 	});
 });
 
-describe("newestSessionIdForDirectory", () => {
-	it("returns the most recent session in cwd when nothing is excluded", () => {
+describe("claimNewestSessionIdForDirectory", () => {
+	it("claims and reserves the most recent new session in cwd", () => {
 		mockExecSync.mockReturnValue(
 			JSON.stringify([
 				{ id: "B", title: "", directory: "/work", time_created: 2000 },
 				{ id: "A", title: "", directory: "/work", time_created: 1000 },
 			]),
 		);
-		expect(newestSessionIdForDirectory("/work")).toBe("B");
+		expect(claimNewestSessionIdForDirectory("/work", new Set())).toBe("B");
 	});
 
-	it("never returns a session that existed before the launch (baseline)", () => {
+	it("never claims a session that existed before the launch (baseline)", () => {
 		// Before launch: only session A exists in the worktree.
 		mockExecSync.mockReturnValue(
 			JSON.stringify([
@@ -170,7 +176,7 @@ describe("newestSessionIdForDirectory", () => {
 		expect(baseline).toEqual(new Set(["A"]));
 
 		// Before the new session appears, discovery finds nothing new.
-		expect(newestSessionIdForDirectory("/work", baseline)).toBeUndefined();
+		expect(claimNewestSessionIdForDirectory("/work", baseline)).toBeUndefined();
 
 		// After launch, session B appears: the agent must receive B, never A.
 		mockExecSync.mockReturnValue(
@@ -179,7 +185,7 @@ describe("newestSessionIdForDirectory", () => {
 				{ id: "A", title: "", directory: "/work", time_created: 1000 },
 			]),
 		);
-		expect(newestSessionIdForDirectory("/work", baseline)).toBe("B");
+		expect(claimNewestSessionIdForDirectory("/work", baseline)).toBe("B");
 	});
 
 	it("ignores pre-existing sessions even when they are still the newest", () => {
@@ -190,6 +196,102 @@ describe("newestSessionIdForDirectory", () => {
 			]),
 		);
 		// A is the newest session, but it predates the launch and must not win.
-		expect(newestSessionIdForDirectory("/work", new Set(["A"]))).toBe("B");
+		expect(claimNewestSessionIdForDirectory("/work", new Set(["A"]))).toBe("B");
+	});
+
+	it("reserves a claimed session so a second capture cannot take it", () => {
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{ id: "B", title: "", directory: "/work", time_created: 2000 },
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		const baseline = new Set(["A"]);
+
+		// First capture reserves B.
+		expect(claimNewestSessionIdForDirectory("/work", baseline)).toBe("B");
+		// Second capture sees B reserved → nothing new available yet.
+		expect(claimNewestSessionIdForDirectory("/work", baseline)).toBeUndefined();
+	});
+
+	it("keeps waiting for a newer session when the newest one is already reserved", () => {
+		const baseline = new Set(["A"]);
+
+		// B appears and is reserved by the first agent.
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{ id: "B", title: "", directory: "/work", time_created: 2000 },
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		expect(claimNewestSessionIdForDirectory("/work", baseline)).toBe("B");
+
+		// B is still the only new session: the second capture must wait.
+		expect(claimNewestSessionIdForDirectory("/work", baseline)).toBeUndefined();
+
+		// C appears: the second capture now takes C, never B.
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{ id: "C", title: "", directory: "/work", time_created: 3000 },
+				{ id: "B", title: "", directory: "/work", time_created: 2000 },
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		expect(claimNewestSessionIdForDirectory("/work", baseline)).toBe("C");
+	});
+
+	it("gives two concurrent captures two distinct session ids for the same cwd", async () => {
+		const baseline = new Set(["A"]);
+
+		// Both captures start while only A exists, then both observe B before
+		// C appears. Without the reservation both would take B; with it, one
+		// waits for C.
+		mockExecSync.mockReturnValueOnce(
+			JSON.stringify([
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		mockExecSync.mockReturnValueOnce(
+			JSON.stringify([
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		mockExecSync.mockReturnValueOnce(
+			JSON.stringify([
+				{ id: "B", title: "", directory: "/work", time_created: 2000 },
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		mockExecSync.mockReturnValueOnce(
+			JSON.stringify([
+				{ id: "B", title: "", directory: "/work", time_created: 2000 },
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+		mockExecSync.mockReturnValue(
+			JSON.stringify([
+				{ id: "C", title: "", directory: "/work", time_created: 3000 },
+				{ id: "B", title: "", directory: "/work", time_created: 2000 },
+				{ id: "A", title: "", directory: "/work", time_created: 1000 },
+			]),
+		);
+
+		// Mimic captureOpenCodeSessionId's poll loop.
+		const capture = async (): Promise<string | undefined> => {
+			for (let attempt = 0; attempt < 6; attempt += 1) {
+				const id = claimNewestSessionIdForDirectory("/work", baseline);
+				if (id) return id;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			return undefined;
+		};
+
+		const [idA, idB] = await Promise.all([capture(), capture()]);
+
+		// One capture reserves B, the other must wait and take C — never B.
+		expect(idA).toBeDefined();
+		expect(idB).toBeDefined();
+		expect(idA).not.toBe(idB);
+		expect(new Set([idA, idB])).toEqual(new Set(["B", "C"]));
 	});
 });

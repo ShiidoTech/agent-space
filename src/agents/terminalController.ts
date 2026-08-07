@@ -6,7 +6,7 @@ import { exec, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import { isOpenCodeFamily } from "./codingToolRegistry";
 import {
-	newestSessionIdForDirectory,
+	claimNewestSessionIdForDirectory,
 	sessionIdsForDirectory,
 } from "./sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "./tmux";
@@ -397,8 +397,10 @@ export class TerminalController implements vscode.Disposable {
 	 * Best-effort: poll the opencode session store until a session created
 	 * after `baseline` appears for `cwd`, then persist its id on the agent.
 	 * Sessions that already existed before the launch (in `baseline`) are
-	 * never attributed to this agent. Never blocks the UI and swallows
-	 * failures (e.g. opencode not installed).
+	 * never attributed to this agent. The claim is atomic: if two captures
+	 * for the same cwd poll concurrently, each new session is reserved for
+	 * exactly one of them and the other keeps waiting for a newer one. Never
+	 * blocks the UI and swallows failures (e.g. opencode not installed).
 	 */
 	private async captureOpenCodeSessionId(
 		feature: Feature,
@@ -409,7 +411,7 @@ export class TerminalController implements vscode.Disposable {
 		for (let attempt = 0; attempt < 10; attempt += 1) {
 			let sessionId: string | undefined;
 			try {
-				sessionId = newestSessionIdForDirectory(cwd, baseline);
+				sessionId = claimNewestSessionIdForDirectory(cwd, baseline);
 			} catch {
 				// opencode CLI unavailable — nothing to discover
 				return;

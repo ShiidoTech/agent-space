@@ -1,6 +1,20 @@
 import { execSync } from "node:child_process";
 import type { SessionInfo, SessionProvider } from "./types";
 
+/**
+ * In-memory reservation of opencode session ids picked by a capture. opencode
+ * session ids are globally unique, so a flat set is enough: once a session is
+ * claimed by one capture, no concurrent capture for the same cwd can select
+ * it again. Reserved ids are never released — a session belongs to exactly one
+ * agent for the lifetime of the process.
+ */
+const claimedSessionIds = new Set<string>();
+
+/** Reset the in-memory claim registry. Exposed for tests. */
+export function resetClaimedOpenCodeSessionIds(): void {
+	claimedSessionIds.clear();
+}
+
 export class OpenCodeSessionProvider implements SessionProvider {
 	readonly toolId = "opencode";
 
@@ -60,17 +74,26 @@ export function sessionIdsForDirectory(cwd: string): Set<string> {
 }
 
 /**
- * Newest opencode session started in `cwd` that is not among `knownIds`.
- * `knownIds` is the pre-launch snapshot, so only sessions created after the
- * launch are ever returned.
+ * Atomically claim the newest opencode session started in `cwd` that is not
+ * among `knownIds` (the pre-launch snapshot) and not already claimed by a
+ * concurrent capture. The scan and the claim happen in one synchronous step,
+ * so two captures polling the same cwd can never both select the same
+ * session: the first one reserves it, the others skip it and keep polling
+ * until a newer session appears.
  */
-export function newestSessionIdForDirectory(
+export function claimNewestSessionIdForDirectory(
 	cwd: string,
-	knownIds?: Set<string>,
+	knownIds: Set<string>,
 ): string | undefined {
 	const provider = new OpenCodeSessionProvider();
 	for (const s of provider.scanSessions()) {
-		if (s.projectPath === cwd && s.sessionId && !knownIds?.has(s.sessionId)) {
+		if (
+			s.projectPath === cwd &&
+			s.sessionId &&
+			!knownIds.has(s.sessionId) &&
+			!claimedSessionIds.has(s.sessionId)
+		) {
+			claimedSessionIds.add(s.sessionId);
 			return s.sessionId;
 		}
 	}
