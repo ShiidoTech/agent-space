@@ -3,6 +3,8 @@
 Organize your real coding agents — real CLIs, real terminals, real Git worktrees, and VS Code's native Git. Agent Space is a thin layer that keeps parallel work visible and durable. It does **not** replace your coding tools or orchestrate their intelligence: each agent keeps its own native terminal interface and its own session.
 
 > **Philosophy — a layer, not an orchestrator.** Agent Space deliberately stays out of the way of the tools it hosts. You keep using whatever you can run from a terminal — `claude`, `codex`, `opencode`, `aider`, or anything else. Agent Space gives every feature an isolated Git worktree, keeps each agent's terminal alive in tmux across restarts, resumes the session when the tool supports it, and shows you exactly where everything stands.
+>
+> **One level below the orchestrators.** Coding tools may orchestrate agents *inside* a session — Codex, OpenCode or an opencode workspace handle that themselves. Agent Space does not compete there. It operates one level below: it organizes the independent worktrees, terminals and sessions those tools run in.
 
 ## What It Does
 
@@ -31,7 +33,9 @@ It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`
 
 ## Why It Is Useful
 
-When several agents work in the same repository they can overwrite each other or lose terminal context. Agent Space keeps each feature isolated, makes active work visible, and lets long-running agent sessions survive editor restarts — without taking control of the agents themselves.
+- **The problem.** Several agents in the same repository can overwrite each other or lose terminal context. Agent Space keeps each feature isolated in its own Git worktree, makes active work visible, and lets long-running agent sessions survive editor restarts.
+- **Why not just open terminals yourself?** A handful of terminals does not give you per-feature worktrees, durable tmux sessions that survive restarts, session resume, and a dashboard showing where everything stands — that bookkeeping is what Agent Space takes off your hands.
+- **Why use it when your coding CLI already has a multi-agent system?** Those systems organize what agents do *inside* one session. Agent Space works one level below: it organizes the persistent environments — worktrees, terminals, sessions — in which the human puts those tools to work, even several at once.
 
 ## Requirements
 
