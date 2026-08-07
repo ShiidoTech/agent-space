@@ -3,6 +3,7 @@
 .env
 .vscode/**
 .worktrees/**
+.codegraph/**
 src/**
 scripts/**
 feature/**

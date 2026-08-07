@@ -227,33 +227,13 @@ export async function activate(
 
 			const agents = ctx.agentManager.getAgents(featureId);
 			if (agents.length === 0) {
-				const initialTool = toolRegistry.getPreferredAvailableTool();
-				if (!initialTool) {
-					vscode.window.showErrorMessage(
-						"No coding tools found on PATH. Install one of: claude, claude-perso, codex, copilot, opencode, hermes.",
-					);
-					return;
-				}
-				try {
-					const agent = ctx.agentManager.createAgent(feature, initialTool.id);
-					const terminal = terminalController.createTerminal(feature, agent, 0);
-					if (!terminal) {
-						setTimeout(
-							() => terminalController.reconnectTmuxSessions(feature),
-							500,
-						);
-					}
-				} catch (err) {
-					const message =
-						err instanceof Error ? err.message : "Failed to create agent";
-					vscode.window.showErrorMessage(
-						`Create agent failed for ${feature.branch}: ${message}`,
-					);
-					return;
-				}
-			} else {
-				terminalController.reconnectTmuxSessions(feature);
+				// No auto-launch: opening an empty feature must not start a
+				// coding tool session (and burn tokens). Agents are added
+				// explicitly via "Add Agent".
+				await showAgentSpace(featureId);
+				return;
 			}
+			terminalController.reconnectTmuxSessions(feature);
 
 			await showAgentSpace(featureId);
 		} finally {
@@ -467,10 +447,30 @@ export async function activate(
 
 					const initialTool = toolRegistry.getPreferredAvailableTool();
 					if (initialTool) {
-						ctx.agentManager.createAgent(feature, initialTool.id);
+						const launchNow = await vscode.window.showQuickPick(
+							[
+								{
+									label: `Launch ${initialTool.name} now`,
+									description: `Start the agent immediately (uses ${initialTool.name})`,
+									value: true as const,
+								},
+								{
+									label: "Create feature without agent",
+									description:
+										"No tool session is started; add an agent later with 'Add Agent'",
+									value: false as const,
+								},
+							],
+							{
+								placeHolder: `Launch ${initialTool.name} now?`,
+							},
+						);
+						if (launchNow?.value) {
+							ctx.agentManager.createAgent(feature, initialTool.id);
+						}
 					} else {
 						vscode.window.showErrorMessage(
-							"Feature created, but no coding tools are available to start the first agent.",
+							"Feature created, but no coding tools are available. Add an agent later with 'Add Agent'.",
 						);
 					}
 					sidebarProvider.refresh();

@@ -33,6 +33,8 @@ export interface CodingTool {
 	id: string;
 	name: string;
 	command: string;
+	/** When false (only meaningful for custom `codingTools` entries), the tool is removed from the registry. */
+	enabled?: boolean;
 	args?: string[];
 	env?: Record<string, string>;
 	family?: "claude" | "codex" | "opencode" | "generic";

@@ -18,6 +18,7 @@ export const BUILTIN_CODING_TOOLS: CodingTool[] = [
 		command: "claude-perso",
 		family: "claude",
 		sessionsDir: "~/.claude-perso",
+		args: ["--model", "sonnet", "--permission-mode", "auto"],
 	},
 	{ id: "hermes", name: "Hermes", command: "hermes", family: "generic" },
 ];
@@ -55,6 +56,12 @@ export class CodingToolRegistry {
 			merged.set(tool.id, tool);
 		}
 		for (const tool of custom) {
+			if (tool.enabled === false) {
+				// Allow removing a built-in (e.g. hide the generic "claude"
+				// tool while keeping "claude-perso").
+				merged.delete(tool.id);
+				continue;
+			}
 			merged.set(tool.id, tool);
 		}
 		return [...merged.values()];
