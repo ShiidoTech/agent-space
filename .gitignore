@@ -4,3 +4,4 @@ node_modules
 .env
 feature/
 .worktrees/
+.codegraph/
