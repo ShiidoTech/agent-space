@@ -18,11 +18,12 @@ const CHUNK_SIZE = 4096;
 export class ClaudeSessionProvider
 	implements SessionProvider, SessionRenameAdapter, SessionTitleProvider
 {
-	readonly toolId = "claude";
+	readonly toolId: string;
 	private readonly projectsDir: string;
 	private readonly pathCache = new Map<string, string>();
 
-	constructor(projectsDir?: string) {
+	constructor(projectsDir?: string, toolId = "claude") {
+		this.toolId = toolId;
 		this.projectsDir = projectsDir ?? DEFAULT_PROJECTS_DIR;
 	}
 

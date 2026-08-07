@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../agents/agentManager";
+import { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { Store } from "../storage/store";
 import type { Feature } from "../types";
 
@@ -10,9 +11,25 @@ vi.mock("node:child_process", () => ({
 	execSync: vi.fn(),
 }));
 
+vi.mock("vscode", () => ({
+	workspace: {
+		getConfiguration: vi.fn(),
+	},
+}));
+
 import { execSync } from "node:child_process";
+import * as vscode from "vscode";
 
 const mockExecSync = vi.mocked(execSync);
+
+function mockConfig(values: Record<string, unknown> = {}) {
+	(
+		vscode.workspace.getConfiguration as ReturnType<typeof vi.fn>
+	).mockReturnValue({
+		get: (key: string, defaultValue?: unknown) =>
+			key in values ? values[key] : defaultValue,
+	});
+}
 
 describe("AgentManager", () => {
 	let tmpDir: string;
@@ -52,8 +69,11 @@ describe("AgentManager", () => {
 			tmpDir,
 			path.join(tmpDir, ".worktrees"),
 			tmux as never,
+			undefined,
+			new CodingToolRegistry(),
 		);
 		mockExecSync.mockReset();
+		mockConfig();
 	});
 
 	afterEach(() => {
@@ -99,6 +119,39 @@ describe("AgentManager", () => {
 		it("leaves toolId undefined when not provided", () => {
 			const agent = manager.createAgent(feature);
 			expect(agent.toolId).toBeUndefined();
+		});
+
+		it("pre-assigns a session id for the claude-family built-in", () => {
+			const agent = manager.createAgent(feature, "claude");
+			expect(agent.sessionId).toBeTruthy();
+		});
+
+		it("pre-assigns a session id for a claude-family tool declared via codingTools", () => {
+			mockConfig({
+				codingTools: [
+					{
+						id: "claude-work",
+						name: "Claude Work",
+						command: "claude-work",
+						family: "claude",
+					},
+				],
+			});
+			const claudeManager = new AgentManager(
+				store,
+				tmpDir,
+				path.join(tmpDir, ".worktrees"),
+				tmux as never,
+				undefined,
+				new CodingToolRegistry(),
+			);
+			const agent = claudeManager.createAgent(feature, "claude-work");
+			expect(agent.sessionId).toBeTruthy();
+		});
+
+		it("leaves session id null for non-claude tools", () => {
+			const agent = manager.createAgent(feature, "codex");
+			expect(agent.sessionId).toBeNull();
 		});
 
 		it("normalizes spaced feature names for per-agent git paths", () => {

@@ -14,11 +14,32 @@ export interface Feature {
 	createdAt: string;
 }
 
+/**
+ * A coding CLI that Agent Space can launch inside a tmux-backed terminal.
+ *
+ * - `command`/`args` build the process to start.
+ * - `env` are merged into the launched process environment (e.g. a personal
+ *   profile config dir).
+ * - `family` drives session handling. "claude" CLIs are launched with a
+ *   pre-assigned `--session-id` and resumed with `--resume <sessionId>`;
+ *   "codex" generates its own id and is resumed with `codex resume`;
+ *   "opencode"/"generic" manage their own sessions.
+ * - `sessionsDir` tells Agent Space where the CLI stores its session index
+ *   so names can be discovered for display/rename.
+ * - `resumeCommand` is an optional explicit template. `{command}` and
+ *   `{sessionId}` are substituted when provided.
+ */
 export interface CodingTool {
 	id: string;
 	name: string;
 	command: string;
+	/** When false (only meaningful for custom `codingTools` entries), the tool is removed from the registry. */
+	enabled?: boolean;
 	args?: string[];
+	env?: Record<string, string>;
+	family?: "claude" | "codex" | "opencode" | "generic";
+	sessionsDir?: string;
+	resumeCommand?: string;
 }
 
 export interface Agent {

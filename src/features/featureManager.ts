@@ -2,6 +2,8 @@ import { execSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import { TERMINAL_COLOR_KEYS } from "../constants/colors";
+import { checkWorktreeDeletionSafety } from "../git/worktreeSafety";
+import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
 import type {
 	Feature,
@@ -13,6 +15,11 @@ import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { computeGitStatus, computeGitStatusAsync } from "./featureGitStatus";
 import { normalizeFeatureName } from "./featureName";
 
+export interface FeatureDeleteResult {
+	deleted: boolean;
+	reasons: string[];
+}
+
 export class FeatureManager {
 	private features: Feature[];
 	private cachedBaseBranch: string | undefined;
@@ -21,6 +28,7 @@ export class FeatureManager {
 		private readonly store: Store,
 		private readonly repoRoot: string,
 		private readonly worktreeBase: string,
+		private readonly config: ProjectConfig = {},
 	) {
 		this.features = store.loadFeatures();
 	}
@@ -43,8 +51,39 @@ export class FeatureManager {
 		};
 	}
 
+	/** The effective base branch (configured, or checked-out as a fallback). */
+	getBaseBranchName(): string {
+		return this.getBaseBranch();
+	}
+
+	/** The worktree base directory used for this project's features. */
+	getWorktreeBase(): string {
+		return this.worktreeBase;
+	}
+
+	/** Branch kinds offered at feature creation (e.g. ["feature", "fix"]). */
+	getBranchKinds(): string[] {
+		return this.config.branchKinds?.filter(Boolean) ?? [];
+	}
+
+	/** Default branch kind, if any is declared by the project. */
+	getDefaultBranchKind(): string | undefined {
+		return this.config.defaultBranchKind;
+	}
+
 	private getBaseBranch(): string {
 		if (this.cachedBaseBranch) return this.cachedBaseBranch;
+
+		// A configured base branch wins over whatever is checked out in the
+		// main checkout: git actions and statuses must be computed against the
+		// project's real base (e.g. `develop`), never the branch momentarily
+		// checked out, and never an implicit "main".
+		const configured = this.config.baseBranch?.trim();
+		if (configured) {
+			this.cachedBaseBranch = configured;
+			return configured;
+		}
+
 		try {
 			this.cachedBaseBranch = execSync("git rev-parse --abbrev-ref HEAD", {
 				cwd: this.repoRoot,
@@ -69,17 +108,34 @@ export class FeatureManager {
 		return this.features.find((f) => f.id === id);
 	}
 
-	createFeature(name: string, isolation: IsolationMode): Feature {
+	/**
+	 * Create a feature: a git worktree branch created from the configured base
+	 * branch (never from the momentarily-checked-out HEAD), placed in the
+	 * configured worktree base.
+	 *
+	 * `branchKind` selects the branch prefix (e.g. `feature`/`fix`). When the
+	 * project declares `defaultBranchKind` it is used unless a kind is given;
+	 * otherwise `feat` keeps backwards compatibility.
+	 */
+	createFeature(
+		name: string,
+		isolation: IsolationMode,
+		branchKind?: string,
+	): Feature {
 		const displayName = name.trim();
 		const normalizedName = normalizeFeatureName(displayName);
 		if (!normalizedName) {
 			throw new Error("Feature name is required");
 		}
 
+		const kind = branchKind?.trim() || this.config.defaultBranchKind || "feat";
+		const branch = `${kind}/${normalizedName}`;
+
 		const existing = this.features.find(
 			(f) =>
 				f.name === displayName ||
-				normalizeFeatureName(f.name) === normalizedName,
+				normalizeFeatureName(f.name) === normalizedName ||
+				f.branch === branch,
 		);
 		if (existing) {
 			throw new Error(
@@ -88,14 +144,20 @@ export class FeatureManager {
 		}
 
 		const id = crypto.randomUUID();
-		const branch = `feat/${normalizedName}`;
-		const worktreePath = path.join(this.worktreeBase, normalizedName);
+		const worktreePath = path.join(
+			this.worktreeBase,
+			`${kind}-${normalizedName}`,
+		);
+		const baseBranch = this.getBaseBranch();
 
-		execSync(`git worktree add "${worktreePath}" -b "${branch}"`, {
-			cwd: this.repoRoot,
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "pipe"],
-		});
+		execSync(
+			`git worktree add "${worktreePath}" -b "${branch}" "${baseBranch}"`,
+			{
+				cwd: this.repoRoot,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "pipe"],
+			},
+		);
 
 		const feature: Feature = {
 			id,
@@ -113,29 +175,65 @@ export class FeatureManager {
 		return feature;
 	}
 
-	deleteFeature(id: string): void {
-		const feature = this.features.find((f) => f.id === id);
-		if (!feature) return;
+	/**
+	 * Evaluate whether a feature can be removed without losing work. Returns
+	 * the combined reasons across the feature worktree. Safe to call before
+	 * any destructive step.
+	 */
+	getDeletionSafety(feature: Feature) {
+		return checkWorktreeDeletionSafety({
+			repoRoot: this.repoRoot,
+			worktreeBase: this.worktreeBase,
+			worktreePath: feature.worktreePath,
+			branch: feature.branch,
+			baseBranch: this.getBaseBranch(),
+		});
+	}
 
-		if (!isWorktreePathSafe(feature.worktreePath, this.worktreeBase)) {
-			console.error(
-				`[FeatureManager] Refusing to remove worktree outside base: "${feature.worktreePath}"`,
+	/**
+	 * Fail-closed deletion. Refuses (throws with reasons) unless explicitly
+	 * forced. A forced path is only ever chosen by a human after the checklist
+	 * has been shown; the nominal path never uses `--force`.
+	 */
+	deleteFeature(
+		id: string,
+		options?: { force?: boolean },
+	): FeatureDeleteResult {
+		const feature = this.features.find((f) => f.id === id);
+		if (!feature) return { deleted: false, reasons: [] };
+
+		const force = options?.force === true;
+		const safety = this.getDeletionSafety(feature);
+
+		if (!force && !safety.safe) {
+			throw new Error(
+				`Cannot delete feature "${feature.name}":\n\n${safety.reasons.join("\n")}`,
 			);
-		} else {
+		}
+
+		if (isWorktreePathSafe(feature.worktreePath, this.worktreeBase)) {
 			try {
-				execSync(`git worktree remove "${feature.worktreePath}" --force`, {
-					cwd: this.repoRoot,
-					encoding: "utf-8",
-					stdio: ["ignore", "pipe", "pipe"],
-				});
+				execSync(
+					`git worktree remove "${feature.worktreePath}"${force ? " --force" : ""}`,
+					{
+						cwd: this.repoRoot,
+						encoding: "utf-8",
+						stdio: ["ignore", "pipe", "pipe"],
+					},
+				);
 			} catch {
 				// Worktree may already be gone
 			}
+		} else {
+			console.error(
+				`[FeatureManager] Refusing to remove worktree outside base: "${feature.worktreePath}"`,
+			);
 		}
 
 		this.store.deleteFeatureData(id);
 		this.features = this.features.filter((f) => f.id !== id);
 		this.store.saveFeatures(this.features);
+		return { deleted: true, reasons: safety.reasons };
 	}
 
 	updateFeatureStatus(id: string, status: FeatureStatus): void {

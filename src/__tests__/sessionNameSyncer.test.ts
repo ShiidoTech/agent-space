@@ -10,6 +10,14 @@ import { ProjectManager } from "../projects/projectManager";
 import { GlobalStore } from "../storage/globalStore";
 import type { Agent, Feature } from "../types";
 
+vi.mock("vscode", () => ({
+	workspace: {
+		getConfiguration: vi.fn(() => ({
+			get: (_key: string, defaultValue?: unknown) => defaultValue,
+		})),
+	},
+}));
+
 /** Assert agent has a sessionId and return it (avoids non-null assertions). */
 function sid(agent: Agent): string {
 	if (!agent.sessionId) throw new Error("expected agent to have sessionId");

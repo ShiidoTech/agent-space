@@ -233,4 +233,87 @@ describe("FeatureManager", () => {
 			);
 		});
 	});
+
+	describe("project-config policies (base branch + branch kind)", () => {
+		function configManager(config: Record<string, unknown>) {
+			return new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				config,
+			);
+		}
+
+		it("uses the configured base branch instead of the checked-out HEAD", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const fm = configManager({ baseBranch: "develop" });
+			const base = fm.getBaseFeature("p1");
+			expect(base.branch).toBe("develop");
+			// No execSync call to detect HEAD, even though it would return "".
+			expect(mockExecSync).not.toHaveBeenCalled();
+		});
+
+		it("creates the worktree from the configured base branch", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const fm = configManager({ baseBranch: "develop" });
+			fm.createFeature("some-feature", "shared", "feature");
+			expect(mockExecSync).toHaveBeenCalledWith(
+				expect.stringContaining(
+					`git worktree add "${path.join(repoRoot, ".worktrees", "feature-some-feature")}" -b "feature/some-feature" "develop"`,
+				),
+				expect.any(Object),
+			);
+		});
+
+		it("uses the selected branch kind as the branch prefix", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const fm = configManager({});
+			const feature = fm.createFeature("READ-891", "shared", "fix");
+			expect(feature.branch).toBe("fix/READ-891");
+		});
+
+		it("uses defaultBranchKind when no kind is passed", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const fm = configManager({ defaultBranchKind: "feature" });
+			const feature = fm.createFeature("READ-891", "shared");
+			expect(feature.branch).toBe("feature/READ-891");
+		});
+
+		it("throws on delete when the worktree has uncommitted changes", () => {
+			// base branch detection → clean
+			mockExecSync.mockReturnValueOnce("");
+			// createFeature worktree add
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const fm = configManager({});
+			const feature = fm.createFeature("dirty-one", "shared", "feature");
+
+			mockExecSync.mockReset();
+			// deletion safety: git status --porcelain dirty
+			mockExecSync.mockReturnValue(" M x.ts\n");
+
+			expect(() => fm.deleteFeature(feature.id)).toThrow("Uncommitted changes");
+		});
+
+		it("deletes clean features without --force", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const fm = configManager({});
+			const feature = fm.createFeature("clean-one", "shared", "feature");
+
+			mockExecSync.mockReset();
+			// deletion safety: clean status, no local commits
+			mockExecSync.mockReturnValue("");
+
+			const result = fm.deleteFeature(feature.id);
+			expect(result.deleted).toBe(true);
+			expect(mockExecSync).toHaveBeenCalledWith(
+				expect.stringContaining("git worktree remove"),
+				expect.any(Object),
+			);
+			// no --force on the nominal path
+			const removeCall = mockExecSync.mock.calls.find(([c]) =>
+				String(c).includes("git worktree remove"),
+			);
+			expect(String(removeCall?.[0])).not.toContain("--force");
+		});
+	});
 });

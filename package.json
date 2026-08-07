@@ -199,15 +199,33 @@
 					"default": [],
 					"items": {
 						"type": "object",
-						"required": [
-							"id",
-							"name",
-							"command"
-						],
+						"if": {
+							"properties": {
+								"enabled": {
+									"const": false
+								}
+							}
+						},
+						"then": {
+							"required": [
+								"id"
+							]
+						},
+						"else": {
+							"required": [
+								"id",
+								"name",
+								"command"
+							]
+						},
 						"properties": {
 							"id": {
 								"type": "string",
 								"description": "Unique identifier"
+							},
+							"enabled": {
+								"type": "boolean",
+								"description": "When false, removes the matching built-in tool"
 							},
 							"name": {
 								"type": "string",
@@ -223,14 +241,36 @@
 									"type": "string"
 								},
 								"description": "CLI arguments"
+							},
+							"env": {
+								"type": "object",
+								"description": "Environment variables merged into the launched CLI process (e.g. a personal profile config dir)"
+							},
+							"family": {
+								"type": "string",
+								"enum": [
+									"claude",
+									"codex",
+									"opencode",
+									"generic"
+								],
+								"description": "Session-handling family. claude-family CLIs are launched with --session-id and resumed with --resume <sessionId>."
+							},
+							"sessionsDir": {
+								"type": "string",
+								"description": "Directory where the CLI stores its session index (used for name/rename discovery)"
+							},
+							"resumeCommand": {
+								"type": "string",
+								"description": "Explicit resume template using {command} and {sessionId} placeholders"
 							}
 						}
 					},
-					"description": "Custom coding CLI tools. Built-in tools (claude, codex, copilot, opencode) are always available."
+					"description": "Custom coding CLI tools. Built-in tools (claude, codex, copilot, opencode) are available by default; add an entry with \"enabled\": false to hide one."
 				},
 				"agentSpace.defaultTool": {
 					"type": "string",
-					"markdownDescription": "Default coding tool ID for new agents. On first start, Agent Space prompts you to choose from the coding CLIs available on PATH. Built-in IDs include `claude`, `codex`, `copilot`, and `opencode`.",
+					"markdownDescription": "Default coding tool ID for new agents. On first start, Agent Space prompts you to choose from the coding CLIs available on PATH. Built-in IDs include `claude`, `codex`, `copilot`, and `opencode`; custom tools can be declared in `agentSpace.codingTools`.",
 					"examples": [
 						"codex",
 						"claude",

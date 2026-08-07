@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectManager } from "../projects/projectManager";
 import { GlobalStore } from "../storage/globalStore";
 
+vi.mock("vscode", () => ({
+	workspace: {
+		getConfiguration: vi.fn(() => ({
+			get: (_key: string, defaultValue?: unknown) => defaultValue,
+		})),
+	},
+}));
+
 describe("ProjectManager", () => {
 	let globalStore: GlobalStore;
 	let manager: ProjectManager;

@@ -1,6 +1,7 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
 import { AgentManager } from "../agents/agentManager";
+import { CodingToolRegistry } from "../agents/codingToolRegistry";
 import type { TerminalController } from "../agents/terminalController";
 import { TmuxIntegration } from "../agents/tmux";
 import { FeatureManager } from "../features/featureManager";
@@ -8,6 +9,7 @@ import { ServiceManager } from "../services/serviceManager";
 import type { GlobalStore } from "../storage/globalStore";
 import { Store } from "../storage/store";
 import type { Feature, Project } from "../types";
+import { loadProjectConfig, resolveWorktreeBaseDir } from "./projectConfig";
 
 export interface ProjectContext {
 	project: Project;
@@ -27,6 +29,7 @@ export class ProjectManager {
 		private readonly storagePath: string,
 		private readonly worktreeRelativePath: string = ".worktrees",
 		private readonly tmux: TmuxIntegration = new TmuxIntegration(),
+		private readonly toolRegistry: CodingToolRegistry = new CodingToolRegistry(),
 	) {}
 
 	/** Register a callback fired when projects are added/removed. */
@@ -218,20 +221,28 @@ export class ProjectManager {
 	private initializeContext(project: Project): ProjectContext {
 		const storeDir = path.join(this.storagePath, "projects", project.id);
 		const store = new Store(storeDir);
-		const worktreeBase = path.resolve(
+
+		// Per-repository configuration (base branch, branch kinds, dedicated
+		// worktrees dir) read from `<repo>/.agentspace/config.json`.
+		const config = loadProjectConfig(project.repoPath);
+		const worktreeBase = resolveWorktreeBaseDir(
 			project.repoPath,
+			config,
 			this.worktreeRelativePath,
 		);
 		const featureManager = new FeatureManager(
 			store,
 			project.repoPath,
 			worktreeBase,
+			config,
 		);
 		const agentManager = new AgentManager(
 			store,
 			project.repoPath,
 			worktreeBase,
 			this.tmux,
+			config,
+			this.toolRegistry,
 		);
 		const serviceManager = new ServiceManager(
 			store,
