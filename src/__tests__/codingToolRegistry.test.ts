@@ -259,8 +259,22 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildLaunchCommand(tool, null)).toBe("claude");
 		});
 
-		it("claude-perso launches with sonnet + auto approval, then session-id", () => {
+		it("deep-merges custom args over the claude-perso built-in (delta-only config)", () => {
+			mockConfig({
+				codingTools: [
+					{
+						id: "claude-perso",
+						args: ["--model", "sonnet", "--permission-mode", "auto"],
+					},
+				],
+			});
 			const tool = registry.resolveAgentTool("claude-perso");
+			// Built-in identity/fields kept, args overridden, then session-id.
+			expect(tool).toMatchObject({
+				id: "claude-perso",
+				name: "Claude Perso",
+				command: "claude-perso",
+			});
 			expect(registry.buildLaunchCommand(tool, "abc-123")).toBe(
 				"claude-perso --model sonnet --permission-mode auto --session-id abc-123",
 			);
@@ -269,7 +283,7 @@ describe("CodingToolRegistry", () => {
 		it("uses claude-perso executable with --session-id for claude-perso tool", () => {
 			const tool = registry.resolveAgentTool("claude-perso");
 			expect(registry.buildLaunchCommand(tool, "perso-123")).toBe(
-				"claude-perso --model sonnet --permission-mode auto --session-id perso-123",
+				"claude-perso --session-id perso-123",
 			);
 		});
 

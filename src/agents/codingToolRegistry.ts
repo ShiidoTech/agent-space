@@ -18,7 +18,6 @@ export const BUILTIN_CODING_TOOLS: CodingTool[] = [
 		command: "claude-perso",
 		family: "claude",
 		sessionsDir: "~/.claude-perso",
-		args: ["--model", "sonnet", "--permission-mode", "auto"],
 	},
 	{ id: "hermes", name: "Hermes", command: "hermes", family: "generic" },
 ];
@@ -35,6 +34,27 @@ function isCodexFamily(tool: CodingTool): boolean {
 
 function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * Shallow-merge a custom tool entry over a built-in tool (or nothing).
+ * Fields provided by the custom entry win; anything else keeps the built-in
+ * default, so personal/`args` overrides don't need to restate the tool.
+ */
+function mergeTool(
+	base: CodingTool | undefined,
+	over: CodingTool,
+): CodingTool {
+	return {
+		id: over.id,
+		name: over.name ?? base?.name ?? over.id,
+		command: over.command ?? base?.command ?? over.id,
+		family: over.family ?? base?.family,
+		sessionsDir: over.sessionsDir ?? base?.sessionsDir,
+		args: over.args ?? base?.args,
+		env: base?.env ? { ...base.env, ...over.env } : over.env,
+		resumeCommand: over.resumeCommand ?? base?.resumeCommand,
+	};
 }
 
 /** Prefix a command with `KEY='value'` env assignments, safely quoted. */
@@ -62,7 +82,10 @@ export class CodingToolRegistry {
 				merged.delete(tool.id);
 				continue;
 			}
-			merged.set(tool.id, tool);
+			// Deep-merge over the built-in: a config only needs the deltas it
+			// changes (e.g. just `args`), keeping the built-in's other fields.
+			const base = merged.get(tool.id);
+			merged.set(tool.id, mergeTool(base, tool));
 		}
 		return [...merged.values()];
 	}
