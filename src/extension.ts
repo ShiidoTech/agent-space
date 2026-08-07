@@ -13,6 +13,7 @@ import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
+import { buildGitHubCompareUrl } from "./git/githubCompareUrl";
 import {
 	getGitViewHandoffAction,
 	openFeatureGitView,
@@ -879,13 +880,6 @@ export async function activate(
 				const feature = ctx.featureManager.getFeature(featureId);
 				if (!feature) return;
 
-				if (!prerequisites.isGhPrExtensionInstalled()) {
-					vscode.window.showErrorMessage(
-						'Install the "GitHub Pull Requests" extension to create PRs.',
-					);
-					return;
-				}
-
 				try {
 					// Target the project's configured base branch (e.g.
 					// v2_ia_first), never an implicit main.
@@ -897,33 +891,37 @@ export async function activate(
 							cancellable: false,
 						},
 						async () => {
-							// Push without -u: -u would overwrite the merge target with
-							// origin/<feature>. The PR extension uses this branch config
-							// to keep the configured base instead of an implicit default.
+							// Push the feature from its worktree. Do not alter branch
+							// upstream metadata: it describes Git tracking, not PR base.
 							await execAsync(`git push origin "${feature.branch}"`, {
 								cwd: feature.worktreePath,
 							});
-							await execAsync(
-								`git config branch."${feature.branch}".remote origin`,
-								{ cwd: feature.worktreePath },
-							);
-							await execAsync(
-								`git config branch."${feature.branch}".merge refs/heads/${baseBranch}`,
-								{ cwd: feature.worktreePath },
-							);
 						},
 					);
-					// The GH PR extension form is opened but the user keeps the
-					// final validation: they pick/confirm the base and submit.
-					vscode.window.showInformationMessage(
-						`Branch "${feature.branch}" pushed. Opening PR creation against "${baseBranch}" — verify the target before submitting.`,
-					);
-					// Opens the GH PR extension form — user may still cancel,
-					// so we intentionally don't mark the feature as "done" here.
-					await vscode.commands.executeCommand("pr.create", {
-						repoPath: ctx.project.repoPath,
-						compareBranch: feature.branch,
+					const remote = await execAsync("git remote get-url origin", {
+						cwd: feature.worktreePath,
 					});
+					const compareUrl = buildGitHubCompareUrl(
+						remote.stdout,
+						baseBranch,
+						feature.branch,
+					);
+					if (!compareUrl) {
+						vscode.window.showErrorMessage(
+							"Create PR requires a GitHub origin remote to open the configured base comparison.",
+						);
+						return;
+					}
+
+					// The installed GitHub PR extension accepts repoPath and
+					// compareBranch, but has no public baseBranch argument: its base
+					// comes from overrideDefaultBranch or GitHub's default branch.
+					// Open the explicit comparison instead of changing global or
+					// branch-specific Git configuration.
+					vscode.window.showInformationMessage(
+						`Branch "${feature.branch}" pushed. Opening GitHub comparison "${baseBranch}...${feature.branch}" — verify and submit the PR manually.`,
+					);
+					await vscode.env.openExternal(vscode.Uri.parse(compareUrl));
 				} catch (err) {
 					const msg =
 						err instanceof Error ? err.message : "Failed to push branch";
