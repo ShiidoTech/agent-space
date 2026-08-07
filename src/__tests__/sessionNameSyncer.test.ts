@@ -117,6 +117,14 @@ describe("SessionNameSyncer", () => {
 		});
 	}
 
+	function aiTitleEvent(title: string, sessionId = "test-session") {
+		return JSON.stringify({
+			type: "ai-title",
+			aiTitle: title,
+			sessionId,
+		});
+	}
+
 	function messageEvent(content: string) {
 		return JSON.stringify({
 			type: "human",
@@ -480,6 +488,52 @@ describe("SessionNameSyncer", () => {
 			expect(title).toBeNull();
 		});
 
+		it("uses the latest ai-title when no custom-title exists", () => {
+			const dir = path.join(projectsDir, "-test-dir");
+			fs.mkdirSync(dir, { recursive: true });
+			const filePath = path.join(dir, "ai-title.jsonl");
+			fs.writeFileSync(
+				filePath,
+				`${[aiTitleEvent("first"), messageEvent("work"), aiTitleEvent("latest")].join("\n")}\n`,
+			);
+
+			expect(claudeProvider.readTitle(filePath)).toBe("latest");
+		});
+
+		it("keeps custom-title ahead of automatic ai-title", () => {
+			const dir = path.join(projectsDir, "-test-dir");
+			fs.mkdirSync(dir, { recursive: true });
+			const filePath = path.join(dir, "custom-priority.jsonl");
+			fs.writeFileSync(
+				filePath,
+				`${[customTitleEvent("chosen"), aiTitleEvent("automatic")].join("\n")}\n`,
+			);
+
+			expect(claudeProvider.readTitle(filePath)).toBe("chosen");
+		});
+
+		it("uses an index summary only for the matching session id", () => {
+			const dir = path.join(projectsDir, "-test-dir");
+			fs.mkdirSync(dir, { recursive: true });
+			const sessionId = "indexed-session";
+			fs.writeFileSync(
+				path.join(dir, `${sessionId}.jsonl`),
+				`${messageEvent("hello")}\n`,
+			);
+			fs.writeFileSync(
+				path.join(dir, "sessions-index.json"),
+				JSON.stringify({
+					version: 1,
+					entries: [
+						{ sessionId, summary: "indexed summary" },
+						{ sessionId: "other", summary: "wrong summary" },
+					],
+				}),
+			);
+
+			expect(claudeProvider.readName(sessionId)).toBe("indexed summary");
+		});
+
 		it("returns null for empty file", () => {
 			const dir = path.join(projectsDir, "-test-dir");
 			fs.mkdirSync(dir, { recursive: true });
@@ -649,7 +703,7 @@ describe("SessionNameSyncer", () => {
 			syncer.dispose();
 		});
 
-		it("overwrites user-given names (unlike startup which preserves them)", () => {
+		it("preserves user-given names when focus sync discovers a title", () => {
 			const { projectManager, agentManager } = createTestProjectManager(
 				tmpDir,
 				[feature],
@@ -671,11 +725,31 @@ describe("SessionNameSyncer", () => {
 			// Now a title appears in the JSONL
 			appendToJsonl(sid(agent), customTitleEvent("jsonl-title", sid(agent)));
 
-			// syncAgentOnFocus should overwrite the user-given name
+			// Focus sync must not overwrite the user-given name.
 			syncer.syncAgentOnFocus(agent.id);
-			expect(agentManager.getAgents("f1")[0].name).toBe("jsonl-title");
-			expect(callback).toHaveBeenCalled();
+			expect(agentManager.getAgents("f1")[0].name).toBe("My Custom Name");
+			expect(callback).not.toHaveBeenCalled();
 
+			syncer.dispose();
+		});
+
+		it("updates a name previously assigned by the syncer", () => {
+			const { projectManager, agentManager } = createTestProjectManager(
+				tmpDir,
+				[feature],
+			);
+			const agent = agentManager.createAgent(feature);
+			writeJsonlFile(sid(agent), [aiTitleEvent("first title", sid(agent))]);
+
+			const syncer = makeSyncer();
+			syncer.start(projectManager);
+			syncer.syncAll();
+			expect(agentManager.getAgents("f1")[0].name).toBe("first title");
+
+			appendToJsonl(sid(agent), aiTitleEvent("updated title", sid(agent)));
+			syncer.syncAgentOnFocus(agent.id);
+
+			expect(agentManager.getAgents("f1")[0].name).toBe("updated title");
 			syncer.dispose();
 		});
 	});

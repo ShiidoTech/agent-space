@@ -123,6 +123,26 @@ describe("OpenCodeSessionProvider", () => {
 		const provider = new OpenCodeSessionProvider();
 		expect(provider.toolId).toBe("opencode");
 	});
+
+	it("reads a session title by its exact id", () => {
+		mockExecSync.mockReturnValue(
+			JSON.stringify([{ title: "Exact OpenCode title" }]),
+		);
+
+		const provider = new OpenCodeSessionProvider();
+		expect(provider.readName("ses_exact-1")).toBe("Exact OpenCode title");
+		expect(mockExecSync).toHaveBeenCalledWith(
+			"opencode db \"SELECT title FROM session WHERE id = 'ses_exact-1'\" --format json",
+			expect.objectContaining({ timeout: 5000 }),
+		);
+	});
+
+	it("returns null when a session has no title", () => {
+		mockExecSync.mockReturnValue(JSON.stringify([{ title: null }]));
+		expect(
+			new OpenCodeSessionProvider().readName("ses_without-title"),
+		).toBeNull();
+	});
 });
 
 describe("sessionIdsForDirectory", () => {
