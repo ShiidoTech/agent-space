@@ -1,39 +1,43 @@
 # Agent Space
 
-Run any terminal-based coding CLI per feature inside VS Code with isolated Git worktrees and persistent tmux-backed sessions.
+Organize your real coding agents — real CLIs, real terminals, real Git worktrees, and VS Code's native Git. Agent Space is a thin layer that keeps parallel work visible and durable. It does **not** replace your coding tools or orchestrate their intelligence: each agent keeps its own native terminal interface and its own session.
 
-Agent Space helps you manage parallel feature work without losing context. Create a feature, launch one or more coding agents, keep related services running, and come back later with the sidebar and home dashboard showing exactly where everything stands.
-
-It works with any coding CLI you can launch from a terminal. Built-in presets are included for `claude`, `codex`, `copilot`, and `opencode`, and you can register custom tools for anything else.
+> **Philosophy — a layer, not an orchestrator.** Agent Space deliberately stays out of the way of the tools it hosts. You keep using whatever you can run from a terminal — `claude`, `codex`, `opencode`, `aider`, or anything else. Agent Space gives every feature an isolated Git worktree, keeps each agent's terminal alive in tmux across restarts, resumes the session when the tool supports it, and shows you exactly where everything stands.
 
 ## What It Does
 
-- Creates a dedicated Git worktree for each feature branch
-- Runs multiple coding CLIs on the same feature in parallel
-- Keeps agent terminals alive in tmux across VS Code restarts
-- Shows feature status, agents, and services in a sidebar and home dashboard
-- Opens feature workspaces and pull request flows from inside VS Code
+- Dedicated Git worktree per feature branch
+- Multiple coding CLIs running in parallel on the same feature
+- Agent terminals kept alive in tmux across VS Code restarts, with session resume for supported tools
+- Sidebar + home dashboard: features, agents, services and status at a glance
+- Feature workspaces and PR handoff from inside VS Code
 
-Built-in presets: `claude`, `codex`, `copilot`, and `opencode`.
-Custom compatibility: any terminal-based CLI can be added with `agentSpace.codingTools`.
+It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`, `copilot`, `opencode`. Add any other tool with `agentSpace.codingTools`.
+
+## Philosophy
+
+- **Your agents, their own minds.** Agent Space does not wrap agents, inject prompts or abstract their interfaces. The CLI you launch in a worktree is the real CLI, in the real terminal, talking to the real model you configured.
+- **Real Git, native VS Code.** Feature isolation is real Git worktrees and branches. Merging, reviewing and raising pull requests stay in VS Code's native Git and GitHub experience.
+- **Nothing is hidden.** Everything Agent Space manages is visible — features, agents, services, terminals, status — in the sidebar and the home dashboard.
+- **Durable by design.** tmux keeps the live terminal alive across window reloads and full restarts. Supported tools can additionally resume their CLI session when a session identifier or a resume command is available.
 
 ## How It Works
 
 1. Add a Git repository as a project.
-2. Create a feature to provision a branch and worktree.
-3. Launch one or more coding CLIs for that feature.
-4. Run package scripts like dev servers or watchers, or open an interactive worktree terminal, alongside the agents.
-5. Resume work later from the Agent Space sidebar or home view, open the feature workspace when needed, then open a pull request when ready.
+2. Create a feature — provisions a branch and a worktree.
+3. Launch one or more coding CLIs in that feature's worktree.
+4. Run services (dev servers, watchers) or an interactive shell alongside the agents.
+5. Reopen and resume later, open the feature workspace when needed, then open a pull request when ready.
 
 ## Why It Is Useful
 
-When several agents work in the same repository, they can easily overwrite each other or lose terminal context. Agent Space keeps each feature isolated, makes active work visible, and lets long-running agent sessions survive editor restarts.
+When several agents work in the same repository they can overwrite each other or lose terminal context. Agent Space keeps each feature isolated, makes active work visible, and lets long-running agent sessions survive editor restarts — without taking control of the agents themselves.
 
 ## Requirements
 
 - **Git** for branch and worktree management
 - **tmux** for persistent agent sessions
-- **One coding CLI tool on PATH**: works out of the box with `claude`, `codex`, `copilot`, and `opencode`
+- **One coding CLI tool on PATH**: works out of the box with `claude`, `codex`, `copilot`, `opencode`
 - **Optional custom CLI tools**: add any other terminal-based tool with `agentSpace.codingTools`
 - **Windows**: use Git for Windows (Git Bash). Install tmux with `pacman -S tmux` inside Git Bash.
 
@@ -47,7 +51,7 @@ Optional:
 2. Open the **Agent Space** icon in the VS Code activity bar.
 3. Run `Agent Space: Add Project` and select any Git repository.
 4. On first start, choose the default coding CLI when prompted.
-5. Run `Agent Space: New Feature` to create a worktree and start the first agent with an available CLI.
+5. Run `Agent Space: New Feature` to create a worktree and start the first agent.
 6. Add more agents or start a service from the feature actions as needed.
 
 ## Core Features
@@ -58,19 +62,27 @@ Every feature gets its own Git branch and worktree, so active changes stay isola
 
 ### Multi-Agent Execution
 
-You can run several coding CLIs on the same feature simultaneously and mix built-in presets with custom CLI tools.
+Run several coding CLIs on the same feature simultaneously, mixing built-in presets with custom tools.
 
 ### Persistent Sessions
 
-Agent terminals live in tmux sessions, which means they can survive window reloads and full VS Code restarts.
+Agent terminals live in tmux, which preserves the live terminal across window reloads and full VS Code restarts. Reopening an agent can also resume the CLI's session — for a supported family (e.g. Claude, Codex, OpenCode) or when the tool defines a session identifier or a `resumeCommand`. A generic tool without its own resume protocol starts fresh.
 
 ### Sidebar and Home Dashboard
 
-Use the activity-bar sidebar for quick actions and the home view for a broader snapshot of active features, agents, services, and status.
+Use the activity-bar sidebar for quick actions and the home view for a broader snapshot of active features, agents, services and status.
 
 ### Managed Services
 
 Launch package scripts such as dev servers and watch tasks, or open an interactive shell, as managed terminals attached to a feature.
+
+### Project-Scoped Configuration
+
+Some repositories do not branch off `main`. A per-repository `.agentspace/config.json` lets a project declare the real **base branch**, the **branch kinds** offered at feature creation, and a dedicated **worktrees directory** — so Agent Space branches and creates worktrees where the project actually works, without touching your personal environment.
+
+### Custom Coding Tools
+
+Coding tools are plain records: `id`, `name`, `command`, plus optional `args`. This fork also supports `env`, `family`, `sessionsDir` and `resumeCommand`, and `"enabled": false` to hide a built-in. A custom entry merges over the matching built-in, keeping any field it does not specify; `env` values are merged by key, while list fields such as `args` are replaced rather than combined. A wrapped CLI (for example a variant of a supported tool that uses a separate config folder or profile) is declared the same way, and is resumed through its own executable when a session identifier or `resumeCommand` is available.
 
 ### Pull Request Handoff
 
@@ -103,14 +115,16 @@ All commands are available from the Command Palette.
 
 | Setting | Default | Description |
 |---|---|---|
-| `agentSpace.defaultTool` | unset | Preferred coding tool ID for new agents. Agent Space prompts for it on first start and stores the selection in user settings |
-| `agentSpace.codingTools` | `[]` | Register any custom terminal-based coding CLI with `id`, `name`, `command`, and optional `args` |
+| `agentSpace.defaultTool` | unset | Preferred coding tool ID for new agents. Agent Space prompts for it on first start |
+| `agentSpace.codingTools` | `[]` | Register a custom terminal-based coding CLI (`id`, `name`, `command`, optional `args`/`env`/`family`/`sessionsDir`/`resumeCommand`) |
 | `agentSpace.worktreeBasePath` | `".worktrees"` | Base directory for worktrees, relative to the project root |
 | `agentSpace.enablePerAgentIsolation` | `false` | Give each agent its own worktree instead of sharing one per feature |
 | `agentSpace.syncSessionNames` | `true` | Sync agent display names from supported CLI rename metadata |
 
+Projects can also override branching defaults per repository via `.agentspace/config.json`.
+
 ## GitHub
 
-- Source: [github.com/paql4711/agent-space](https://github.com/paql4711/agent-space)
-- Issues: [github.com/paql4711/agent-space/issues](https://github.com/paql4711/agent-space/issues)
+- Original source: [github.com/paql4711/agent-space](https://github.com/paql4711/agent-space)
+- This fork is maintained as [github.com/ShiidoTech/agent-space](https://github.com/ShiidoTech/agent-space), with generic improvements contributed back upstream
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
