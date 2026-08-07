@@ -8,10 +8,12 @@ import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { ClaudeSessionProvider } from "./agents/sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./agents/sessionProviders/codexSessionProvider";
 import { CodexSessionWatcher } from "./agents/sessionProviders/codexSessionWatcher";
+import { OpenCodeSessionProvider } from "./agents/sessionProviders/openCodeSessionProvider";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
+import { buildGitHubCompareUrl } from "./git/githubCompareUrl";
 import {
 	getGitViewHandoffAction,
 	openFeatureGitView,
@@ -300,10 +302,12 @@ export async function activate(
 				: [],
 		);
 	const codexProvider = new CodexSessionProvider();
+	const openCodeProvider = new OpenCodeSessionProvider();
 	const sessionNameSyncer = new SessionNameSyncer([
 		claudeProvider,
 		...extraClaudeProviders,
 		codexProvider,
+		openCodeProvider,
 	]);
 	sessionNameSyncer.onAgentRenamed((agentId, featureId) => {
 		projectManager.notifyChange();
@@ -342,6 +346,7 @@ export async function activate(
 	const config = vscode.workspace.getConfiguration("agentSpace");
 	if (config.get("syncSessionNames", config.get("autoNameAgents", true))) {
 		sessionNameSyncer.start(projectManager);
+		sessionNameSyncer.syncAll();
 	}
 	context.subscriptions.push({ dispose: () => sessionNameSyncer.dispose() });
 	context.subscriptions.push({ dispose: () => codexWatcher.dispose() });
@@ -875,13 +880,6 @@ export async function activate(
 				const feature = ctx.featureManager.getFeature(featureId);
 				if (!feature) return;
 
-				if (!prerequisites.isGhPrExtensionInstalled()) {
-					vscode.window.showErrorMessage(
-						'Install the "GitHub Pull Requests" extension to create PRs.',
-					);
-					return;
-				}
-
 				try {
 					// Target the project's configured base branch (e.g.
 					// v2_ia_first), never an implicit main.
@@ -893,29 +891,37 @@ export async function activate(
 							cancellable: false,
 						},
 						async () => {
-							// Anchor the upstream so push/PR flows default to the
-							// configured base instead of the repo default.
-							await execAsync(
-								`git config branch."${feature.branch}".remote origin`,
-								{ cwd: feature.worktreePath },
-							);
-							await execAsync(
-								`git config branch."${feature.branch}".merge refs/heads/${baseBranch}`,
-								{ cwd: feature.worktreePath },
-							);
-							await execAsync(`git push -u origin "${feature.branch}"`, {
+							// Push the feature from its worktree. Do not alter branch
+							// upstream metadata: it describes Git tracking, not PR base.
+							await execAsync(`git push origin "${feature.branch}"`, {
 								cwd: feature.worktreePath,
 							});
 						},
 					);
-					// The GH PR extension form is opened but the user keeps the
-					// final validation: they pick/confirm the base and submit.
-					vscode.window.showInformationMessage(
-						`Branch "${feature.branch}" pushed. Opening PR creation against "${baseBranch}" — verify the target before submitting.`,
+					const remote = await execAsync("git remote get-url origin", {
+						cwd: feature.worktreePath,
+					});
+					const compareUrl = buildGitHubCompareUrl(
+						remote.stdout,
+						baseBranch,
+						feature.branch,
 					);
-					// Opens the GH PR extension form — user may still cancel,
-					// so we intentionally don't mark the feature as "done" here.
-					await vscode.commands.executeCommand("pr.create");
+					if (!compareUrl) {
+						vscode.window.showErrorMessage(
+							"Create PR requires a GitHub origin remote to open the configured base comparison.",
+						);
+						return;
+					}
+
+					// The installed GitHub PR extension accepts repoPath and
+					// compareBranch, but has no public baseBranch argument: its base
+					// comes from overrideDefaultBranch or GitHub's default branch.
+					// Open the explicit comparison instead of changing global or
+					// branch-specific Git configuration.
+					vscode.window.showInformationMessage(
+						`Branch "${feature.branch}" pushed. Opening GitHub comparison "${baseBranch}...${feature.branch}" — verify and submit the PR manually.`,
+					);
+					await vscode.env.openExternal(vscode.Uri.parse(compareUrl));
 				} catch (err) {
 					const msg =
 						err instanceof Error ? err.message : "Failed to push branch";

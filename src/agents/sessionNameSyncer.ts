@@ -39,9 +39,13 @@ export class SessionNameSyncer {
 					if (!title) continue;
 
 					const truncated = this.truncateTitle(title);
+					const previous = this.knownTitles.get(agent.sessionId);
 					this.knownTitles.set(agent.sessionId, truncated);
 
-					if (this.isUnnamed(agent.name)) {
+					if (
+						agent.name !== truncated &&
+						this.shouldRename(agent.name, previous)
+					) {
 						ctx.agentManager.renameAgent(agent.id, feature.id, truncated);
 						this.onRenameCallback?.(agent.id, feature.id);
 					}
@@ -72,6 +76,7 @@ export class SessionNameSyncer {
 				if (previous === truncated) return;
 
 				this.knownTitles.set(agent.sessionId, truncated);
+				if (!this.shouldRename(agent.name, previous)) return;
 				ctx.agentManager.renameAgent(agent.id, feature.id, truncated);
 				this.onRenameCallback?.(agent.id, feature.id);
 				return;
@@ -108,6 +113,16 @@ export class SessionNameSyncer {
 
 	private isUnnamed(name: string): boolean {
 		return /^(New Agent|Agent \d+)/.test(name);
+	}
+
+	private shouldRename(
+		name: string,
+		previousTitle: string | undefined,
+	): boolean {
+		if (this.isUnnamed(name)) return true;
+		// A name equal to the last title observed for this session was assigned
+		// by the syncer during this process. A different name is user-owned.
+		return previousTitle === name;
 	}
 
 	private truncateTitle(title: string, max = MAX_TITLE_LENGTH): string {
