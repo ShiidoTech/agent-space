@@ -6,6 +6,12 @@ Organize your real coding agents — real CLIs, real terminals, real Git worktre
 >
 > **One level below the orchestrators.** Coding tools may orchestrate agents *inside* a session — Codex, OpenCode or an opencode workspace handle that themselves. Agent Space does not compete there. It operates one level below: it organizes the independent worktrees, terminals and sessions those tools run in.
 
+<p align="center">
+  <img src="docs/images/cockpit.png" alt="Agent Space cockpit: several parallel tracks in one view, each a real Git worktree with its own coding agents and persistent tmux sessions" width="85%"/>
+</p>
+
+*The cockpit: several parallel tracks visible in one place — each a real Git worktree, with its coding agents and tmux sessions kept alive in the background.*
+
 ## What It Does
 
 - Dedicated Git worktree per feature branch
@@ -36,6 +42,14 @@ It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`
 - **The problem.** Several agents in the same repository can overwrite each other or lose terminal context. Agent Space keeps each feature isolated in its own Git worktree, makes active work visible, and lets long-running agent sessions survive editor restarts.
 - **Why not just open terminals yourself?** A handful of terminals does not give you per-feature worktrees, durable tmux sessions that survive restarts, session resume, and a dashboard showing where everything stands — that bookkeeping is what Agent Space takes off your hands.
 - **Why use it when your coding CLI already has a multi-agent system?** Those systems organize what agents do *inside* one session. Agent Space works one level below: it organizes the persistent environments — worktrees, terminals, sessions — in which the human puts those tools to work, even several at once.
+
+## Your Coding Tools Stay Native
+
+Agent Space hosts your coding tools without wrapping them: each agent runs its own real CLI, in its own terminal, inside its own Git worktree. In the screenshot below OpenCode shows its true native interface — running live in a worktree and session managed by Agent Space — while other agents keep working independently beside it.
+
+<p align="center">
+  <img src="docs/images/agent-tab.png" alt="Agent Space feature tab: OpenCode running its native terminal interface inside a worktree and session managed by Agent Space, alongside other independent agents" width="85%"/>
+</p>
 
 ## Requirements
 
