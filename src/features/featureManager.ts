@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { TERMINAL_COLOR_KEYS } from "../constants/colors";
 import { checkWorktreeDeletionSafety } from "../git/worktreeSafety";
@@ -18,6 +19,20 @@ import { normalizeFeatureName } from "./featureName";
 export interface FeatureDeleteResult {
 	deleted: boolean;
 	reasons: string[];
+}
+
+export type FeatureLifecycleStatus =
+	| "valid"
+	| "missing_worktree"
+	| "detached_head"
+	| "branch_mismatch";
+
+export interface FeatureLifecycleDiagnostic {
+	featureId: string;
+	featurePath: string;
+	declaredBranch: string;
+	actualBranch?: string;
+	status: FeatureLifecycleStatus;
 }
 
 export class FeatureManager {
@@ -76,6 +91,48 @@ export class FeatureManager {
 		return (this.config.bootstrapCommands ?? [])
 			.map((command) => command.trim())
 			.filter(Boolean);
+	}
+
+	/**
+	 * Inspect persisted features against their current worktree state.
+	 * This is deliberately read-only: stale state is reported, never repaired
+	 * by guessing or resetting Git.
+	 */
+	inspectFeatureLifecycle(): FeatureLifecycleDiagnostic[] {
+		return this.features.map((feature) => {
+			if (!fs.existsSync(feature.worktreePath)) {
+				return {
+					featureId: feature.id,
+					featurePath: feature.worktreePath,
+					declaredBranch: feature.branch,
+					status: "missing_worktree",
+				};
+			}
+
+			try {
+				const actualBranch = String(
+					execSync("git symbolic-ref --quiet --short HEAD", {
+						cwd: feature.worktreePath,
+						encoding: "utf-8",
+						stdio: ["ignore", "pipe", "pipe"],
+					}),
+				).trim();
+				return {
+					featureId: feature.id,
+					featurePath: feature.worktreePath,
+					declaredBranch: feature.branch,
+					actualBranch: actualBranch || undefined,
+					status: actualBranch === feature.branch ? "valid" : "branch_mismatch",
+				};
+			} catch {
+				return {
+					featureId: feature.id,
+					featurePath: feature.worktreePath,
+					declaredBranch: feature.branch,
+					status: "detached_head",
+				};
+			}
+		});
 	}
 
 	setProjectConfig(config: ProjectConfig): void {
