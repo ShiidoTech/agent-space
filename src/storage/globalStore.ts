@@ -2,6 +2,47 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Project } from "../types";
 
+const LEGACY_EXTENSION_STORAGE_IDS = ["paql4711.agent-space"];
+
+/**
+ * When the fork moves to its own VS Code publisher, VS Code also moves the
+ * extension's global storage to a new directory. Preserve the existing Agent
+ * Space state by copying the legacy storage once, but never overwrite data
+ * already written by the new extension identity.
+ */
+export function migrateLegacyExtensionStorage(
+	baseDir: string,
+	legacyStorageIds = LEGACY_EXTENSION_STORAGE_IDS,
+): string | null {
+	if (directoryHasEntries(baseDir)) return null;
+
+	const storageRoot = path.dirname(baseDir);
+	for (const legacyStorageId of legacyStorageIds) {
+		const legacyDir = path.join(storageRoot, legacyStorageId);
+		if (!directoryHasEntries(legacyDir)) continue;
+
+		fs.mkdirSync(baseDir, { recursive: true });
+		for (const entry of fs.readdirSync(legacyDir)) {
+			fs.cpSync(path.join(legacyDir, entry), path.join(baseDir, entry), {
+				recursive: true,
+				errorOnExist: true,
+				force: false,
+			});
+		}
+		return legacyDir;
+	}
+
+	return null;
+}
+
+function directoryHasEntries(dir: string): boolean {
+	try {
+		return fs.readdirSync(dir).length > 0;
+	} catch {
+		return false;
+	}
+}
+
 export class GlobalStore {
 	private readonly baseDir: string;
 	private readonly projectsPath: string;
@@ -9,6 +50,7 @@ export class GlobalStore {
 
 	constructor(baseDir: string) {
 		this.baseDir = baseDir;
+		migrateLegacyExtensionStorage(baseDir);
 		this.projectsPath = path.join(baseDir, "projects.json");
 		this.preferencesPath = path.join(baseDir, "preferences.json");
 	}
