@@ -94,6 +94,22 @@ describe("FeatureManager", () => {
 		});
 	});
 
+	describe("bootstrap commands", () => {
+		it("returns trimmed, non-empty project commands", () => {
+			const configured = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ bootstrapCommands: ["  bun install  ", "", "pnpm test"] },
+			);
+
+			expect(configured.getBootstrapCommands()).toEqual([
+				"bun install",
+				"pnpm test",
+			]);
+		});
+	});
+
 	describe("deleteFeature", () => {
 		it("removes feature and worktree", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));

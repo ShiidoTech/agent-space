@@ -5,6 +5,7 @@ import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
+import { runBootstrapCommands } from "./features/bootstrapRunner";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
 import {
@@ -887,6 +888,52 @@ export async function activate(
 							vscode.Uri.file(worktreePath),
 							{ forceNewWindow: true },
 						),
+				);
+			},
+		),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.bootstrapFeature",
+			async (featureIdArg?: string) => {
+				let featureId = featureIdArg ?? activeFeatureId;
+				if (!featureId) {
+					const features = projectManager.getAllContexts().flatMap((ctx) =>
+						ctx.featureManager.getFeatures().map((feature) => ({
+							label: `${ctx.project.name} / ${feature.name}`,
+							description: feature.worktreePath,
+							featureId: feature.id,
+						})),
+					);
+					const picked = await vscode.window.showQuickPick(features, {
+						placeHolder: "Select a feature worktree to bootstrap",
+					});
+					if (!picked) return;
+					featureId = picked.featureId;
+				}
+
+				const resolved = projectManager.resolveFeature(featureId);
+				if (!resolved) return;
+				const commands = resolved.ctx.featureManager.getBootstrapCommands();
+				if (commands.length === 0) {
+					vscode.window.showInformationMessage(
+						"No bootstrapCommands are configured for this project.",
+					);
+					return;
+				}
+
+				const output = vscode.window.createOutputChannel(
+					`Agent Space Bootstrap: ${resolved.feature.name}`,
+				);
+				output.show(true);
+				output.appendLine(
+					`Bootstrap worktree: ${resolved.feature.worktreePath}`,
+				);
+				await runBootstrapCommands(
+					commands,
+					resolved.feature.worktreePath,
+					output,
 				);
 			},
 		),

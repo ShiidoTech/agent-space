@@ -110,6 +110,12 @@
 				"icon": "$(source-control)"
 			},
 			{
+				"command": "agentSpace.bootstrapFeature",
+				"title": "Bootstrap Feature Worktree",
+				"category": "Agent Space",
+				"icon": "$(sync)"
+			},
+			{
 				"command": "agentSpace.addProject",
 				"title": "Add Project",
 				"category": "Agent Space"

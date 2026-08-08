@@ -300,6 +300,9 @@ export class HomePanel {
 			case "addService":
 				run("agentSpace.addService", message.featureId);
 				break;
+			case "bootstrapFeature":
+				run("agentSpace.bootstrapFeature", message.featureId);
+				break;
 			case "stopService":
 				this.handleStopService(
 					message.featureId as string,
@@ -898,7 +901,10 @@ export class HomePanel {
 			${this.renderServicesSection(services, feature)}
 			${this.renderFeatureTmuxSection(feature, agents, services)}
 			${this.renderGitStatsSection(feature)}
-			${this.renderQuickActions(feature)}
+			${this.renderQuickActions(
+				feature,
+				ctx.featureManager.getBootstrapCommands().length > 0,
+			)}
 			${this.renderFeatureActions(feature)}
 		</div>`;
 
@@ -1437,7 +1443,7 @@ export class HomePanel {
 		</div>`;
 	}
 
-	private renderQuickActions(feature: Feature): string {
+	private renderQuickActions(feature: Feature, hasBootstrap = false): string {
 		return `
 		<div>
 			<div class="section-label">Quick Actions</div>
@@ -1448,6 +1454,7 @@ export class HomePanel {
 				<button class="quick-action-btn" onclick="quickAction('addService', '${feature.id}')">
 					${ICON_SERVER} Add Service
 				</button>
+				${hasBootstrap ? `<button class="quick-action-btn" onclick="quickAction('bootstrapFeature', '${feature.id}')">Bootstrap Worktree</button>` : ""}
 				<button class="quick-action-btn" onclick="quickAction('createPR', '${feature.id}')">
 					${ICON_PR} Create PR
 				</button>
