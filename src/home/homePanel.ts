@@ -37,6 +37,7 @@ export class HomePanel {
 	private readonly globalStore: GlobalStore;
 	private terminalController?: TerminalController;
 	private currentFeatureId: string | null = null;
+	private currentProjectId: string | null = null;
 	private refreshTimer?: ReturnType<typeof setInterval>;
 	private onViewStateChangeCallback?:
 		| ((state: { active: boolean; visible: boolean }) => void)
@@ -138,6 +139,7 @@ export class HomePanel {
 
 	public showWelcome(): void {
 		this.currentFeatureId = null;
+		this.currentProjectId = null;
 		this.panel.title = "Agent Space";
 		this.stopGitPolling();
 		this.panel.webview.html = this.getWelcomeHtml();
@@ -145,6 +147,7 @@ export class HomePanel {
 
 	public showFeature(featureId: string): void {
 		this.currentFeatureId = featureId;
+		this.currentProjectId = null;
 		this.globalStore.setPreference("lastActiveFeatureId", featureId);
 		const resolved = this.projectManager.resolveFeature(featureId);
 		this.panel.title = resolved
@@ -155,10 +158,23 @@ export class HomePanel {
 		this.panel.webview.html = this.getFeatureHtml(featureId);
 	}
 
+	public showProject(projectId: string): void {
+		const context = this.projectManager.getContext(projectId);
+		if (!context) return;
+		this.currentFeatureId = null;
+		this.currentProjectId = projectId;
+		this.panel.title = `Agent Space: ${context.project.name}`;
+		this.stopGitPolling();
+		this.panel.reveal(vscode.ViewColumn.One, true);
+		this.panel.webview.html = this.getProjectHtml(projectId);
+	}
+
 	public refresh(): void {
 		try {
 			if (this.currentFeatureId) {
 				this.panel.webview.html = this.getFeatureHtml(this.currentFeatureId);
+			} else if (this.currentProjectId) {
+				this.panel.webview.html = this.getProjectHtml(this.currentProjectId);
 			} else {
 				this.panel.webview.html = this.getWelcomeHtml();
 			}
@@ -223,6 +239,9 @@ export class HomePanel {
 				break;
 			case "showFeature":
 				run("agentSpace.openWorkspace", message.featureId as string);
+				break;
+			case "showProject":
+				run("agentSpace.openProject", message.projectId as string);
 				break;
 			// Agent actions
 			case "addAgent":
@@ -884,6 +903,79 @@ export class HomePanel {
 .agent-status-dot.attention-failed { background: var(--vscode-errorForeground); }
 .agent-status-dot.attention-idle, .agent-status-dot.attention-unknown, .agent-status-dot.attention-done { background: var(--vscode-disabledForeground); }
 </style>
+</head>
+<body>
+	${body}
+	<script src="${jsUri}"></script>
+</body>
+</html>`;
+	}
+
+	private getProjectHtml(projectId: string): string {
+		const context = this.projectManager.getContext(projectId);
+		if (!context) return this.emptyHtml("Project not found");
+
+		const cssUri = this.panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.css"),
+		);
+		const jsUri = this.panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.js"),
+		);
+		const explicitBaseBranch = context.config.baseBranch?.trim();
+		const effectiveBaseBranch = context.featureManager.getBaseBranchName();
+		const branchKinds = context.featureManager.getBranchKinds();
+		const defaultBranchKind = context.featureManager.getDefaultBranchKind();
+		const features = context.featureManager.getFeatures();
+		const featureRows = features.length
+			? features
+					.map(
+						(feature) => `
+						<div class="project-feature-row">
+							<div>
+								<strong>${this.escapeHtml(feature.name)}</strong>
+								<div class="project-setting-source">${this.escapeHtml(feature.branch)}</div>
+							</div>
+							<button class="quick-action-btn subtle" onclick="resumeFeature('${feature.id}')">Open</button>
+						</div>`,
+					)
+					.join("")
+			: '<div class="activity-empty">No features yet.</div>';
+
+		const body = `
+		<div class="workspace-header">
+			<button class="home-back-btn" onclick="goHome()" title="Back to Agent Space">&larr;</button>
+			<div class="header-info">
+				<div class="header-title">${this.escapeHtml(context.project.name)}</div>
+				<div class="header-branch">${this.escapeHtml(context.project.repoPath)}</div>
+			</div>
+		</div>
+		<div class="workspace-content project-page">
+			<div class="project-page-nav">
+				<button class="quick-action-btn primary">Overview</button>
+				<button class="quick-action-btn" onclick="document.getElementById('project-settings').scrollIntoView({ behavior: 'smooth' })">Settings</button>
+			</div>
+			<div>
+				<div class="section-label">Features</div>
+				<div class="project-feature-list">${featureRows}</div>
+				<button class="quick-action-btn primary project-new-feature" onclick="newFeature('${projectId}')">New Feature</button>
+			</div>
+			<div id="project-settings" class="project-settings-card">
+				<div class="section-label">Project Settings</div>
+				<div class="project-settings-grid">
+					<div><span class="project-setting-label">Base branch</span><strong>${this.escapeHtml(effectiveBaseBranch)}</strong><span class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</span></div>
+					<div><span class="project-setting-label">Branch kinds</span><span>${this.escapeHtml(branchKinds.join(", ") || "Default")}</span>${defaultBranchKind ? `<span class="project-setting-source">Default: ${this.escapeHtml(defaultBranchKind)}</span>` : ""}</div>
+					<div><span class="project-setting-label">Worktrees</span><span class="project-worktree-cell">${this.escapeHtml(context.featureManager.getWorktreeBase())}</span></div>
+				</div>
+				<button class="quick-action-btn" onclick="editProjectBaseBranch('${projectId}')">Edit base branch</button>
+			</div>
+		</div>`;
+
+		return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${cssUri}">
 </head>
 <body>
 	${body}

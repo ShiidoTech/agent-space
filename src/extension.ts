@@ -15,6 +15,7 @@ import {
 } from "./git/gitViewHandoff";
 import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
+import { HomeSidebarProvider } from "./home/homeSidebarProvider";
 import { PrerequisiteChecker } from "./prerequisites";
 import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
@@ -169,6 +170,16 @@ export async function activate(
 		),
 	);
 	context.subscriptions.push({ dispose: () => sidebarProvider.stopPolling() });
+
+	const homeSidebarProvider = new HomeSidebarProvider(() => {
+		void showAgentSpace();
+	}, context.extensionUri);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(
+			HomeSidebarProvider.viewType,
+			homeSidebarProvider,
+		),
+	);
 
 	const ensureHomePanel = () => {
 		const panel = HomePanel.createOrShow(
@@ -326,6 +337,7 @@ export async function activate(
 
 	projectManager.onChange(() => {
 		sidebarProvider.refresh();
+		homeSidebarProvider.refresh();
 		const home = HomePanel.getInstance();
 		if (home) home.refresh();
 	});
@@ -335,6 +347,27 @@ export async function activate(
 		vscode.commands.registerCommand("agentSpace.openHome", async () => {
 			await showAgentSpace();
 		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.openProject",
+			async (projectId?: string) => {
+				if (!projectId) return;
+				const panel = ensureHomePanel();
+				panel.showProject(projectId);
+				await workspaceIsolation.enter();
+			},
+		),
+		vscode.commands.registerCommand(
+			"agentSpace.openProjectSettings",
+			async (projectId?: string) => {
+				if (!projectId) return;
+				const panel = ensureHomePanel();
+				panel.showProject(projectId);
+				await workspaceIsolation.enter();
+			},
+		),
 	);
 
 	// Command: New Feature
@@ -941,7 +974,49 @@ export async function activate(
 			}
 
 			try {
-				projectManager.addProject(repoPath);
+				const project = projectManager.addProject(repoPath);
+				const projectContext = projectManager.getContext(project.id);
+				if (!projectContext?.config.agents) {
+					const availableTools = toolRegistry.getAvailableTools();
+					if (availableTools.length > 0) {
+						const selectedTools = await vscode.window.showQuickPick(
+							availableTools.map((tool) => ({
+								label: tool.name,
+								description: tool.command,
+								picked: true,
+								toolId: tool.id,
+							})),
+							{
+								canPickMany: true,
+								placeHolder: "Select coding tools exposed by this project",
+								title: `Configure agents for ${project.name}`,
+							},
+						);
+
+						if (selectedTools && selectedTools.length > 0) {
+							const defaultTool = await vscode.window.showQuickPick(
+								selectedTools.map((tool) => ({
+									label: tool.label,
+									description: tool.description,
+									toolId: tool.toolId,
+								})),
+								{
+									placeHolder: "Select the default coding tool",
+									title: `Default agent for ${project.name}`,
+								},
+							);
+
+							if (defaultTool) {
+								projectManager.updateProjectConfig(project.id, {
+									agents: {
+										enabled: selectedTools.map((tool) => tool.toolId),
+										default: defaultTool.toolId,
+									},
+								});
+							}
+						}
+					}
+				}
 			} catch (err) {
 				const msg =
 					err instanceof Error ? err.message : "Failed to add project";
