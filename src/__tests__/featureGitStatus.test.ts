@@ -27,109 +27,81 @@ describe("computeGitStatus", () => {
 	});
 
 	it('returns "modified" when worktree has uncommitted changes', () => {
-		// git status --porcelain (first check now)
 		mockExecSync.mockReturnValueOnce(" M src/index.ts\n");
-
 		expect(computeGitStatus(baseInput)).toBe("modified");
-		// Should stop after the first check
 		expect(mockExecSync).toHaveBeenCalledTimes(1);
 	});
 
-	it("modified takes priority over merged", () => {
-		// Even if feature is ancestor of base, uncommitted changes win
+	it("modified takes priority over other states", () => {
 		mockExecSync.mockReturnValueOnce(" M src/index.ts\n");
-
-		expect(computeGitStatus(baseInput)).toBe("modified");
-		// Should not even check rev-parse
-		expect(mockExecSync).toHaveBeenCalledTimes(1);
-	});
-
-	it("modified takes priority over ahead", () => {
-		mockExecSync.mockReturnValueOnce(" M src/index.ts\n");
-
 		expect(computeGitStatus(baseInput)).toBe("modified");
 		expect(mockExecSync).toHaveBeenCalledTimes(1);
 	});
 
 	it('returns "merged" when an advanced feature is ancestor of base', () => {
 		mockExecSync
-			// git status --porcelain (clean)
 			.mockReturnValueOnce("")
-			// rev-parse feature
 			.mockReturnValueOnce("aaa111\n")
-			// rev-parse base
 			.mockReturnValueOnce("bbb222\n")
-			// merge-base --is-ancestor succeeds (no throw)
-			.mockReturnValueOnce("")
-			// reflog proves the feature moved from its creation point
-			.mockReturnValueOnce("aaa111\n000000\n");
+			.mockReturnValueOnce("");
 
-		expect(computeGitStatus(baseInput)).toBe("merged");
+		expect(computeGitStatus({ ...baseInput, createdFromSha: "000000" })).toBe(
+			"merged",
+		);
 	});
 
 	it('returns "new" when an untouched feature only became behind base', () => {
 		mockExecSync
-			// git status --porcelain (clean)
 			.mockReturnValueOnce("")
-			// feature still points at its creation commit
 			.mockReturnValueOnce("aaa111\n")
-			// base advanced after feature creation
 			.mockReturnValueOnce("bbb222\n")
-			// the untouched feature is therefore an ancestor of base
 			.mockReturnValueOnce("")
-			// one reflog SHA = branch never moved since creation
-			.mockReturnValueOnce("aaa111\n")
-			// no feature commits beyond base
 			.mockReturnValueOnce("0\n");
 
-		expect(computeGitStatus(baseInput)).toBe("new");
-		expect(mockExecSync).toHaveBeenCalledWith(
-			'git reflog show --format=%H "feat/auth"',
-			expect.objectContaining({ cwd: baseInput.repoRoot }),
+		expect(computeGitStatus({ ...baseInput, createdFromSha: "aaa111" })).toBe(
+			"new",
 		);
+	});
+
+	it("keeps the old merged behavior when reflog history is incomplete", () => {
+		mockExecSync
+			.mockReturnValueOnce("")
+			.mockReturnValueOnce("aaa111\n")
+			.mockReturnValueOnce("bbb222\n")
+			.mockReturnValueOnce("")
+			.mockReturnValueOnce("bbb222\n")
+			.mockReturnValueOnce("0\n");
+
+		expect(computeGitStatus(baseInput)).toBe("merged");
 	});
 
 	it('returns "ahead" when feature has commits beyond base', () => {
 		mockExecSync
-			// git status --porcelain (clean)
 			.mockReturnValueOnce("")
-			// merged check: same SHA → skip
 			.mockReturnValueOnce("aaa111\n")
 			.mockReturnValueOnce("aaa111\n")
-			// rev-list --count
 			.mockReturnValueOnce("3\n");
-
 		expect(computeGitStatus(baseInput)).toBe("ahead");
 	});
 
-	it('returns "ahead" when merge-base throws (not merged) but has commits', () => {
+	it('returns "ahead" when merge-base throws but feature has commits', () => {
 		mockExecSync
-			// git status --porcelain (clean)
 			.mockReturnValueOnce("")
-			// rev-parse feature
 			.mockReturnValueOnce("aaa111\n")
-			// rev-parse base
 			.mockReturnValueOnce("bbb222\n")
-			// merge-base --is-ancestor throws (not ancestor)
 			.mockImplementationOnce(() => {
 				throw new Error("exit code 1");
 			})
-			// rev-list --count
 			.mockReturnValueOnce("5\n");
-
 		expect(computeGitStatus(baseInput)).toBe("ahead");
 	});
 
 	it('returns "new" when no changes at all', () => {
 		mockExecSync
-			// git status --porcelain (clean)
 			.mockReturnValueOnce("")
-			// Same SHA
 			.mockReturnValueOnce("aaa111\n")
 			.mockReturnValueOnce("aaa111\n")
-			// rev-list --count = 0
 			.mockReturnValueOnce("0\n");
-
 		expect(computeGitStatus(baseInput)).toBe("new");
 	});
 
@@ -137,16 +109,12 @@ describe("computeGitStatus", () => {
 		mockExecSync.mockImplementation(() => {
 			throw new Error("git not found");
 		});
-
 		expect(computeGitStatus(baseInput)).toBe("new");
 	});
 
-	it("runs git status --porcelain in worktreePath, not repoRoot", () => {
+	it("runs git status in worktreePath", () => {
 		mockExecSync.mockReturnValueOnce(" M file.ts\n");
-
 		computeGitStatus(baseInput);
-
-		// First call should use worktreePath as cwd
 		expect(mockExecSync).toHaveBeenNthCalledWith(
 			1,
 			"git status --porcelain",
@@ -156,26 +124,17 @@ describe("computeGitStatus", () => {
 
 	it("returns cached result on second call within TTL", () => {
 		mockExecSync.mockReturnValueOnce(" M file.ts\n");
-
-		const first = computeGitStatus(baseInput);
-		const second = computeGitStatus(baseInput);
-
-		expect(first).toBe("modified");
-		expect(second).toBe("modified");
-		// git should only have been called once
+		expect(computeGitStatus(baseInput)).toBe("modified");
+		expect(computeGitStatus(baseInput)).toBe("modified");
 		expect(mockExecSync).toHaveBeenCalledTimes(1);
 	});
 
-	it("invalidateGitStatusCache clears cache for a specific branch", () => {
+	it("invalidates cache for a specific branch", () => {
 		mockExecSync.mockReturnValueOnce(" M file.ts\n");
 		computeGitStatus(baseInput);
-		expect(mockExecSync).toHaveBeenCalledTimes(1);
-
 		invalidateGitStatusCache(baseInput.featureBranch);
-
 		mockExecSync.mockReturnValueOnce(" M file.ts\n");
 		computeGitStatus(baseInput);
-		// Should have called git again after invalidation
 		expect(mockExecSync).toHaveBeenCalledTimes(2);
 	});
 });

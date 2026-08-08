@@ -26,6 +26,8 @@ export interface Feature {
 	color: string;
 	isolation: IsolationMode;
 	createdAt: string;
+	/** Commit the feature branch was created from, when known. */
+	createdFromSha?: string;
 }
 
 /**

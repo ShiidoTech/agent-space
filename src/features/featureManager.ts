@@ -182,6 +182,13 @@ export class FeatureManager {
 			`${kind}-${normalizedName}`,
 		);
 		const baseBranch = this.getBaseBranch();
+		const createdFromSha = String(
+			execSync(`git rev-parse "${baseBranch}"`, {
+				cwd: this.repoRoot,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "pipe"],
+			}),
+		).trim();
 
 		execSync(
 			`git worktree add "${worktreePath}" -b "${branch}" "${baseBranch}"`,
@@ -201,6 +208,7 @@ export class FeatureManager {
 			color: this.pickColor(displayName),
 			isolation,
 			createdAt: new Date().toISOString(),
+			createdFromSha,
 		};
 
 		this.features.push(feature);
@@ -291,6 +299,9 @@ export class FeatureManager {
 			baseBranch: this.getBaseBranch(),
 			worktreePath: feature.worktreePath,
 			repoRoot: this.repoRoot,
+			...(feature.createdFromSha
+				? { createdFromSha: feature.createdFromSha }
+				: {}),
 		});
 	}
 
@@ -301,6 +312,9 @@ export class FeatureManager {
 			baseBranch: this.getBaseBranch(),
 			worktreePath: feature.worktreePath,
 			repoRoot: this.repoRoot,
+			...(feature.createdFromSha
+				? { createdFromSha: feature.createdFromSha }
+				: {}),
 		});
 	}
 
