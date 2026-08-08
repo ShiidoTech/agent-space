@@ -1,4 +1,7 @@
-import type { ProjectContext, ProjectManager } from "../projects/projectManager";
+import type {
+	ProjectContext,
+	ProjectManager,
+} from "../projects/projectManager";
 import type { Agent } from "../types";
 import type { SessionRenameAdapter } from "./sessionProviders/types";
 
@@ -34,7 +37,10 @@ export class SessionNameSyncer {
 		// only still-unnamed agents so a long-running active terminal does not
 		// require a focus change, while avoiding repeated scans of user-owned
 		// or already-synced sessions.
-		this.syncTimer = setInterval(() => this.syncUnnamedAgents(), pollIntervalMs);
+		this.syncTimer = setInterval(
+			() => this.syncUnnamedAgents(),
+			pollIntervalMs,
+		);
 		this.syncTimer.unref?.();
 	}
 
@@ -103,7 +109,11 @@ export class SessionNameSyncer {
 		}
 	}
 
-	private syncAgent(ctx: ProjectContext, featureId: string, agent: Agent): void {
+	private syncAgent(
+		ctx: ProjectContext,
+		featureId: string,
+		agent: Agent,
+	): void {
 		const adapter = this.getAdapter(agent.toolId);
 		if (!adapter) return;
 		if (agent.status === "done") return;
@@ -116,10 +126,7 @@ export class SessionNameSyncer {
 		const previous = this.knownTitles.get(agent.sessionId);
 		this.knownTitles.set(agent.sessionId, truncated);
 
-		if (
-			agent.name !== truncated &&
-			this.shouldRename(agent.name, previous)
-		) {
+		if (agent.name !== truncated && this.shouldRename(agent.name, previous)) {
 			ctx.agentManager.renameAgent(agent.id, featureId, truncated);
 			this.onRenameCallback?.(agent.id, featureId);
 		}
@@ -130,7 +137,10 @@ export class SessionNameSyncer {
 		// Name synchronization only needs stable feature ids. Read the persisted
 		// feature list directly so the 15s retry loop never triggers Git branch
 		// reconciliation or any other worktree side effect.
-		return [baseFeatureId, ...ctx.store.loadFeatures().map((feature) => feature.id)];
+		return [
+			baseFeatureId,
+			...ctx.store.loadFeatures().map((feature) => feature.id),
+		];
 	}
 
 	private stopPolling(): void {

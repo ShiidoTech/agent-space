@@ -122,7 +122,9 @@ describe("live session-name synchronization", () => {
 
 		// Extension callers historically append /projects. If a user setting
 		// already points there, the provider receives projects/projects.
-		const provider = new ClaudeSessionProvider(path.join(projectsDir, "projects"));
+		const provider = new ClaudeSessionProvider(
+			path.join(projectsDir, "projects"),
+		);
 		expect(provider.readName(sessionId)).toBe("Direct projects path");
 	});
 
