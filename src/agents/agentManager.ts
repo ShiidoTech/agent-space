@@ -7,6 +7,7 @@ import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
 import type { Agent, AgentStatus, Feature } from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
+import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
 import { CodingToolRegistry } from "./codingToolRegistry";
 import type { TmuxIntegration } from "./tmux";
 
@@ -14,6 +15,7 @@ export class AgentManager {
 	private agentsByFeature = new Map<string, Agent[]>();
 	private cachedDefaultBranch: string | undefined;
 	private invalidateTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private readonly attentionResolver: AgentAttentionResolver;
 
 	constructor(
 		private readonly store: Store,
@@ -22,7 +24,9 @@ export class AgentManager {
 		private readonly tmux: TmuxIntegration,
 		private readonly config: ProjectConfig = {},
 		private readonly toolRegistry: CodingToolRegistry = new CodingToolRegistry(),
-	) {}
+	) {
+		this.attentionResolver = new AgentAttentionResolver(tmux, toolRegistry);
+	}
 
 	invalidateFeature(featureId: string): void {
 		// Debounce: batch rapid invalidation calls (e.g. file watcher events)
@@ -60,11 +64,14 @@ export class AgentManager {
 	}
 
 	getAgents(featureId: string): Agent[] {
-		return [...this.loadAgents(featureId)];
+		return this.loadAgents(featureId).map((agent) =>
+			this.withAttentionStatus(agent),
+		);
 	}
 
 	getAgent(featureId: string, agentId: string): Agent | undefined {
-		return this.loadAgents(featureId).find((a) => a.id === agentId);
+		const agent = this.loadAgents(featureId).find((a) => a.id === agentId);
+		return agent ? this.withAttentionStatus(agent) : undefined;
 	}
 
 	createAgent(feature: Feature, toolId?: string): Agent {
@@ -261,6 +268,15 @@ export class AgentManager {
 		}
 		this.saveAgents(featureId, []);
 		this.store.deleteFeatureData(featureId);
+	}
+
+	private withAttentionStatus(agent: Agent): Agent {
+		const attention = this.attentionResolver.resolve(agent);
+		return {
+			...agent,
+			attentionStatus: attention.status,
+			attentionReason: attention.reason,
+		};
 	}
 
 	private loadAgents(featureId: string): Agent[] {

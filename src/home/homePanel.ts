@@ -6,7 +6,24 @@ import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_GIT } from "../constants/icons";
 import type { ProjectManager } from "../projects/projectManager";
 import type { GlobalStore } from "../storage/globalStore";
-import type { Agent, Feature, Service } from "../types";
+import type { Agent, AgentAttentionStatus, Feature, Service } from "../types";
+
+function attentionStatusLabel(status: AgentAttentionStatus): string {
+	switch (status) {
+		case "working":
+			return "Working";
+		case "waiting_for_user":
+			return "Waiting for you";
+		case "idle":
+			return "Idle";
+		case "failed":
+			return "Failed";
+		case "done":
+			return "Done";
+		case "unknown":
+			return "Unknown";
+	}
+}
 
 export class HomePanel {
 	public static readonly viewType = "agentSpace.home";
@@ -498,11 +515,21 @@ export class HomePanel {
 		}
 	}
 
-	// -- Git stats ------------------------------------------------
+	// -- Git stats + attention ------------------------------------
 	private async sendGitStatsAsync(): Promise<void> {
 		if (!this.currentFeatureId) return;
 		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
 		if (!resolved) return;
+
+		const agents = resolved.ctx.agentManager.getAgents(this.currentFeatureId);
+		this.panel.webview.postMessage({
+			type: "agentAttentionUpdate",
+			agents: agents.map((agent) => ({
+				id: agent.id,
+				status: agent.attentionStatus ?? "unknown",
+				reason: agent.attentionReason ?? "No current attention evidence",
+			})),
+		});
 
 		const stats = await this.getGitDiffStatsAsync(resolved.feature);
 		if (!stats) return;
@@ -836,6 +863,17 @@ export class HomePanel {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${cssUri}">
+<style>
+.agent-attention-badge { white-space: nowrap; }
+.agent-attention-badge.attention-working { color: var(--vscode-testing-iconPassed); }
+.agent-attention-badge.attention-waiting_for_user { color: var(--vscode-notificationsWarningIcon-foreground); background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent); }
+.agent-attention-badge.attention-failed { color: var(--vscode-errorForeground); }
+.agent-attention-badge.attention-idle, .agent-attention-badge.attention-unknown { color: var(--vscode-descriptionForeground); }
+.agent-status-dot.attention-working { background: var(--vscode-testing-iconPassed); animation: pulse-green 2s ease-in-out infinite; }
+.agent-status-dot.attention-waiting_for_user { background: var(--vscode-notificationsWarningIcon-foreground); box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 18%, transparent); }
+.agent-status-dot.attention-failed { background: var(--vscode-errorForeground); }
+.agent-status-dot.attention-idle, .agent-status-dot.attention-unknown, .agent-status-dot.attention-done { background: var(--vscode-disabledForeground); }
+</style>
 </head>
 <body>
 	${body}
@@ -933,21 +971,18 @@ export class HomePanel {
 		const idx = allAgents.indexOf(agent);
 		const color = TERMINAL_COLOR_HEX[idx % TERMINAL_COLOR_HEX.length];
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
-		const displayStatus = this.toolRegistry.resolveAttention(
-			tool,
-			agent.sessionId,
-		).status;
 		const defaultToolId = this.toolRegistry.getDefaultToolId();
 		const toolBadge =
 			tool.id !== defaultToolId
 				? `<span class="agent-tool-badge">${this.escapeHtml(tool.name)}</span>`
 				: "";
+		const attention = agent.attentionStatus ?? "unknown";
+		const attentionReason =
+			agent.attentionReason ?? "No current attention evidence";
+		const attentionBadge = `<span id="agent-attention-badge-${agent.id}" class="agent-tool-badge agent-attention-badge attention-${attention}" title="${this.escapeHtml(attentionReason)}">${attentionStatusLabel(attention)}</span>`;
 		const isDone = agent.status === "done";
 		const isErrored = agent.status === "errored";
 		const nameClass = isDone ? "agent-panel-name done" : "agent-panel-name";
-		const errorBadge = isErrored
-			? `<span class="agent-tool-badge agent-error-badge" title="${this.escapeHtml(agent.lastError ?? "Agent failed unexpectedly")}">Failed</span>`
-			: "";
 		const emptyState = isDone
 			? "Agent finished &mdash; no live activity"
 			: isErrored
@@ -970,10 +1005,10 @@ export class HomePanel {
 		return `
 		<div class="agent-panel ${isErrored ? "errored" : ""}" style="border-left: 2px solid ${color}">
 			<div class="agent-panel-header" id="agent-header-${agent.id}" onclick="toggleAgent('${agent.id}')">
-				<div class="agent-status-dot ${displayStatus}"></div>
+				<div id="agent-attention-dot-${agent.id}" class="agent-status-dot attention-${attention}"></div>
 				<span class="${nameClass}" title="${this.escapeHtml(agent.name)}">${this.escapeHtml(agent.name)}</span>
 				${toolBadge}
-				${errorBadge}
+				${attentionBadge}
 				<div class="agent-panel-actions">
 					${actionButtons}
 				</div>
