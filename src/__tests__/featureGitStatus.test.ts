@@ -51,7 +51,7 @@ describe("computeGitStatus", () => {
 		expect(mockExecSync).toHaveBeenCalledTimes(1);
 	});
 
-	it('returns "merged" when feature is ancestor of base at different commit', () => {
+	it('returns "merged" when an advanced feature is ancestor of base', () => {
 		mockExecSync
 			// git status --porcelain (clean)
 			.mockReturnValueOnce("")
@@ -60,9 +60,33 @@ describe("computeGitStatus", () => {
 			// rev-parse base
 			.mockReturnValueOnce("bbb222\n")
 			// merge-base --is-ancestor succeeds (no throw)
-			.mockReturnValueOnce("");
+			.mockReturnValueOnce("")
+			// reflog proves the feature moved from its creation point
+			.mockReturnValueOnce("000000\naaa111\n");
 
 		expect(computeGitStatus(baseInput)).toBe("merged");
+	});
+
+	it('returns "new" when an untouched feature only became behind base', () => {
+		mockExecSync
+			// git status --porcelain (clean)
+			.mockReturnValueOnce("")
+			// feature still points at its creation commit
+			.mockReturnValueOnce("aaa111\n")
+			// base advanced after feature creation
+			.mockReturnValueOnce("bbb222\n")
+			// the untouched feature is therefore an ancestor of base
+			.mockReturnValueOnce("")
+			// one reflog SHA = branch never moved since creation
+			.mockReturnValueOnce("aaa111\n")
+			// no feature commits beyond base
+			.mockReturnValueOnce("0\n");
+
+		expect(computeGitStatus(baseInput)).toBe("new");
+		expect(mockExecSync).toHaveBeenCalledWith(
+			'git reflog show --reverse --format=%H "feat/auth"',
+			expect.objectContaining({ cwd: baseInput.repoRoot }),
+		);
 	});
 
 	it('returns "ahead" when feature has commits beyond base', () => {
