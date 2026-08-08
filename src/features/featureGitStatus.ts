@@ -6,6 +6,7 @@ export interface GitStatusInput {
 	baseBranch: string;
 	worktreePath: string;
 	repoRoot: string;
+	createdFromSha?: string;
 }
 
 function git(command: string, cwd: string): string {
@@ -14,6 +15,28 @@ function git(command: string, cwd: string): string {
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "pipe"],
 	}).trim();
+}
+
+function branchMovedSinceCreation(
+	featureBranch: string,
+	repoRoot: string,
+): boolean | null {
+	try {
+		const reflog = git(
+			`git reflog show --format=%H "${featureBranch}"`,
+			repoRoot,
+		)
+			.split(/\r?\n/)
+			.filter(Boolean);
+		// A single entry is not enough to distinguish a new branch from a
+		// reflog whose older entries have expired.
+		if (reflog.length < 2) return null;
+		return reflog[0] !== reflog[reflog.length - 1];
+	} catch {
+		// Reflog may be disabled or unavailable. Preserve the previous merged
+		// heuristic rather than inventing a status from missing history.
+		return null;
+	}
 }
 
 // -- TTL cache for computeGitStatus -----------------------------------------
@@ -68,7 +91,10 @@ function computeGitStatusUncached(input: GitStatusInput): GitAwareStatus {
 		// Can't determine, continue
 	}
 
-	// Check merged: feature branch is ancestor of base AND they differ
+	// Check merged: feature branch is ancestor of base AND they differ.
+	// A never-moved feature branch becomes an ancestor as soon as the base
+	// advances, but that is not a merge. The branch reflog lets us distinguish
+	// that no-op feature from a branch that actually advanced before integration.
 	try {
 		const featureSha = git(`git rev-parse "${featureBranch}"`, repoRoot);
 		const baseSha = git(`git rev-parse "${baseBranch}"`, repoRoot);
@@ -77,8 +103,14 @@ function computeGitStatusUncached(input: GitStatusInput): GitAwareStatus {
 				`git merge-base --is-ancestor "${featureBranch}" "${baseBranch}"`,
 				repoRoot,
 			);
-			// If git() didn't throw, feature is ancestor of base = merged
-			return "merged";
+			const moved = input.createdFromSha
+				? featureSha !== input.createdFromSha
+				: branchMovedSinceCreation(featureBranch, repoRoot);
+			if (moved === true) {
+				// Only positive evidence that the feature branch moved supports
+				// classifying an ancestor branch as merged.
+				return "merged";
+			}
 		}
 	} catch {
 		// Not merged, continue checking
@@ -111,7 +143,8 @@ export async function computeGitStatusAsync(
 	}
 
 	const { execAsync } = await import("../utils/platform");
-	const { featureBranch, baseBranch, worktreePath, repoRoot } = input;
+	const { featureBranch, baseBranch, worktreePath, repoRoot, createdFromSha } =
+		input;
 
 	const gitOpts = {
 		encoding: "utf-8" as const,
@@ -121,6 +154,20 @@ export async function computeGitStatusAsync(
 	async function gitCmd(command: string, cwd: string): Promise<string> {
 		const { stdout } = await execAsync(command, { cwd, ...gitOpts });
 		return stdout.trim();
+	}
+
+	async function branchMovedSinceCreationAsync(): Promise<boolean | null> {
+		try {
+			const reflog = (
+				await gitCmd(`git reflog show --format=%H "${featureBranch}"`, repoRoot)
+			)
+				.split(/\r?\n/)
+				.filter(Boolean);
+			if (reflog.length < 2) return null;
+			return reflog[0] !== reflog[reflog.length - 1];
+		} catch {
+			return null;
+		}
 	}
 
 	let result: GitAwareStatus = "new";
@@ -149,9 +196,14 @@ export async function computeGitStatusAsync(
 				`git merge-base --is-ancestor "${featureBranch}" "${baseBranch}"`,
 				repoRoot,
 			);
-			result = "merged";
-			gitStatusCache.set(key, { result, timestamp: Date.now() });
-			return result;
+			const moved = createdFromSha
+				? featureSha !== createdFromSha
+				: await branchMovedSinceCreationAsync();
+			if (moved === true) {
+				result = "merged";
+				gitStatusCache.set(key, { result, timestamp: Date.now() });
+				return result;
+			}
 		}
 	} catch {
 		// Not merged, continue checking
