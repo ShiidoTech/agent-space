@@ -306,7 +306,17 @@ export class AgentManager {
 				agent.tmuxSession ?? this.tmux.legacySessionName(featureId, agent.id);
 
 			if (currentSession !== preferredSession) {
-				this.tmux.adoptSession(preferredSession, currentSession);
+				const adopted = this.tmux.adoptSession(
+					preferredSession,
+					currentSession,
+				);
+				if (!adopted) {
+					if (agent.tmuxSession === undefined) {
+						agent.tmuxSession = currentSession;
+						changed = true;
+					}
+					continue;
+				}
 			}
 
 			if (agent.tmuxSession !== preferredSession) {

@@ -159,7 +159,7 @@ export class TmuxIntegration {
 
 		if (preferredAlive) {
 			if (currentAlive) {
-				this.killSession(currentName);
+				return false;
 			}
 			return true;
 		}
