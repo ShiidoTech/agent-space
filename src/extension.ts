@@ -974,7 +974,49 @@ export async function activate(
 			}
 
 			try {
-				projectManager.addProject(repoPath);
+				const project = projectManager.addProject(repoPath);
+				const projectContext = projectManager.getContext(project.id);
+				if (!projectContext?.config.agents) {
+					const availableTools = toolRegistry.getAvailableTools();
+					if (availableTools.length > 0) {
+						const selectedTools = await vscode.window.showQuickPick(
+							availableTools.map((tool) => ({
+								label: tool.name,
+								description: tool.command,
+								picked: true,
+								toolId: tool.id,
+							})),
+							{
+								canPickMany: true,
+								placeHolder: "Select coding tools exposed by this project",
+								title: `Configure agents for ${project.name}`,
+							},
+						);
+
+						if (selectedTools && selectedTools.length > 0) {
+							const defaultTool = await vscode.window.showQuickPick(
+								selectedTools.map((tool) => ({
+									label: tool.label,
+									description: tool.description,
+									toolId: tool.toolId,
+								})),
+								{
+									placeHolder: "Select the default coding tool",
+									title: `Default agent for ${project.name}`,
+								},
+							);
+
+							if (defaultTool) {
+								projectManager.updateProjectConfig(project.id, {
+									agents: {
+										enabled: selectedTools.map((tool) => tool.toolId),
+										default: defaultTool.toolId,
+									},
+								});
+							}
+						}
+					}
+				}
 			} catch (err) {
 				const msg =
 					err instanceof Error ? err.message : "Failed to add project";
