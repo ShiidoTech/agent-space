@@ -22,7 +22,7 @@ function branchMovedSinceCreation(
 ): boolean | null {
 	try {
 		const reflog = git(
-			`git reflog show --reverse --format=%H "${featureBranch}"`,
+			`git reflog show --format=%H "${featureBranch}"`,
 			repoRoot,
 		)
 			.split(/\r?\n/)
@@ -154,7 +154,7 @@ export async function computeGitStatusAsync(
 		try {
 			const reflog = (
 				await gitCmd(
-					`git reflog show --reverse --format=%H "${featureBranch}"`,
+					`git reflog show --format=%H "${featureBranch}"`,
 					repoRoot,
 				)
 			)
