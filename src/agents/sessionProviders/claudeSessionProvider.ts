@@ -255,14 +255,21 @@ export class ClaudeSessionProvider
 				} catch {
 					continue;
 				}
+				const explicitSessionId = event.sessionId ?? event.session_id;
+				if (
+					typeof explicitSessionId === "string" &&
+					explicitSessionId !== sessionId
+				) {
+					continue;
+				}
 
 				if (event.type === "user") {
-					signal = { status: "running", evidence: "claude.user" };
+					signal = { status: "working", evidence: "claude.user" };
 					continue;
 				}
 				if (event.type === "result") {
 					signal = {
-						status: event.is_error === true ? "errored" : "waiting",
+						status: event.is_error === true ? "failed" : "idle",
 						evidence:
 							event.is_error === true ? "claude.result.error" : "claude.result",
 					};
@@ -271,18 +278,36 @@ export class ClaudeSessionProvider
 				if (event.type === "assistant") {
 					const message = event.message as Record<string, unknown> | undefined;
 					const stopReason = message?.stop_reason ?? event.stop_reason;
-					if (stopReason === "tool_use") {
+					const content = Array.isArray(message?.content)
+						? message.content
+						: [];
+					const asksUser = content.some((item) => {
+						const block = item as Record<string, unknown>;
+						return (
+							block.type === "tool_use" && block.name === "AskUserQuestion"
+						);
+					});
+					if (asksUser) {
 						signal = {
-							status: "running",
+							status: "waiting_for_user",
+							evidence: "claude.assistant.ask_user_question",
+						};
+					} else if (stopReason === "tool_use") {
+						signal = {
+							status: "working",
 							evidence: "claude.assistant.tool_use",
 						};
 					} else if (stopReason === "end_turn") {
 						signal = {
-							status: "waiting",
+							status: "idle",
 							evidence: "claude.assistant.end_turn",
 						};
 					}
+					continue;
 				}
+				// A newer session event without a recognized lifecycle meaning
+				// invalidates the previous precise signal.
+				signal = undefined;
 			}
 			return signal;
 		} catch {

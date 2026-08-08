@@ -1,4 +1,4 @@
-import type { AgentStatus } from "../../types";
+import type { AgentAttentionStatus } from "../../types";
 
 export type ProviderCapability =
 	| "launch"
@@ -7,6 +7,7 @@ export type ProviderCapability =
 	| "sessionNaming"
 	| "attention.working"
 	| "attention.waitingForUser"
+	| "attention.idle"
 	| "attention.failed";
 
 export type ProviderAttention = Extract<
@@ -23,7 +24,10 @@ export interface ProviderCapabilities {
 }
 
 export interface ProviderAttentionSignal {
-	status: Extract<AgentStatus, "running" | "waiting" | "errored">;
+	status: Extract<
+		AgentAttentionStatus,
+		"working" | "waiting_for_user" | "idle" | "failed"
+	>;
 	/** Structured evidence supplied by the provider, never terminal scraping. */
 	evidence: string;
 }
@@ -43,6 +47,7 @@ export interface CodingAgentProvider {
 export const NO_ATTENTION_CAPABILITIES: ProviderCapabilities["attention"] = {
 	"attention.working": false,
 	"attention.waitingForUser": false,
+	"attention.idle": false,
 	"attention.failed": false,
 };
 

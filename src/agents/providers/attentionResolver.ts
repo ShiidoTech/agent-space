@@ -1,4 +1,4 @@
-import type { AgentStatus, CodingTool } from "../../types";
+import type { AgentAttentionStatus } from "../../types";
 import {
 	type CodingAgentProvider,
 	hasCapability,
@@ -6,8 +6,8 @@ import {
 } from "./types";
 
 export type AttentionStatus = Extract<
-	AgentStatus,
-	"running" | "waiting" | "errored" | "unknown"
+	AgentAttentionStatus,
+	"working" | "waiting_for_user" | "idle" | "failed" | "unknown"
 >;
 
 export interface ResolvedAttention {
@@ -26,21 +26,14 @@ export function resolveAttention(
 	const signal = provider.getAttentionSignal?.(sessionId);
 	if (!signal) return { status: "unknown" };
 	const capability: ProviderAttention =
-		signal.status === "running"
+		signal.status === "working"
 			? "attention.working"
-			: signal.status === "waiting"
+			: signal.status === "waiting_for_user"
 				? "attention.waitingForUser"
-				: "attention.failed";
+				: signal.status === "idle"
+					? "attention.idle"
+					: "attention.failed";
 	return hasCapability(provider, capability)
 		? { status: signal.status, evidence: signal.evidence }
 		: { status: "unknown" };
-}
-
-export function resolveDisplayStatus(
-	tool: CodingTool,
-	status: AgentStatus,
-	resolveProvider: (tool: CodingTool) => CodingAgentProvider,
-): AgentStatus {
-	if (status !== "idle") return status;
-	return resolveAttention(resolveProvider(tool)).status;
 }

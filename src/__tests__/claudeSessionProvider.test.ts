@@ -32,7 +32,7 @@ describe("ClaudeSessionProvider attention", () => {
 		const provider = new ClaudeSessionProvider(tmpDir);
 		const signal = provider.readAttention("session-1");
 		expect(signal).toEqual({
-			status: "running",
+			status: "working",
 			evidence: "claude.assistant.tool_use",
 		});
 
@@ -41,7 +41,7 @@ describe("ClaudeSessionProvider attention", () => {
 			`\n${JSON.stringify({ type: "result" })}`,
 		);
 		expect(provider.readAttention("session-1")).toEqual({
-			status: "waiting",
+			status: "idle",
 			evidence: "claude.result",
 		});
 	});

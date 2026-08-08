@@ -35,12 +35,12 @@ describe("resolveAttention", () => {
 				},
 			},
 			getAttentionSignal: () => ({
-				status: "waiting" as const,
+				status: "waiting_for_user" as const,
 				evidence: "structured.fixture.waiting",
 			}),
 		};
 		expect(resolveAttention(provider, "session-1")).toEqual({
-			status: "waiting",
+			status: "waiting_for_user",
 			evidence: "structured.fixture.waiting",
 		});
 	});

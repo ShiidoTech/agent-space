@@ -6,7 +6,6 @@ import { AgentAttentionResolver } from "../agents/attention/agentAttentionResolv
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { ClaudeSessionProvider } from "../agents/sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "../agents/sessionProviders/codexSessionProvider";
-import type { OpenCodeSessionProvider } from "../agents/sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "../agents/tmux";
 import type { Agent, CodingTool } from "../types";
 
@@ -54,9 +53,30 @@ function tmux(overrides: Partial<TmuxIntegration> = {}): TmuxIntegration {
 	} as TmuxIntegration;
 }
 
-function registry(tool: CodingTool): CodingToolRegistry {
+function registry(
+	tool: CodingTool,
+	attentionProvider?: {
+		readAttention: (sessionId: string) =>
+			| {
+					status: "working" | "waiting_for_user" | "idle" | "failed";
+					evidence?: string;
+					reason?: string;
+			  }
+			| undefined;
+	},
+): CodingToolRegistry {
 	return {
 		resolveAgentTool: () => tool,
+		getStructuredAttentionSignal: (_tool, sessionId) => {
+			const signal = attentionProvider?.readAttention(sessionId);
+			return signal
+				? {
+						status: signal.status,
+						evidence:
+							signal.evidence ?? signal.reason ?? "test.provider.signal",
+					}
+				: undefined;
+		},
 	} as CodingToolRegistry;
 }
 
@@ -126,15 +146,19 @@ describe("AgentAttentionResolver", () => {
 				},
 			},
 		]);
+		const provider = new ClaudeSessionProvider(projectsDir);
 
 		const resolver = new AgentAttentionResolver(
 			tmux(),
-			registry({
-				id: "claude",
-				name: "Claude Code",
-				command: "claude",
-				family: "claude",
-			}),
+			registry(
+				{
+					id: "claude",
+					name: "Claude Code",
+					command: "claude",
+					family: "claude",
+				},
+				provider,
+			),
 			{
 				claudeProviderFactory: () => new ClaudeSessionProvider(projectsDir),
 			},
@@ -150,12 +174,15 @@ describe("AgentAttentionResolver", () => {
 		const provider = new ClaudeSessionProvider(projectsDir);
 		const resolver = new AgentAttentionResolver(
 			tmux(),
-			registry({
-				id: "claude",
-				name: "Claude Code",
-				command: "claude",
-				family: "claude",
-			}),
+			registry(
+				{
+					id: "claude",
+					name: "Claude Code",
+					command: "claude",
+					family: "claude",
+				},
+				provider,
+			),
 			{ claudeProviderFactory: () => provider },
 		);
 
@@ -200,15 +227,19 @@ describe("AgentAttentionResolver", () => {
 				message: { content: [], stop_reason: "tool_use" },
 			},
 		]);
+		const provider = new ClaudeSessionProvider(projectsDir);
 
 		const resolver = new AgentAttentionResolver(
 			tmux(),
-			registry({
-				id: "claude",
-				name: "Claude Code",
-				command: "claude",
-				family: "claude",
-			}),
+			registry(
+				{
+					id: "claude",
+					name: "Claude Code",
+					command: "claude",
+					family: "claude",
+				},
+				provider,
+			),
 			{
 				claudeProviderFactory: () => new ClaudeSessionProvider(projectsDir),
 			},
@@ -233,15 +264,19 @@ describe("AgentAttentionResolver", () => {
 				data: { status: "compacting" },
 			},
 		]);
+		const provider = new ClaudeSessionProvider(projectsDir);
 
 		const resolver = new AgentAttentionResolver(
 			tmux(),
-			registry({
-				id: "claude",
-				name: "Claude Code",
-				command: "claude",
-				family: "claude",
-			}),
+			registry(
+				{
+					id: "claude",
+					name: "Claude Code",
+					command: "claude",
+					family: "claude",
+				},
+				provider,
+			),
 			{
 				claudeProviderFactory: () => new ClaudeSessionProvider(projectsDir),
 			},
@@ -263,12 +298,15 @@ describe("AgentAttentionResolver", () => {
 		);
 		const resolver = new AgentAttentionResolver(
 			tmux(),
-			registry({
-				id: "codex",
-				name: "Codex",
-				command: "codex",
-				family: "codex",
-			}),
+			registry(
+				{
+					id: "codex",
+					name: "Codex",
+					command: "codex",
+					family: "codex",
+				},
+				provider,
+			),
 			{ codexProvider: provider },
 		);
 		const codexAgent = agent({ sessionId, toolId: "codex" });
@@ -293,13 +331,7 @@ describe("AgentAttentionResolver", () => {
 		expect(resolver.resolve(codexAgent).status).toBe("idle");
 	});
 
-	it("uses OpenCode provider evidence instead of the generic idle fallback", () => {
-		const openCodeProvider = {
-			readAttention: vi.fn(() => ({
-				status: "working" as const,
-				reason: "OpenCode has an assistant turn in progress",
-			})),
-		} as unknown as OpenCodeSessionProvider;
+	it("does not infer OpenCode attention without a declared capability", () => {
 		const resolver = new AgentAttentionResolver(
 			tmux(),
 			registry({
@@ -308,13 +340,11 @@ describe("AgentAttentionResolver", () => {
 				command: "opencode",
 				family: "opencode",
 			}),
-			{ openCodeProvider },
 		);
 
 		const snapshot = resolver.resolve(agent({ toolId: "opencode" }));
-		expect(snapshot.status).toBe("working");
-		expect(snapshot.source).toBe("opencode");
-		expect(openCodeProvider.readAttention).toHaveBeenCalledWith("session-1");
+		expect(snapshot.status).toBe("unknown");
+		expect(snapshot.source).toBe("fallback");
 	});
 
 	it("treats a non-zero dead pane as failed", () => {

@@ -155,25 +155,34 @@ export class CodexSessionProvider
 
 				const payload = event.payload as Record<string, unknown> | undefined;
 				const type = event.type;
-				const eventType = payload?.type;
+				const eventType = typeof payload?.type === "string" ? payload.type : "";
 				if (type === "user_message") {
 					signal = {
-						status: "running",
+						status: "working",
 						evidence: "codex.user_message",
 					};
 				} else if (type === "event_msg" && eventType === "task_started") {
 					signal = {
-						status: "running",
+						status: "working",
 						evidence: "codex.task_started",
+					};
+				} else if (
+					type === "event_msg" &&
+					(eventType === "request_user_input" ||
+						eventType.includes("approval_request"))
+				) {
+					signal = {
+						status: "waiting_for_user",
+						evidence: `codex.${String(eventType)}`,
 					};
 				} else if (type === "event_msg" && eventType === "task_complete") {
 					signal = {
-						status: "waiting",
+						status: "idle",
 						evidence: "codex.task_complete",
 					};
 				} else if (type === "event_msg" && eventType === "turn_aborted") {
 					signal = {
-						status: "waiting",
+						status: "idle",
 						evidence: "codex.turn_aborted",
 					};
 				} else if (
@@ -181,7 +190,7 @@ export class CodexSessionProvider
 					(eventType === "error" || eventType === "item_failed")
 				) {
 					signal = {
-						status: "errored",
+						status: "failed",
 						evidence: `codex.${String(eventType)}`,
 					};
 				} else if (
@@ -189,7 +198,7 @@ export class CodexSessionProvider
 					(eventType === "function_call" || eventType === "custom_tool_call")
 				) {
 					signal = {
-						status: "running",
+						status: "working",
 						evidence: `codex.${String(eventType)}`,
 					};
 				}

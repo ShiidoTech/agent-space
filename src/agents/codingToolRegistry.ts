@@ -29,6 +29,7 @@ const fullSessionCapabilities = (
 const FULL_ATTENTION_CAPABILITIES = {
 	"attention.working": true,
 	"attention.waitingForUser": true,
+	"attention.idle": true,
 	"attention.failed": true,
 } as const;
 
@@ -343,6 +344,21 @@ export class CodingToolRegistry {
 
 	resolveAttention(tool: CodingTool, sessionId?: string | null) {
 		return resolveAttention(this.getProvider(tool), sessionId);
+	}
+
+	getStructuredAttentionSignal(tool: CodingTool, sessionId: string) {
+		const provider = this.getProvider(tool);
+		const signal = provider.getAttentionSignal?.(sessionId);
+		if (!signal) return undefined;
+		const statusCapability = {
+			working: "attention.working",
+			waiting_for_user: "attention.waitingForUser",
+			idle: "attention.idle",
+			failed: "attention.failed",
+		}[signal.status] as keyof typeof provider.capabilities.attention;
+		return provider.capabilities.attention[statusCapability]
+			? signal
+			: undefined;
 	}
 
 	isToolAvailable(tool: CodingTool): boolean {
