@@ -807,11 +807,7 @@ export class HomePanel {
 		);
 
 		const activeAgents = agents.filter(
-			(a) =>
-				a.status === "running" ||
-				a.status === "waiting" ||
-				a.status === "unknown" ||
-				a.status === "idle",
+			(a) => a.status === "running" || a.status === "idle",
 		);
 		const erroredAgents = agents.filter((a) => a.status === "errored");
 		const doneAgents = agents.filter((a) => a.status === "done");

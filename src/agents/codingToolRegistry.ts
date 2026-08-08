@@ -10,11 +10,13 @@ import type {
 	ProviderCapabilities,
 } from "./providers/types";
 import { NO_ATTENTION_CAPABILITIES } from "./providers/types";
-import {
-	ClaudeSessionProvider,
-	readClaudeAttentionSignal,
-} from "./sessionProviders/claudeSessionProvider";
-import { readCodexAttentionSignal } from "./sessionProviders/codexSessionProvider";
+import { ClaudeSessionProvider } from "./sessionProviders/claudeSessionProvider";
+import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
+import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
+
+const claudeSessionAdapter = new ClaudeSessionProvider();
+const codexSessionAdapter = new CodexSessionProvider();
+const openCodeSessionAdapter = new OpenCodeSessionProvider();
 
 const fullSessionCapabilities = (
 	attention = NO_ATTENTION_CAPABILITIES,
@@ -37,12 +39,16 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	{
 		id: "claude",
 		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
-		getAttentionSignal: readClaudeAttentionSignal,
+		getAttentionSignal: (sessionId) =>
+			claudeSessionAdapter.readAttention(sessionId),
+		sessionAdapter: claudeSessionAdapter,
 	},
 	{
 		id: "codex",
 		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
-		getAttentionSignal: readCodexAttentionSignal,
+		getAttentionSignal: (sessionId) =>
+			codexSessionAdapter.readAttention(sessionId),
+		sessionAdapter: codexSessionAdapter,
 	},
 	{
 		id: "opencode",
@@ -50,13 +56,14 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 		launchArgs: () => [],
 		resumeArgs: (sessionId) =>
 			sessionId ? ["--session", sessionId] : ["--continue"],
+		sessionAdapter: openCodeSessionAdapter,
 	},
 	{
 		id: "copilot",
 		capabilities: {
 			launch: true,
 			resume: false,
-			sessionDiscovery: true,
+			sessionDiscovery: false,
 			sessionNaming: false,
 			attention: NO_ATTENTION_CAPABILITIES,
 		},
@@ -140,6 +147,7 @@ function providerForTool(
 		getAttentionSignal: claudeSessionProvider
 			? (sessionId) => claudeSessionProvider.readAttention(sessionId)
 			: undefined,
+		sessionAdapter: claudeSessionProvider ?? undefined,
 	};
 }
 
@@ -359,6 +367,18 @@ export class CodingToolRegistry {
 		return provider.capabilities.attention[statusCapability]
 			? signal
 			: undefined;
+	}
+
+	getSessionRenameAdapters(config?: ProjectConfig) {
+		const adapters = new Map<
+			string,
+			NonNullable<CodingAgentProvider["sessionAdapter"]>
+		>();
+		for (const tool of this.getTools(config)) {
+			const adapter = this.getProvider(tool).sessionAdapter;
+			if (adapter) adapters.set(adapter.toolId, adapter);
+		}
+		return [...adapters.values()];
 	}
 
 	isToolAvailable(tool: CodingTool): boolean {

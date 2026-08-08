@@ -1,13 +1,6 @@
 export type FeatureStatus = "active" | "done";
 export type GitAwareStatus = "new" | "modified" | "ahead" | "merged";
-export type AgentStatus =
-	| "running"
-	| "waiting"
-	| "unknown"
-	| "idle"
-	| "stopped"
-	| "done"
-	| "errored";
+export type AgentStatus = "running" | "idle" | "stopped" | "done" | "errored";
 export type AgentAttentionStatus =
 	| "working"
 	| "waiting_for_user"

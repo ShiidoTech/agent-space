@@ -1,14 +1,7 @@
-import * as path from "node:path";
 import * as vscode from "vscode";
-import {
-	CodingToolRegistry,
-	isClaudeFamily,
-} from "./agents/codingToolRegistry";
+import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
-import { ClaudeSessionProvider } from "./agents/sessionProviders/claudeSessionProvider";
-import { CodexSessionProvider } from "./agents/sessionProviders/codexSessionProvider";
 import { CodexSessionWatcher } from "./agents/sessionProviders/codexSessionWatcher";
-import { OpenCodeSessionProvider } from "./agents/sessionProviders/openCodeSessionProvider";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
 import { validateFeatureNameInput } from "./features/featureName";
@@ -22,7 +15,6 @@ import {
 import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
 import { PrerequisiteChecker } from "./prerequisites";
-import { expandHome } from "./projects/projectConfig";
 import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
@@ -283,32 +275,9 @@ export async function activate(
 		void showAgentSpace();
 	});
 
-	const claudeProvider = new ClaudeSessionProvider();
-	// Any claude-family tool declaring a `sessionsDir` gets its own session
-	// provider, so a wrapped/custom Claude variant is resumed and renamed via
-	// its own profile directory — configured declaratively, not hard-coded.
-	// Family uses the same `isClaudeFamily` resolution as the registry.
-	const extraClaudeProviders = toolRegistry
-		.getTools()
-		.filter((t) => isClaudeFamily(t) && t.id !== "claude")
-		.flatMap((t) =>
-			t.sessionsDir
-				? [
-						new ClaudeSessionProvider(
-							path.join(expandHome(t.sessionsDir), "projects"),
-							t.id,
-						),
-					]
-				: [],
-		);
-	const codexProvider = new CodexSessionProvider();
-	const openCodeProvider = new OpenCodeSessionProvider();
-	const sessionNameSyncer = new SessionNameSyncer([
-		claudeProvider,
-		...extraClaudeProviders,
-		codexProvider,
-		openCodeProvider,
-	]);
+	const sessionNameSyncer = new SessionNameSyncer(
+		toolRegistry.getSessionRenameAdapters(),
+	);
 	terminalController.onSessionDiscovered(() => sessionNameSyncer.syncAll());
 	sessionNameSyncer.onAgentRenamed((agentId, featureId) => {
 		projectManager.notifyChange();

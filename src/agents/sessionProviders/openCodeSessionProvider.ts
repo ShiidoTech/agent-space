@@ -70,6 +70,13 @@ export class OpenCodeSessionProvider
 		}
 	}
 
+	discoverSessionId(
+		cwd: string,
+		knownSessionIds: ReadonlySet<string>,
+	): string | undefined {
+		return claimNewestSessionIdForDirectory(cwd, new Set(knownSessionIds));
+	}
+
 	/**
 	 * Read provider-native activity evidence without scraping terminal text.
 	 *

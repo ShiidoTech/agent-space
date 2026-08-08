@@ -1,6 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ProviderAttentionSignal } from "../providers/types";
+import {
+	type IncrementalJsonlState,
+	readFirstJsonlLine,
+	readIncrementalJsonl,
+} from "./incrementalJsonl";
 import type {
 	SessionInfo,
 	SessionProvider,
@@ -27,6 +32,10 @@ export class ClaudeSessionProvider
 	private readonly indexCache = new Map<
 		string,
 		{ mtimeMs: number; titles: Map<string, string> }
+	>();
+	private readonly attentionCache = new Map<
+		string,
+		IncrementalJsonlState<ProviderAttentionSignal>
 	>();
 
 	constructor(projectsDir?: string, toolId = "claude") {
@@ -164,7 +173,8 @@ export class ClaudeSessionProvider
 			}
 			if (!entry.name.endsWith(".jsonl")) continue;
 			try {
-				const firstLine = fs.readFileSync(candidate, "utf-8").split("\n", 1)[0];
+				const firstLine = readFirstJsonlLine(candidate);
+				if (!firstLine) continue;
 				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
 				if (typeof parsed.sessionId === "string") {
 					this.contentPathIndex.set(parsed.sessionId, candidate);
@@ -244,28 +254,23 @@ export class ClaudeSessionProvider
 		const filePath = this.findSessionFile(sessionId);
 		if (!filePath) return undefined;
 
-		try {
-			const raw = fs.readFileSync(filePath, "utf-8");
-			let signal: ProviderAttentionSignal | undefined;
-			for (const line of raw.split("\n")) {
-				if (!line.trim()) continue;
-				let event: Record<string, unknown>;
-				try {
-					event = JSON.parse(line) as Record<string, unknown>;
-				} catch {
-					continue;
-				}
+		const state = readIncrementalJsonl(
+			filePath,
+			this.attentionCache.get(sessionId),
+			(line, previous) => {
+				const event = JSON.parse(line) as Record<string, unknown>;
+				let signal = previous;
 				const explicitSessionId = event.sessionId ?? event.session_id;
 				if (
 					typeof explicitSessionId === "string" &&
 					explicitSessionId !== sessionId
 				) {
-					continue;
+					return signal;
 				}
 
 				if (event.type === "user") {
 					signal = { status: "working", evidence: "claude.user" };
-					continue;
+					return signal;
 				}
 				if (event.type === "result") {
 					signal = {
@@ -273,7 +278,7 @@ export class ClaudeSessionProvider
 						evidence:
 							event.is_error === true ? "claude.result.error" : "claude.result",
 					};
-					continue;
+					return signal;
 				}
 				if (event.type === "assistant") {
 					const message = event.message as Record<string, unknown> | undefined;
@@ -303,16 +308,15 @@ export class ClaudeSessionProvider
 							evidence: "claude.assistant.end_turn",
 						};
 					}
-					continue;
+					return signal;
 				}
-				// A newer session event without a recognized lifecycle meaning
-				// invalidates the previous precise signal.
-				signal = undefined;
-			}
-			return signal;
-		} catch {
-			return undefined;
-		}
+				// A newer unrecognized event invalidates the previous precise signal.
+				return undefined;
+			},
+		);
+		if (!state) return undefined;
+		this.attentionCache.set(sessionId, state);
+		return state.value;
 	}
 
 	readTitle(filePath: string): string | null {
@@ -382,6 +386,7 @@ export class ClaudeSessionProvider
 	clearCache(sessionId: string): void {
 		this.pathCache.delete(sessionId);
 		this.contentPathIndex.delete(sessionId);
+		this.attentionCache.delete(sessionId);
 	}
 
 	dispose(): void {
@@ -389,6 +394,7 @@ export class ClaudeSessionProvider
 		this.contentPathIndex.clear();
 		this.contentPathIndexBuiltAt = 0;
 		this.indexCache.clear();
+		this.attentionCache.clear();
 	}
 
 	private readIndexFallback(

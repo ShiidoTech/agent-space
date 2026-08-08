@@ -1,4 +1,8 @@
 import type { AgentAttentionStatus } from "../../types";
+import type {
+	SessionInfo,
+	SessionRenameAdapter,
+} from "../sessionProviders/types";
 
 export type ProviderCapability =
 	| "launch"
@@ -32,6 +36,14 @@ export interface ProviderAttentionSignal {
 	evidence: string;
 }
 
+export interface ProviderSessionAdapter extends SessionRenameAdapter {
+	scanSessions?(): SessionInfo[];
+	discoverSessionId?(
+		cwd: string,
+		knownSessionIds: ReadonlySet<string>,
+	): string | undefined | Promise<string | undefined>;
+}
+
 /**
  * Internal provider contract. Providers are compiled into the extension and
  * added through PRs; project config only selects their stable IDs.
@@ -42,6 +54,7 @@ export interface CodingAgentProvider {
 	readonly launchArgs?: (sessionId?: string | null) => string[];
 	readonly resumeArgs?: (sessionId?: string | null) => string[];
 	getAttentionSignal?(sessionId: string): ProviderAttentionSignal | undefined;
+	readonly sessionAdapter?: ProviderSessionAdapter;
 }
 
 export const NO_ATTENTION_CAPABILITIES: ProviderCapabilities["attention"] = {
