@@ -13,6 +13,15 @@ export function buildGitHubCompareUrl(
 	return `https://${GITHUB_HOST}/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}/compare/${base}...${head}?expand=1`;
 }
 
+export function buildGitHubPullRequestBaseMetadata(
+	remoteUrl: string,
+	baseBranch: string,
+): string | null {
+	const repository = parseGitHubRemote(remoteUrl);
+	if (!repository || !baseBranch) return null;
+	return `${repository.owner}#${repository.repo}#${baseBranch}`;
+}
+
 function parseGitHubRemote(
 	remoteUrl: string,
 ): { owner: string; repo: string } | null {
