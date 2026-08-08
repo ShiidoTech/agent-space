@@ -951,29 +951,40 @@ export async function activate(
 						if (baseMetadata) {
 							// The GitHub PR extension reads this dedicated metadata when
 							// selecting the base. It is intentionally separate from Git
-							// branch tracking metadata.
-							await execFileAsync(
-								"git",
-								[
-									"config",
-									`branch.${feature.branch}.github-pr-base-branch`,
-									baseMetadata,
-								],
-								{ cwd: feature.worktreePath },
-							);
+							// branch tracking metadata. Best-effort: a failure here must
+							// not block opening the PR creation flow.
+							try {
+								await execFileAsync(
+									"git",
+									[
+										"config",
+										`branch.${feature.branch}.github-pr-base-branch`,
+										baseMetadata,
+									],
+									{ cwd: feature.worktreePath },
+								);
+							} catch {
+								// Ignore: the native editor still opens, just without the
+								// base branch pre-selected.
+							}
 						}
-						await vscode.commands.executeCommand(nativeCreateCommand, {
-							repoPath: feature.worktreePath,
-							compareBranch: feature.branch,
-						});
-						vscode.window.showInformationMessage(
-							`Branch "${feature.branch}" pushed. Opening the GitHub Pull Requests editor.`,
-						);
-						return;
+						try {
+							await vscode.commands.executeCommand(nativeCreateCommand, {
+								repoPath: feature.worktreePath,
+								compareBranch: feature.branch,
+							});
+							vscode.window.showInformationMessage(
+								`Branch "${feature.branch}" pushed. Opening the GitHub Pull Requests editor.`,
+							);
+							return;
+						} catch {
+							// Fall through to the manual comparison below: the branch is
+							// already pushed, so the user can still open and submit a PR.
+						}
 					}
 
 					// Keep the explicit comparison as a fallback when the native
-					// GitHub Pull Requests integration is unavailable.
+					// GitHub Pull Requests integration is unavailable or fails to open.
 					vscode.window.showInformationMessage(
 						`Branch "${feature.branch}" pushed. Opening GitHub comparison "${baseBranch}...${feature.branch}" — verify and submit the PR manually.`,
 					);
