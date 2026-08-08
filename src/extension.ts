@@ -969,6 +969,12 @@ export async function activate(
 							}
 						}
 						try {
+							// { repoPath, compareBranch } matches the argument shape
+							// microsoft/vscode-pull-request-github's own internal callers
+							// pass to `pr.create`, but it is not a documented/stable API.
+							// If a future version of that extension resolves this command
+							// without honoring compareBranch as expected, this call
+							// succeeds silently and the catch below never fires.
 							await vscode.commands.executeCommand(nativeCreateCommand, {
 								repoPath: feature.worktreePath,
 								compareBranch: feature.branch,
