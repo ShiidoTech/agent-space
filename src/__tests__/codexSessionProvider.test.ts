@@ -351,4 +351,67 @@ describe("CodexSessionProvider", () => {
 		const provider = new CodexSessionProvider(tmpDir);
 		expect(provider.toolId).toBe("codex");
 	});
+
+	describe("readAttention", () => {
+		it("reads Codex task lifecycle events", () => {
+			writeSessionFile("2026/03/04/rollout-1000-sess-attention.jsonl", [
+				sessionMeta("sess-attention"),
+				JSON.stringify({
+					type: "event_msg",
+					payload: { type: "task_started" },
+				}),
+				JSON.stringify({
+					type: "response_item",
+					payload: { type: "function_call" },
+				}),
+				JSON.stringify({
+					type: "event_msg",
+					payload: { type: "task_complete" },
+				}),
+			]);
+
+			expect(
+				new CodexSessionProvider(tmpDir).readAttention("sess-attention"),
+			).toEqual({
+				status: "waiting",
+				evidence: "codex.task_complete",
+			});
+		});
+
+		it("reports active tool work when completion is absent", () => {
+			writeSessionFile("2026/03/04/rollout-1000-sess-working.jsonl", [
+				sessionMeta("sess-working"),
+				JSON.stringify({
+					type: "event_msg",
+					payload: { type: "task_started" },
+				}),
+			]);
+
+			expect(
+				new CodexSessionProvider(tmpDir).readAttention("sess-working"),
+			).toEqual({
+				status: "running",
+				evidence: "codex.task_started",
+			});
+		});
+
+		describe("session title fallback", () => {
+			it("uses a structured thread name or first user message", () => {
+				writeSessionFile("2026/03/04/rollout-1000-sess-title.jsonl", [
+					sessionMeta("sess-title"),
+					JSON.stringify({
+						type: "event_msg",
+						payload: {
+							type: "user_message",
+							message: "Investigate the picker",
+						},
+					}),
+				]);
+
+				expect(new CodexSessionProvider(tmpDir).readName("sess-title")).toBe(
+					"Investigate the picker",
+				);
+			});
+		});
+	});
 });

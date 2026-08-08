@@ -149,7 +149,7 @@ export async function activate(
 		const defaultTool = toolRegistry.resolveAgentTool(defaultToolId);
 		if (!toolRegistry.isToolAvailable(defaultTool)) {
 			vscode.window.showWarningMessage(
-				`${defaultTool.name} CLI not found. New agents will use ${availableTools[0].name} until the default tool is installed.`,
+				`${defaultTool.name} CLI not found. New features will not launch another tool automatically until the default is installed or changed.`,
 			);
 		}
 	}
@@ -309,6 +309,7 @@ export async function activate(
 		codexProvider,
 		openCodeProvider,
 	]);
+	terminalController.onSessionDiscovered(() => sessionNameSyncer.syncAll());
 	sessionNameSyncer.onAgentRenamed((agentId, featureId) => {
 		projectManager.notifyChange();
 		const resolved = projectManager.resolveFeature(featureId);
@@ -340,7 +341,10 @@ export async function activate(
 	);
 
 	const codexWatcher = new CodexSessionWatcher();
-	codexWatcher.onDiscovered(() => sidebarProvider.refresh());
+	codexWatcher.onDiscovered(() => {
+		sessionNameSyncer.syncAll();
+		sidebarProvider.refresh();
+	});
 	codexWatcher.start(projectManager);
 
 	const config = vscode.workspace.getConfiguration("agentSpace");
@@ -472,7 +476,9 @@ export async function activate(
 					);
 					activeFeatureId = feature.id;
 
-					const initialTool = toolRegistry.getPreferredAvailableTool();
+					const initialTool = toolRegistry.getPreferredAvailableTool(
+						ctx.config,
+					);
 					if (initialTool) {
 						const launchNow = await vscode.window.showQuickPick(
 							[
@@ -548,7 +554,28 @@ export async function activate(
 				const { ctx, feature } = resolved;
 
 				// Tool selection — only show installed tools
-				const tools = toolRegistry.getAvailableToolsPreferredFirst();
+				const tools = toolRegistry.getAvailableToolsPreferredFirst(ctx.config);
+				const unavailable = toolRegistry.getUnavailableTools(ctx.config);
+				const unknown = toolRegistry.getUnknownProjectAgentIds(ctx.config);
+				const configuredDefault = ctx.config.agents?.default;
+				if (
+					configuredDefault &&
+					!tools.some((tool) => tool.id === configuredDefault)
+				) {
+					vscode.window.showWarningMessage(
+						`Project default agent "${configuredDefault}" is unavailable; no other executable will be selected automatically.`,
+					);
+				}
+				if (unavailable.length > 0) {
+					vscode.window.showInformationMessage(
+						`Project agents unavailable on PATH: ${unavailable.map((tool) => tool.id).join(", ")}.`,
+					);
+				}
+				if (unknown.length > 0) {
+					vscode.window.showWarningMessage(
+						`Project agents are not registered in this installation: ${unknown.join(", ")}.`,
+					);
+				}
 				if (tools.length === 0) {
 					vscode.window.showErrorMessage(
 						`No coding tools found on PATH. Install one of: ${toolRegistry
@@ -892,7 +919,7 @@ export async function activate(
 						},
 						async () => {
 							// Push the feature from its worktree. Do not alter branch
-							// upstream metadata: it describes Git tracking, not PR base.
+							// tracking metadata: it describes Git tracking, not PR base.
 							await execAsync(`git push origin "${feature.branch}"`, {
 								cwd: feature.worktreePath,
 							});

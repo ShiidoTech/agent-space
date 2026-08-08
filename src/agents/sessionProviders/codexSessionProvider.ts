@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ProviderAttentionSignal } from "../providers/types";
 import type {
 	SessionInfo,
 	SessionProvider,
@@ -81,7 +82,41 @@ export class CodexSessionProvider
 			const parsed = JSON.parse(firstLine.trim());
 			if (parsed.type !== "session_meta" || !parsed.payload) return null;
 
-			return parsed.payload.title || parsed.payload.first_user_message || null;
+			const metadataTitle =
+				parsed.payload.title || parsed.payload.first_user_message || null;
+			if (metadataTitle) return metadataTitle;
+
+			for (const line of fs.readFileSync(filePath, "utf-8").split("\n")) {
+				if (!line.trim()) continue;
+				try {
+					const event = JSON.parse(line);
+					const payload = event.payload;
+					if (
+						event.type === "event_msg" &&
+						payload?.type === "thread_name_updated" &&
+						typeof payload.thread_name === "string"
+					) {
+						return payload.thread_name;
+					}
+					if (
+						(event.type === "event_msg" && payload?.type === "user_message") ||
+						event.type === "user_message"
+					) {
+						const message =
+							typeof event.message === "string"
+								? event.message
+								: typeof payload?.message === "string"
+									? payload.message
+									: typeof event.text === "string"
+										? event.text
+										: null;
+						if (message?.trim()) return message.trim();
+					}
+				} catch {
+					// Ignore malformed trailing events.
+				}
+			}
+			return null;
 		} catch {
 			return null;
 		} finally {
@@ -91,7 +126,78 @@ export class CodexSessionProvider
 
 	readName(sessionId: string): string | null {
 		this.loadSessionIndex();
-		return this.nameCache.get(sessionId) ?? null;
+		return (
+			this.nameCache.get(sessionId) ?? this.readTitleFromSession(sessionId)
+		);
+	}
+
+	private readTitleFromSession(sessionId: string): string | null {
+		const filePath = this.findSessionFile(sessionId);
+		if (!filePath) return null;
+		return this.readTitle(filePath);
+	}
+
+	readAttention(sessionId: string): ProviderAttentionSignal | undefined {
+		const filePath = this.findSessionFile(sessionId);
+		if (!filePath) return undefined;
+
+		try {
+			const raw = fs.readFileSync(filePath, "utf-8");
+			let signal: ProviderAttentionSignal | undefined;
+			for (const line of raw.split("\n")) {
+				if (!line.trim()) continue;
+				let event: Record<string, unknown>;
+				try {
+					event = JSON.parse(line) as Record<string, unknown>;
+				} catch {
+					continue;
+				}
+
+				const payload = event.payload as Record<string, unknown> | undefined;
+				const type = event.type;
+				const eventType = payload?.type;
+				if (type === "user_message") {
+					signal = {
+						status: "running",
+						evidence: "codex.user_message",
+					};
+				} else if (type === "event_msg" && eventType === "task_started") {
+					signal = {
+						status: "running",
+						evidence: "codex.task_started",
+					};
+				} else if (type === "event_msg" && eventType === "task_complete") {
+					signal = {
+						status: "waiting",
+						evidence: "codex.task_complete",
+					};
+				} else if (type === "event_msg" && eventType === "turn_aborted") {
+					signal = {
+						status: "waiting",
+						evidence: "codex.turn_aborted",
+					};
+				} else if (
+					type === "event_msg" &&
+					(eventType === "error" || eventType === "item_failed")
+				) {
+					signal = {
+						status: "errored",
+						evidence: `codex.${String(eventType)}`,
+					};
+				} else if (
+					type === "response_item" &&
+					(eventType === "function_call" || eventType === "custom_tool_call")
+				) {
+					signal = {
+						status: "running",
+						evidence: `codex.${String(eventType)}`,
+					};
+				}
+			}
+			return signal;
+		} catch {
+			return undefined;
+		}
 	}
 
 	clearCache(sessionId: string): void {
@@ -164,6 +270,20 @@ export class CodexSessionProvider
 			) {
 				this.pathCache.set(sessionId, fullPath);
 				return fullPath;
+			} else if (entry.name.endsWith(".jsonl")) {
+				try {
+					const firstLine = fs
+						.readFileSync(fullPath, "utf-8")
+						.split("\n", 1)[0];
+					const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+					const payload = parsed.payload as Record<string, unknown> | undefined;
+					if (payload?.id === sessionId) {
+						this.pathCache.set(sessionId, fullPath);
+						return fullPath;
+					}
+				} catch {
+					// Ignore files that are not readable session JSONL.
+				}
 			}
 		}
 		return null;
@@ -216,4 +336,10 @@ export class CodexSessionProvider
 			// Ignore read errors and keep the previous cache
 		}
 	}
+}
+
+export function readCodexAttentionSignal(
+	sessionId: string,
+): ProviderAttentionSignal | undefined {
+	return new CodexSessionProvider().readAttention(sessionId);
 }
