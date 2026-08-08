@@ -337,6 +337,27 @@ export async function activate(
 		}),
 	);
 
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.openProject",
+			async (projectId?: string) => {
+				if (!projectId) return;
+				const panel = ensureHomePanel();
+				panel.showProject(projectId);
+				await workspaceIsolation.enter();
+			},
+		),
+		vscode.commands.registerCommand(
+			"agentSpace.openProjectSettings",
+			async (projectId?: string) => {
+				if (!projectId) return;
+				const panel = ensureHomePanel();
+				panel.showProject(projectId);
+				await workspaceIsolation.enter();
+			},
+		),
+	);
+
 	// Command: New Feature
 	context.subscriptions.push(
 		vscode.commands.registerCommand(

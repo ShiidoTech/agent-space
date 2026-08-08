@@ -8,6 +8,16 @@ function selectFeature(id) {
 	send("selectFeature", { featureId: id });
 }
 
+function openProject(e, projectId) {
+	e.stopPropagation();
+	send("openProject", { projectId });
+}
+
+function openProjectSettings(e, projectId) {
+	e.stopPropagation();
+	send("openProjectSettings", { projectId });
+}
+
 function newFeature(e, projectId) {
 	e.stopPropagation();
 	send("newFeature", { projectId: projectId });
