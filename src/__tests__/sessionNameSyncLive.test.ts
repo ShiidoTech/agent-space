@@ -36,7 +36,8 @@ function titleEvent(sessionId: string, title: string): string {
 }
 
 function createProject(tmpDir: string, features: Feature[] = [feature]) {
-	const storagePath = fs.mkdtempSync(path.join(os.tmpdir(), "sns-live-storage-"));
+	const storagePath = path.join(tmpDir, "storage");
+	fs.mkdirSync(storagePath, { recursive: true });
 	const globalStore = new GlobalStore(storagePath);
 	const projectManager = new ProjectManager(globalStore, storagePath);
 	const project = projectManager.addProject(tmpDir, "test-project");
@@ -47,7 +48,7 @@ function createProject(tmpDir: string, features: Feature[] = [feature]) {
 	const reloaded = new ProjectManager(globalStore, storagePath);
 	const reloadedCtx = reloaded.getContext(project.id);
 	if (!reloadedCtx) throw new Error("reloaded context should exist");
-	return { projectManager: reloaded, ctx: reloadedCtx, project, storagePath };
+	return { projectManager: reloaded, ctx: reloadedCtx, project };
 }
 
 describe("live session-name synchronization", () => {
