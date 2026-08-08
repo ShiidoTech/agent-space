@@ -61,6 +61,7 @@ describe("runDoctor", () => {
 		expect(report.warnings).toBe(0);
 		expect(report.markdown).toContain("Healthy — no problems detected");
 		expect(report.markdown).toContain("ShiidoTech.agent-space v0.5.3");
+		expect(report.markdown).toContain("Runtime");
 		expect(report.markdown).toContain("~/dev/agent-space");
 		expect(report.markdown).toContain("~/.claude/projects");
 		expect(report.markdown).not.toContain("/home/alice");
@@ -98,6 +99,16 @@ describe("runDoctor", () => {
 		expect(report.markdown).not.toContain("super-secret-value");
 		expect(report.markdown).not.toContain("another-secret");
 		expect(report.markdown).not.toContain("secret-session");
+	});
+
+	it("reports tmux that is present but not functional", () => {
+		const report = runDoctor(
+			input(),
+			deps({ commandFunctional: (command) => command !== "tmux" }),
+		);
+
+		expect(report.errors).toBe(1);
+		expect(report.markdown).toContain("found but functional smoke test failed");
 	});
 
 	it("flags an explicitly configured base branch that does not exist", () => {

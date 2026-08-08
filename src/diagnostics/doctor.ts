@@ -2,7 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { CodingTool, Project } from "../types";
-import { commandExists, exec, execSilent } from "../utils/platform";
+import {
+	commandExists,
+	exec,
+	execSilent,
+	runtimeLabel,
+	tmuxFunctional,
+} from "../utils/platform";
 
 export type DoctorLevel = "ok" | "info" | "warn" | "error";
 
@@ -47,6 +53,7 @@ export interface ProjectConfigProbe {
 export interface DoctorDeps {
 	commandExists(command: string): boolean;
 	commandVersion(command: "git" | "tmux"): string | null;
+	commandFunctional?(command: "git" | "tmux"): boolean;
 	pathReadable(targetPath: string): boolean;
 	readProjectConfig(repoPath: string): ProjectConfigProbe;
 	isGitRepo(repoPath: string): boolean;
@@ -118,6 +125,9 @@ export const defaultDoctorDeps: DoctorDeps = {
 		} catch {
 			return null;
 		}
+	},
+	commandFunctional(command) {
+		return command === "tmux" ? tmuxFunctional() : commandExists(command);
 	},
 	pathReadable(targetPath) {
 		try {
@@ -207,6 +217,8 @@ export function runDoctor(
 	const projectChecks: DoctorCheck[] = [];
 	const configChecks: DoctorCheck[] = [];
 
+	add(systemChecks, "info", "Runtime", runtimeLabel());
+
 	const gitAvailable = deps.commandExists("git");
 	if (gitAvailable) {
 		add(
@@ -226,7 +238,8 @@ export function runDoctor(
 	}
 
 	const tmuxAvailable = deps.commandExists("tmux");
-	if (tmuxAvailable) {
+	const tmuxWorks = tmuxAvailable && (deps.commandFunctional?.("tmux") ?? true);
+	if (tmuxWorks) {
 		add(
 			systemChecks,
 			"ok",
@@ -238,9 +251,11 @@ export function runDoctor(
 			systemChecks,
 			"error",
 			"tmux",
-			"not found on PATH",
+			tmuxAvailable
+				? "found but functional smoke test failed"
+				: "not found on PATH",
 			process.platform === "win32"
-				? "Install tmux in Git Bash (for example: pacman -S tmux), then reload VS Code."
+				? "Reopen this repository in VS Code Remote WSL and install tmux inside WSL. Native Windows support is experimental."
 				: "Install tmux with your system package manager, then reload VS Code.",
 		);
 	}

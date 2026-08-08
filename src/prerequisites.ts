@@ -1,5 +1,10 @@
 import * as vscode from "vscode";
-import { commandExists, findGitBash, isWindows } from "./utils/platform";
+import {
+	commandExists,
+	findGitBash,
+	isWindows,
+	tmuxFunctional,
+} from "./utils/platform";
 
 export class PrerequisiteChecker {
 	private static readonly REQUIRED_TOOLS = [
@@ -17,7 +22,10 @@ export class PrerequisiteChecker {
 
 		const missing: string[] = [];
 		for (const tool of PrerequisiteChecker.REQUIRED_TOOLS) {
-			if (!commandExists(tool.command)) {
+			if (
+				!commandExists(tool.command) ||
+				(tool.command === "tmux" && !tmuxFunctional())
+			) {
 				missing.push(tool.name);
 			}
 		}
@@ -46,14 +54,16 @@ export class PrerequisiteChecker {
 			const action = "Copy Install Command";
 			vscode.window
 				.showErrorMessage(
-					"Agent Space requires tmux. In Git Bash (as admin), run: pacman -S tmux — then reload VS Code.",
+					"Agent Space could not run tmux in the current Windows runtime. Recommended: reopen this repository in VS Code Remote WSL, then install tmux inside WSL.",
 					action,
 				)
 				.then((selected) => {
 					if (selected === action) {
-						vscode.env.clipboard.writeText("pacman -S tmux");
+						vscode.env.clipboard.writeText(
+							"Reopen this repository in VS Code Remote WSL, then install tmux inside WSL.",
+						);
 						vscode.window.showInformationMessage(
-							"Copied 'pacman -S tmux' to clipboard.",
+							"Copied the recommended WSL setup guidance to the clipboard.",
 						);
 					}
 				});
