@@ -166,6 +166,7 @@ their state from terminal output.
 
 ## GitHub
 
+- Roadmap: [docs/roadmap.md](docs/roadmap.md)
 - Original source: [github.com/paql4711/agent-space](https://github.com/paql4711/agent-space)
 - This fork is maintained as [github.com/ShiidoTech/agent-space](https://github.com/ShiidoTech/agent-space), with generic improvements contributed back upstream
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
