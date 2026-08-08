@@ -14,13 +14,7 @@ const MAX_TAIL_BYTES = 128 * 1024;
 export interface AgentAttentionSnapshot {
 	status: AgentAttentionStatus;
 	reason: string;
-	source:
-		| "lifecycle"
-		| "tmux"
-		| "claude"
-		| "codex"
-		| "opencode"
-		| "fallback";
+	source: "lifecycle" | "tmux" | "claude" | "codex" | "opencode" | "fallback";
 }
 
 interface ProviderSignal {

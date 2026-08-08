@@ -13,7 +13,10 @@ beforeEach(() => {
 	mockExecSync.mockReset();
 });
 
-function dbRow(message: Record<string, unknown>, gate?: Record<string, unknown>) {
+function dbRow(
+	message: Record<string, unknown>,
+	gate?: Record<string, unknown>,
+) {
 	return JSON.stringify([
 		{
 			message_data: JSON.stringify(message),
@@ -47,9 +50,9 @@ describe("OpenCode attention evidence", () => {
 			}),
 		);
 
-		expect(new OpenCodeSessionProvider().readAttention("ses_idle")?.status).toBe(
-			"idle",
-		);
+		expect(
+			new OpenCodeSessionProvider().readAttention("ses_idle")?.status,
+		).toBe("idle");
 	});
 
 	it("reports a live question tool as waiting_for_user", () => {
@@ -67,6 +70,12 @@ describe("OpenCode attention evidence", () => {
 		expect(
 			new OpenCodeSessionProvider().readAttention("ses_question")?.status,
 		).toBe("waiting_for_user");
+		expect(mockExecSync).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"message_id = (SELECT id FROM message WHERE session_id = 'ses_question'",
+			),
+			expect.any(Object),
+		);
 	});
 
 	it("reports an assistant message error as failed", () => {
@@ -78,13 +87,15 @@ describe("OpenCode attention evidence", () => {
 			}),
 		);
 
-		expect(new OpenCodeSessionProvider().readAttention("ses_failed")?.status).toBe(
-			"failed",
-		);
+		expect(
+			new OpenCodeSessionProvider().readAttention("ses_failed")?.status,
+		).toBe("failed");
 	});
 
 	it("queries only the exact safe session id", () => {
-		mockExecSync.mockReturnValue(dbRow({ role: "user", time: { created: 1000 } }));
+		mockExecSync.mockReturnValue(
+			dbRow({ role: "user", time: { created: 1000 } }),
+		);
 		const provider = new OpenCodeSessionProvider();
 		provider.readAttention("ses_exact-1");
 
