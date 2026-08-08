@@ -137,7 +137,7 @@ describe("CodingToolRegistry", () => {
 
 				expect(provider.capabilities.sessionNaming).toBe(true);
 				expect(provider.getAttentionSignal?.("local-session")).toEqual({
-					status: "waiting",
+					status: "idle",
 					evidence: "claude.result",
 				});
 			} finally {

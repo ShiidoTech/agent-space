@@ -373,7 +373,7 @@ describe("CodexSessionProvider", () => {
 			expect(
 				new CodexSessionProvider(tmpDir).readAttention("sess-attention"),
 			).toEqual({
-				status: "waiting",
+				status: "idle",
 				evidence: "codex.task_complete",
 			});
 		});
@@ -390,7 +390,7 @@ describe("CodexSessionProvider", () => {
 			expect(
 				new CodexSessionProvider(tmpDir).readAttention("sess-working"),
 			).toEqual({
-				status: "running",
+				status: "working",
 				evidence: "codex.task_started",
 			});
 		});
