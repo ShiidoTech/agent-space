@@ -562,8 +562,12 @@ body {
 	box-shadow: 0 0 0 0 rgba(106, 153, 85, 0.6);
 	animation: pulse-dot 2s ease-in-out infinite;
 }
-.agent-status-dot.idle {
+.agent-status-dot.waiting {
 	background: #569cd6;
+}
+.agent-status-dot.unknown {
+	background: var(--vscode-disabledForeground);
+	opacity: 0.8;
 }
 .agent-status-dot.stopped {
 	background: var(--vscode-descriptionForeground);

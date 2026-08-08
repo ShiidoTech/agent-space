@@ -603,7 +603,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					: "";
 			const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
 
-			let statusClass = "idle";
+			let statusClass = "unknown";
 			if (a.status === "running") statusClass = "running";
 			if (a.status === "stopped") statusClass = "stopped";
 			if (a.status === "done") statusClass = "done";

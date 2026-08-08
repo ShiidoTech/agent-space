@@ -1,6 +1,13 @@
 export type FeatureStatus = "active" | "done";
 export type GitAwareStatus = "new" | "modified" | "ahead" | "merged";
-export type AgentStatus = "running" | "idle" | "stopped" | "done" | "errored";
+export type AgentStatus =
+	| "running"
+	| "waiting"
+	| "unknown"
+	| "idle"
+	| "stopped"
+	| "done"
+	| "errored";
 export type IsolationMode = "shared" | "per-agent";
 
 export interface Feature {
@@ -40,6 +47,8 @@ export interface CodingTool {
 	family?: "claude" | "codex" | "opencode" | "generic";
 	sessionsDir?: string;
 	resumeCommand?: string;
+	/** Internal adapter. Never loaded from project/user configuration. */
+	provider?: import("./agents/providers/types").CodingAgentProvider;
 }
 
 export interface Agent {

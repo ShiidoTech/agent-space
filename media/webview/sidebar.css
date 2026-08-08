@@ -394,6 +394,15 @@ button {
 	will-change: opacity;
 }
 
+.status-dot.waiting {
+	background-color: #569cd6;
+}
+
+.status-dot.unknown {
+	background-color: var(--vscode-disabledForeground);
+	opacity: 0.8;
+}
+
 .status-dot.stopped {
 	background-color: var(--vscode-debugIcon-stopForeground);
 }

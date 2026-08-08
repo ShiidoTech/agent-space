@@ -25,6 +25,7 @@ export class TerminalController implements vscode.Disposable {
 	private terminalMetadata = new Map<vscode.Terminal, TerminalMetadata>();
 	private disposables: vscode.Disposable[] = [];
 	private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private sessionDiscoveredCallback?: () => void;
 
 	constructor(
 		private readonly projectManager: ProjectManager,
@@ -46,6 +47,10 @@ export class TerminalController implements vscode.Disposable {
 				}
 			}),
 		);
+	}
+
+	onSessionDiscovered(callback: () => void): void {
+		this.sessionDiscoveredCallback = callback;
 	}
 
 	createTerminal(
@@ -420,6 +425,7 @@ export class TerminalController implements vscode.Disposable {
 				const ctx = this.projectManager.findContextByFeatureId(feature.id);
 				ctx?.agentManager.updateAgentSessionId(agent.id, feature.id, sessionId);
 				this.projectManager.notifyChange();
+				this.sessionDiscoveredCallback?.();
 				return;
 			}
 			await new Promise((resolve) => setTimeout(resolve, 750));

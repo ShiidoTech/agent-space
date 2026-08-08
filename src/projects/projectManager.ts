@@ -9,7 +9,11 @@ import { ServiceManager } from "../services/serviceManager";
 import type { GlobalStore } from "../storage/globalStore";
 import { Store } from "../storage/store";
 import type { Feature, Project } from "../types";
-import { loadProjectConfig, resolveWorktreeBaseDir } from "./projectConfig";
+import {
+	loadProjectConfig,
+	type ProjectConfig,
+	resolveWorktreeBaseDir,
+} from "./projectConfig";
 
 export interface ProjectContext {
 	project: Project;
@@ -17,6 +21,7 @@ export interface ProjectContext {
 	featureManager: FeatureManager;
 	agentManager: AgentManager;
 	serviceManager: ServiceManager;
+	config: ProjectConfig;
 }
 
 export class ProjectManager {
@@ -255,7 +260,14 @@ export class ProjectManager {
 			this.featureToProject.set(feature.id, project.id);
 		}
 
-		return { project, store, featureManager, agentManager, serviceManager };
+		return {
+			project,
+			store,
+			featureManager,
+			agentManager,
+			serviceManager,
+			config,
+		};
 	}
 
 	killProjectSessions(

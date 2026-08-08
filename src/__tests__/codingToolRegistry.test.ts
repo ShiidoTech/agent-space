@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../utils/platform", () => ({
@@ -10,6 +13,7 @@ const mockCommandExists = vi.mocked(commandExists);
 
 import {
 	BUILTIN_CODING_TOOLS,
+	BUILTIN_PROVIDERS,
 	CodingToolRegistry,
 } from "../agents/codingToolRegistry";
 
@@ -93,6 +97,55 @@ describe("CodingToolRegistry", () => {
 		});
 	});
 
+	describe("provider capabilities", () => {
+		it("declares Hermes as launch-only until structured support is proven", () => {
+			const hermes = BUILTIN_PROVIDERS.find(
+				(provider) => provider.id === "hermes",
+			);
+			expect(hermes?.capabilities).toMatchObject({
+				launch: true,
+				resume: false,
+				sessionDiscovery: false,
+				sessionNaming: false,
+			});
+		});
+
+		it("keeps a local Claude launcher on its own session store", () => {
+			const configDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "claude-perso-registry-"),
+			);
+			try {
+				const projectsDir = path.join(configDir, "projects", "project");
+				fs.mkdirSync(projectsDir, { recursive: true });
+				fs.writeFileSync(
+					path.join(projectsDir, "local-session.jsonl"),
+					JSON.stringify({ type: "result" }),
+				);
+				mockConfig({
+					codingTools: [
+						{
+							id: "claude-perso",
+							name: "Claude perso",
+							command: "claude-perso",
+							family: "claude",
+							sessionsDir: configDir,
+						},
+					],
+				});
+				const tool = registry.resolveAgentTool("claude-perso");
+				const provider = registry.getProvider(tool);
+
+				expect(provider.capabilities.sessionNaming).toBe(true);
+				expect(provider.getAttentionSignal?.("local-session")).toEqual({
+					status: "waiting",
+					evidence: "claude.result",
+				});
+			} finally {
+				fs.rmSync(configDir, { recursive: true, force: true });
+			}
+		});
+	});
+
 	describe("getTool", () => {
 		it("finds a built-in tool by id", () => {
 			const tool = registry.getTool("copilot");
@@ -163,10 +216,29 @@ describe("CodingToolRegistry", () => {
 			expect(registry.getPreferredAvailableTool()?.id).toBe("copilot");
 		});
 
-		it("falls back to the first available tool when the default is missing", () => {
+		it("does not fall back when the configured default is missing", () => {
 			mockConfig({ defaultTool: "claude" });
 			mockCommandExists.mockImplementation((command) => command === "codex");
-			expect(registry.getPreferredAvailableTool()?.id).toBe("codex");
+			expect(registry.getPreferredAvailableTool()).toBeUndefined();
+		});
+
+		it("uses only the project allowlist and project default", () => {
+			mockCommandExists.mockImplementation(
+				(command) => command === "opencode" || command === "codex",
+			);
+			const config = {
+				agents: { enabled: ["opencode", "claude-perso"], default: "opencode" },
+			};
+			expect(registry.getAvailableTools(config).map((tool) => tool.id)).toEqual(
+				["opencode"],
+			);
+			expect(registry.getPreferredAvailableTool(config)?.id).toBe("opencode");
+			expect(
+				registry.getUnavailableTools(config).map((tool) => tool.id),
+			).toEqual([]);
+			expect(registry.getUnknownProjectAgentIds(config)).toEqual([
+				"claude-perso",
+			]);
 		});
 
 		it("returns undefined when no tools are available", () => {

@@ -780,7 +780,11 @@ export class HomePanel {
 		);
 
 		const activeAgents = agents.filter(
-			(a) => a.status === "running" || a.status === "idle",
+			(a) =>
+				a.status === "running" ||
+				a.status === "waiting" ||
+				a.status === "unknown" ||
+				a.status === "idle",
 		);
 		const erroredAgents = agents.filter((a) => a.status === "errored");
 		const doneAgents = agents.filter((a) => a.status === "done");
@@ -929,6 +933,10 @@ export class HomePanel {
 		const idx = allAgents.indexOf(agent);
 		const color = TERMINAL_COLOR_HEX[idx % TERMINAL_COLOR_HEX.length];
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+		const displayStatus = this.toolRegistry.resolveAttention(
+			tool,
+			agent.sessionId,
+		).status;
 		const defaultToolId = this.toolRegistry.getDefaultToolId();
 		const toolBadge =
 			tool.id !== defaultToolId
@@ -962,7 +970,7 @@ export class HomePanel {
 		return `
 		<div class="agent-panel ${isErrored ? "errored" : ""}" style="border-left: 2px solid ${color}">
 			<div class="agent-panel-header" id="agent-header-${agent.id}" onclick="toggleAgent('${agent.id}')">
-				<div class="agent-status-dot ${agent.status}"></div>
+				<div class="agent-status-dot ${displayStatus}"></div>
 				<span class="${nameClass}" title="${this.escapeHtml(agent.name)}">${this.escapeHtml(agent.name)}</span>
 				${toolBadge}
 				${errorBadge}
