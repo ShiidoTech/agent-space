@@ -940,6 +940,33 @@ export async function activate(
 	);
 
 	context.subscriptions.push(
+		vscode.commands.registerCommand("agentSpace.inspectWorktrees", () => {
+			const output = vscode.window.createOutputChannel(
+				"Agent Space Worktree Diagnostics",
+			);
+			output.clear();
+			for (const ctx of projectManager.getAllContexts()) {
+				output.appendLine(`Project: ${ctx.project.name}`);
+				const diagnostics = ctx.featureManager.inspectFeatureLifecycle();
+				if (diagnostics.length === 0) {
+					output.appendLine("  No persisted feature worktrees.");
+					continue;
+				}
+				for (const diagnostic of diagnostics) {
+					const branch = diagnostic.actualBranch
+						? ` actual=${diagnostic.actualBranch}`
+						: "";
+					output.appendLine(
+						`  ${diagnostic.status} ${diagnostic.featureId} declared=${diagnostic.declaredBranch}${branch} path=${diagnostic.featurePath}`,
+					);
+				}
+			}
+			output.appendLine("No Git or metadata changes were made.");
+			output.show(true);
+		}),
+	);
+
+	context.subscriptions.push(
 		vscode.commands.registerCommand(
 			"agentSpace.createPR",
 			async (featureIdArg?: string) => {

@@ -116,6 +116,12 @@
 				"icon": "$(sync)"
 			},
 			{
+				"command": "agentSpace.inspectWorktrees",
+				"title": "Inspect Feature Worktrees",
+				"category": "Agent Space",
+				"icon": "$(list-unordered)"
+			},
+			{
 				"command": "agentSpace.addProject",
 				"title": "Add Project",
 				"category": "Agent Space"
