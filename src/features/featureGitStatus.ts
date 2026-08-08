@@ -106,9 +106,9 @@ function computeGitStatusUncached(input: GitStatusInput): GitAwareStatus {
 			const moved = input.createdFromSha
 				? featureSha !== input.createdFromSha
 				: branchMovedSinceCreation(featureBranch, repoRoot);
-			if (moved !== false) {
-				// If git() didn't throw, feature is ancestor of base. Treat it as
-				// merged unless reflog proves the branch never moved from creation.
+			if (moved === true) {
+				// Only positive evidence that the feature branch moved supports
+				// classifying an ancestor branch as merged.
 				return "merged";
 			}
 		}
@@ -199,7 +199,7 @@ export async function computeGitStatusAsync(
 			const moved = createdFromSha
 				? featureSha !== createdFromSha
 				: await branchMovedSinceCreationAsync();
-			if (moved !== false) {
+			if (moved === true) {
 				result = "merged";
 				gitStatusCache.set(key, { result, timestamp: Date.now() });
 				return result;

@@ -63,7 +63,7 @@ describe("computeGitStatus", () => {
 		);
 	});
 
-	it("keeps the old merged behavior when reflog history is incomplete", () => {
+	it('returns "new" when reflog history is incomplete', () => {
 		mockExecSync
 			.mockReturnValueOnce("")
 			.mockReturnValueOnce("aaa111\n")
@@ -71,6 +71,17 @@ describe("computeGitStatus", () => {
 			.mockReturnValueOnce("")
 			.mockReturnValueOnce("bbb222\n")
 			.mockReturnValueOnce("0\n");
+
+		expect(computeGitStatus(baseInput)).toBe("new");
+	});
+
+	it('returns "merged" when legacy reflog proves branch movement', () => {
+		mockExecSync
+			.mockReturnValueOnce("")
+			.mockReturnValueOnce("aaa111\n")
+			.mockReturnValueOnce("bbb222\n")
+			.mockReturnValueOnce("")
+			.mockReturnValueOnce("bbb222\naaa111\n");
 
 		expect(computeGitStatus(baseInput)).toBe("merged");
 	});
