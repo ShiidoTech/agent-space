@@ -21,6 +21,11 @@ interface ProviderSignal {
 	reason: string;
 }
 
+export interface AgentAttentionResolverOptions {
+	codexProvider?: CodexSessionProvider;
+	claudeProviderFactory?: (tool: CodingTool) => ClaudeSessionProvider;
+}
+
 /**
  * Resolve the human-attention state of an agent from current evidence.
  *
@@ -31,13 +36,16 @@ interface ProviderSignal {
  * unknown instead of guessing.
  */
 export class AgentAttentionResolver {
-	private readonly codexProvider = new CodexSessionProvider();
+	private readonly codexProvider: CodexSessionProvider;
 	private readonly claudeProviders = new Map<string, ClaudeSessionProvider>();
 
 	constructor(
 		private readonly tmux: TmuxIntegration,
 		private readonly toolRegistry: CodingToolRegistry,
-	) {}
+		private readonly options: AgentAttentionResolverOptions = {},
+	) {
+		this.codexProvider = options.codexProvider ?? new CodexSessionProvider();
+	}
 
 	resolve(agent: Agent): AgentAttentionSnapshot {
 		if (agent.status === "done") {
@@ -229,13 +237,20 @@ export class AgentAttentionResolver {
 	}
 
 	private getClaudeProvider(tool: CodingTool): ClaudeSessionProvider {
+		if (this.options.claudeProviderFactory) {
+			return this.options.claudeProviderFactory(tool);
+		}
+
 		const root = tool.sessionsDir ? expandHome(tool.sessionsDir) : "<default>";
 		const key = `${tool.id}:${root}`;
 		const existing = this.claudeProviders.get(key);
 		if (existing) return existing;
 
 		const provider = tool.sessionsDir
-			? new ClaudeSessionProvider(path.join(expandHome(tool.sessionsDir), "projects"), tool.id)
+			? new ClaudeSessionProvider(
+					path.join(expandHome(tool.sessionsDir), "projects"),
+					tool.id,
+				)
 			: new ClaudeSessionProvider(undefined, tool.id);
 		this.claudeProviders.set(key, provider);
 		return provider;
