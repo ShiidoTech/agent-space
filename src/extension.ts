@@ -364,7 +364,7 @@ export async function activate(
 			async (projectId?: string) => {
 				if (!projectId) return;
 				const panel = ensureHomePanel();
-				panel.showProject(projectId);
+				panel.showProjectSettings(projectId);
 				await workspaceIsolation.enter();
 			},
 		),

@@ -483,7 +483,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				.map((ctx) => this.renderProjectSection(ctx, statusMap))
 				.join("");
 			body = `
-				<button class="btn-home" onclick="send('openHome')">Agent Space Home</button>
 				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				${sections}`;
 		}
