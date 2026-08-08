@@ -110,6 +110,11 @@
 				"category": "Agent Space"
 			},
 			{
+				"command": "agentSpace.editProjectBaseBranch",
+				"title": "Edit Project Base Branch",
+				"category": "Agent Space"
+			},
+			{
 				"command": "agentSpace.removeProject",
 				"title": "Remove Project",
 				"category": "Agent Space"

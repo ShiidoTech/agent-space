@@ -300,6 +300,9 @@ export class HomePanel {
 			case "addProject":
 				run("agentSpace.addProject");
 				break;
+			case "editProjectBaseBranch":
+				run("agentSpace.editProjectBaseBranch", message.projectId);
+				break;
 			// Activity
 			case "requestActivity":
 				this.sendActivityForAgent(message.agentId as string);
@@ -735,11 +738,22 @@ export class HomePanel {
 			const projectRows = contexts
 				.map((ctx) => {
 					const featureCount = ctx.featureManager.getFeatures().length;
+					const explicitBaseBranch = ctx.config.baseBranch?.trim();
+					const effectiveBaseBranch = ctx.featureManager.getBaseBranchName();
+					const branchKinds = ctx.featureManager.getBranchKinds();
+					const defaultBranchKind = ctx.featureManager.getDefaultBranchKind();
 					return `
 					<tr>
 						<td>${this.escapeHtml(ctx.project.name)}</td>
 						<td class="project-path-cell" title="${this.escapeHtml(ctx.project.repoPath)}">${this.escapeHtml(ctx.project.repoPath)}</td>
+						<td>
+							<strong>${this.escapeHtml(effectiveBaseBranch)}</strong>
+							<div class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</div>
+						</td>
+						<td>${this.escapeHtml(branchKinds.join(", ") || "Default")}${defaultBranchKind ? ` <span class="project-setting-source">(default: ${this.escapeHtml(defaultBranchKind)})</span>` : ""}</td>
+						<td class="project-worktree-cell">${this.escapeHtml(ctx.featureManager.getWorktreeBase())}</td>
 						<td>${featureCount}</td>
+						<td><button class="project-settings-btn" onclick="editProjectBaseBranch('${ctx.project.id}')">Edit base</button></td>
 					</tr>`;
 				})
 				.join("");
@@ -768,7 +782,7 @@ export class HomePanel {
 				<div class="section-label">Projects</div>
 				<table class="projects-table">
 					<thead>
-						<tr><th>Name</th><th>Path</th><th>Features</th></tr>
+						<tr><th>Name</th><th>Path</th><th>Base branch</th><th>Branch kinds</th><th>Worktrees</th><th>Features</th><th></th></tr>
 					</thead>
 					<tbody>${projectRows}</tbody>
 				</table>

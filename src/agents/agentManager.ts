@@ -22,7 +22,7 @@ export class AgentManager {
 		private readonly repoRoot: string,
 		private readonly worktreeBase: string,
 		private readonly tmux: TmuxIntegration,
-		private readonly config: ProjectConfig = {},
+		private config: ProjectConfig = {},
 		private readonly toolRegistry: CodingToolRegistry = new CodingToolRegistry(),
 	) {
 		this.attentionResolver = new AgentAttentionResolver(tmux, toolRegistry);
@@ -402,5 +402,10 @@ export class AgentManager {
 		}
 		this.cachedDefaultBranch = branch;
 		return branch;
+	}
+
+	setProjectConfig(config: ProjectConfig): void {
+		this.config = config;
+		this.cachedDefaultBranch = undefined;
 	}
 }

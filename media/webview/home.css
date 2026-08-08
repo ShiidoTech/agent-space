@@ -220,6 +220,28 @@ body {
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+.project-setting-source {
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+	margin-top: 2px;
+}
+.project-worktree-cell {
+	font-family: var(--vscode-editor-font-family);
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
+.project-settings-btn {
+	padding: 4px 8px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 3px;
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	font-size: 11px;
+	cursor: pointer;
+}
+.project-settings-btn:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
 
 /* ── Empty Welcome State ─────────────────────────────── */
 .empty-welcome {

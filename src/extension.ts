@@ -1,3 +1,5 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
@@ -24,6 +26,7 @@ import { ContextOnlyIsolation } from "./workspace/agentWorkspaceIsolation";
 
 let activeFeatureId: string | null = null;
 let featureActivationInProgress = false;
+const execFileAsync = promisify(execFileCallback);
 
 /**
  * Collect every reason why a feature (and its per-agent worktrees) cannot be
@@ -947,6 +950,47 @@ export async function activate(
 		}),
 	);
 
+	// Command: Edit project base branch
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.editProjectBaseBranch",
+			async (projectId?: string) => {
+				if (!projectId) return;
+				const context = projectManager.getContext(projectId);
+				if (!context) return;
+
+				const current = context.config.baseBranch?.trim() ?? "";
+				const value = await vscode.window.showInputBox({
+					title: `Base branch for ${context.project.name}`,
+					value: current || context.featureManager.getBaseBranchName(),
+					prompt:
+						"Enter a local or origin branch. Leave empty to use the current checkout.",
+					placeHolder: "main",
+					validateInput: async (input) => {
+						const branch = input.trim();
+						if (!branch) return undefined;
+						return (await branchExistsAsync(context.project.repoPath, branch))
+							? undefined
+							: "Branch not found locally or on origin.";
+					},
+				});
+				if (value === undefined) return;
+
+				const config = projectManager.updateProjectConfig(projectId, {
+					baseBranch: value.trim() || undefined,
+				});
+				if (config) {
+					const effective = projectManager
+						.getContext(projectId)
+						?.featureManager.getBaseBranchName();
+					vscode.window.showInformationMessage(
+						`Base branch for ${context.project.name}: ${effective}`,
+					);
+				}
+			},
+		),
+	);
+
 	// Command: Remove Project
 	context.subscriptions.push(
 		vscode.commands.registerCommand("agentSpace.removeProject", async () => {
@@ -1006,4 +1050,21 @@ export function deactivate(): void {}
 
 async function isGitRepoAsync(cwd: string): Promise<boolean> {
 	return execAsyncSilent("git rev-parse --is-inside-work-tree", { cwd });
+}
+
+async function branchExistsAsync(
+	cwd: string,
+	branch: string,
+): Promise<boolean> {
+	for (const ref of [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]) {
+		try {
+			await execFileAsync("git", ["show-ref", "--verify", "--quiet", ref], {
+				cwd,
+			});
+			return true;
+		} catch {
+			// Try the next ref.
+		}
+	}
+	return false;
 }
