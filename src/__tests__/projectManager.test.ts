@@ -105,6 +105,33 @@ describe("ProjectManager", () => {
 		});
 	});
 
+	describe("updateProjectConfig", () => {
+		it("persists repository conventions and refreshes the context", () => {
+			const project = manager.addProject(tmpDir);
+			const context = manager.getContext(project.id);
+			expect(context).toBeDefined();
+
+			manager.updateProjectConfig(project.id, {
+				baseBranch: "develop",
+				branchKinds: ["feature", "fix"],
+			});
+
+			expect(context?.config.baseBranch).toBe("develop");
+			expect(context?.featureManager.getBaseBranchName()).toBe("develop");
+			expect(
+				JSON.parse(
+					fs.readFileSync(
+						path.join(tmpDir, ".agentspace", "config.json"),
+						"utf-8",
+					),
+				),
+			).toMatchObject({
+				baseBranch: "develop",
+				branchKinds: ["feature", "fix"],
+			});
+		});
+	});
+
 	describe("getAllContexts", () => {
 		it("returns contexts for all projects", () => {
 			const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), "pm-test-2-"));

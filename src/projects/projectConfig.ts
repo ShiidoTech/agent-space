@@ -96,6 +96,29 @@ export function loadProjectConfig(repoRoot: string): ProjectConfig {
 	}
 }
 
+/** Persist shareable project conventions in the repository config file. */
+export function saveProjectConfig(
+	repoRoot: string,
+	updates: Partial<ProjectConfig>,
+): ProjectConfig {
+	const dir = path.join(repoRoot, CONFIG_DIR_NAME);
+	const file = path.join(dir, CONFIG_FILE_NAME);
+	const current = loadProjectConfig(repoRoot);
+	const config = { ...current, ...updates } as ProjectConfig;
+
+	for (const key of Object.keys(config) as Array<keyof ProjectConfig>) {
+		const value = config[key];
+		if (value === undefined || (typeof value === "string" && !value.trim())) {
+			delete config[key];
+		}
+	}
+
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+	cachedConfig = undefined;
+	return config;
+}
+
 /** Resolve the effective worktree base for a project. */
 export function resolveWorktreeBaseDir(
 	repoRoot: string,

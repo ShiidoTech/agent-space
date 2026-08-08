@@ -1,3 +1,5 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
@@ -24,6 +26,7 @@ import { ContextOnlyIsolation } from "./workspace/agentWorkspaceIsolation";
 
 let activeFeatureId: string | null = null;
 let featureActivationInProgress = false;
+const execFileAsync = promisify(execFileCallback);
 
 /**
  * Collect every reason why a feature (and its per-agent worktrees) cannot be
@@ -947,6 +950,76 @@ export async function activate(
 		}),
 	);
 
+	// Command: Edit project base branch
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.editProjectBaseBranch",
+			async (projectId?: string) => {
+				let selectedProjectId = projectId;
+				if (!selectedProjectId) {
+					const projects = projectManager.getProjects();
+					if (projects.length === 0) {
+						vscode.window.showInformationMessage("No projects registered.");
+						return;
+					}
+					const pick = await vscode.window.showQuickPick(
+						projects.map((project) => ({
+							label: project.name,
+							description: project.repoPath,
+							id: project.id,
+						})),
+						{ placeHolder: "Select project to edit" },
+					);
+					if (!pick) return;
+					selectedProjectId = pick.id;
+				}
+
+				const context = projectManager.getContext(selectedProjectId);
+				if (!context) return;
+
+				const current = context.config.baseBranch?.trim() ?? "";
+				const value = await vscode.window.showInputBox({
+					title: `Base branch for ${context.project.name}`,
+					value: current || context.featureManager.getBaseBranchName(),
+					prompt:
+						"Enter a local or origin branch. Leave empty to use the current checkout.",
+					placeHolder: "main",
+					validateInput: async (input) => {
+						const branch = input.trim();
+						if (!branch) return undefined;
+						return (await branchExistsAsync(context.project.repoPath, branch))
+							? undefined
+							: "Branch not found locally or on origin.";
+					},
+				});
+				if (value === undefined) return;
+
+				const branch = value.trim();
+				if (
+					branch &&
+					!(await ensureLocalBranchAsync(context.project.repoPath, branch))
+				) {
+					vscode.window.showErrorMessage(
+						`Branch "${branch}" is no longer available locally or on origin.`,
+					);
+					return;
+				}
+
+				const config = projectManager.updateProjectConfig(selectedProjectId, {
+					baseBranch: branch || undefined,
+				});
+				if (config) {
+					const effective = projectManager
+						.getContext(selectedProjectId)
+						?.featureManager.getBaseBranchName();
+					vscode.window.showInformationMessage(
+						`Base branch for ${context.project.name}: ${effective}`,
+					);
+				}
+			},
+		),
+	);
+
 	// Command: Remove Project
 	context.subscriptions.push(
 		vscode.commands.registerCommand("agentSpace.removeProject", async () => {
@@ -1006,4 +1079,51 @@ export function deactivate(): void {}
 
 async function isGitRepoAsync(cwd: string): Promise<boolean> {
 	return execAsyncSilent("git rev-parse --is-inside-work-tree", { cwd });
+}
+
+async function branchExistsAsync(
+	cwd: string,
+	branch: string,
+): Promise<boolean> {
+	return (await getBranchRefAsync(cwd, branch)) !== undefined;
+}
+
+async function ensureLocalBranchAsync(
+	cwd: string,
+	branch: string,
+): Promise<boolean> {
+	const ref = await getBranchRefAsync(cwd, branch);
+	if (!ref) return false;
+	if (ref === "local") return true;
+
+	try {
+		await execFileAsync(
+			"git",
+			["branch", "--track", branch, `refs/remotes/origin/${branch}`],
+			{ cwd },
+		);
+		return true;
+	} catch {
+		return (await getBranchRefAsync(cwd, branch)) === "local";
+	}
+}
+
+async function getBranchRefAsync(
+	cwd: string,
+	branch: string,
+): Promise<"local" | "remote" | undefined> {
+	for (const [kind, ref] of [
+		["local", `refs/heads/${branch}`],
+		["remote", `refs/remotes/origin/${branch}`],
+	] as const) {
+		try {
+			await execFileAsync("git", ["show-ref", "--verify", "--quiet", ref], {
+				cwd,
+			});
+			return kind;
+		} catch {
+			// Try the next ref.
+		}
+	}
+	return undefined;
 }
