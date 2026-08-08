@@ -71,6 +71,13 @@ export class FeatureManager {
 		return this.config.defaultBranchKind;
 	}
 
+	/** Commands declared by the project for explicit worktree setup. */
+	getBootstrapCommands(): string[] {
+		return (this.config.bootstrapCommands ?? [])
+			.map((command) => command.trim())
+			.filter(Boolean);
+	}
+
 	setProjectConfig(config: ProjectConfig): void {
 		this.config = config;
 		this.cachedBaseBranch = undefined;

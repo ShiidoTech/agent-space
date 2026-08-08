@@ -23,6 +23,8 @@ export interface ProjectConfig {
 	branchKinds?: string[];
 	defaultBranchKind?: string;
 	worktreesDir?: string;
+	/** Explicit shell commands offered for manual setup of new worktrees. */
+	bootstrapCommands?: string[];
 	agents?: {
 		enabled?: string[];
 		default?: string;

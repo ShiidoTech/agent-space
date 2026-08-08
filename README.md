@@ -122,9 +122,18 @@ Launch package scripts such as dev servers and watch tasks, or open an interacti
 
 ### Project-Scoped Configuration
 
-Some repositories do not branch off `main`. A `.agentspace/config.json` at the repository root lets a project declare the real **base branch**, the **branch kinds** offered at feature creation, and a dedicated **worktrees directory** — so Agent Space branches and creates worktrees where the project actually works.
+Some repositories do not branch off `main`. A `.agentspace/config.json` at the repository root lets a project declare the real **base branch**, the **branch kinds** offered at feature creation, a dedicated **worktrees directory**, and explicit **bootstrap commands** for setting up a new worktree — so Agent Space branches and creates worktrees where the project actually works.
 
-This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It can also curate providers with `agents.enabled` and `agents.default`; when present, the allowlist is the only set shown by Add Agent. It is not implicitly gitignored. User-local values — a personal CLI profile, a private sessions directory, machine-specific `env` — do not belong here: declare those via `agentSpace.codingTools` in your user settings, or in workspace settings you keep explicitly untracked (e.g. a gitignored `.vscode/settings.json`).
+This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It can also curate providers with `agents.enabled` and `agents.default`; when present, the allowlist is the only set shown by Add Agent. Bootstrap commands run only when explicitly invoked through `Agent Space: Bootstrap Feature Worktree`, in the feature worktree, with output visible in a dedicated terminal. They are retryable and are not run silently during feature creation. It is not implicitly gitignored. User-local values — a personal CLI profile, a private sessions directory, machine-specific `env` — do not belong here: declare those via `agentSpace.codingTools` in your user settings, or in workspace settings you keep explicitly untracked (e.g. a gitignored `.vscode/settings.json`).
+
+Example:
+
+```json
+{
+  "baseBranch": "develop",
+  "bootstrapCommands": ["bun install", "bun run generate"]
+}
+```
 
 ### Custom Coding Tools
 
@@ -149,6 +158,7 @@ All commands are available from the Command Palette.
 | `Agent Space: Add Service` | Start an interactive terminal or run a package script in a managed terminal |
 | `Agent Space: Create Pull Request` | Push the branch and open PR creation |
 | `Agent Space: Open Workspace` | Open the feature worktree in a new VS Code window and focus Source Control |
+| `Agent Space: Bootstrap Feature Worktree` | Run the project-declared setup commands visibly in the selected feature worktree |
 | `Agent Space: Open Feature Home` | Open the feature home view in the current window |
 | `Agent Space: Delete Feature` | Remove the feature, worktree, and agent data |
 | `Agent Space: Open in File Explorer` | Open the feature worktree in a new VS Code window |

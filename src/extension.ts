@@ -894,6 +894,53 @@ export async function activate(
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
+			"agentSpace.bootstrapFeature",
+			async (featureIdArg?: string) => {
+				let featureId = featureIdArg ?? activeFeatureId;
+				if (!featureId) {
+					const features = projectManager.getAllContexts().flatMap((ctx) =>
+						ctx.featureManager.getFeatures().map((feature) => ({
+							label: `${ctx.project.name} / ${feature.name}`,
+							description: feature.worktreePath,
+							featureId: feature.id,
+						})),
+					);
+					const picked = await vscode.window.showQuickPick(features, {
+						placeHolder: "Select a feature worktree to bootstrap",
+					});
+					if (!picked) return;
+					featureId = picked.featureId;
+				}
+
+				const resolved = projectManager.resolveFeature(featureId);
+				if (!resolved) return;
+				const commands = resolved.ctx.featureManager.getBootstrapCommands();
+				if (commands.length === 0) {
+					vscode.window.showInformationMessage(
+						"No bootstrapCommands are configured for this project.",
+					);
+					return;
+				}
+
+				const terminal = vscode.window.createTerminal({
+					name: `Bootstrap: ${resolved.feature.name}`,
+					cwd: resolved.feature.worktreePath,
+				});
+				terminal.show(true);
+				terminal.sendText("set -e");
+				terminal.sendText(
+					`printf '\\n[Agent Space] Bootstrap started in ${resolved.feature.worktreePath.replace(/'/g, "'\\''")}\\n'`,
+				);
+				for (const command of commands) terminal.sendText(command);
+				terminal.sendText(
+					"printf '\\n[Agent Space] Bootstrap commands finished. Review output above.\\n'",
+				);
+			},
+		),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
 			"agentSpace.createPR",
 			async (featureIdArg?: string) => {
 				const featureId = featureIdArg ?? activeFeatureId;
