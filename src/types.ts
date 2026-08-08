@@ -1,6 +1,13 @@
 export type FeatureStatus = "active" | "done";
 export type GitAwareStatus = "new" | "modified" | "ahead" | "merged";
 export type AgentStatus = "running" | "idle" | "stopped" | "done" | "errored";
+export type AgentAttentionStatus =
+	| "working"
+	| "waiting_for_user"
+	| "idle"
+	| "failed"
+	| "done"
+	| "unknown";
 export type IsolationMode = "shared" | "per-agent";
 
 export interface Feature {
@@ -50,7 +57,16 @@ export interface Agent {
 	worktreePath?: string;
 	tmuxSession?: string;
 	toolId?: string;
+	/** Persisted lifecycle state. Do not use this as a precise activity signal. */
 	status: AgentStatus;
+	/**
+	 * Derived, provider-neutral attention state. This is deliberately not
+	 * persisted: it is recomputed from current tmux/session evidence so a
+	 * restart cannot leave a stale "working" or "waiting" flag behind.
+	 */
+	attentionStatus?: AgentAttentionStatus;
+	/** Human-readable evidence summary for tooltips/debugging; never provider payload text. */
+	attentionReason?: string;
 	hasStarted?: boolean;
 	lastError?: string;
 	lastExitCode?: number | null;
