@@ -13,6 +13,7 @@ import {
 	loadProjectConfig,
 	type ProjectConfig,
 	resolveWorktreeBaseDir,
+	saveProjectConfig,
 } from "./projectConfig";
 
 export interface ProjectContext {
@@ -85,6 +86,26 @@ export class ProjectManager {
 		this.globalStore.saveProjects(projects);
 		this.contexts.delete(projectId);
 		this.notifyChange();
+	}
+
+	updateProjectConfig(
+		projectId: string,
+		updates: Partial<ProjectConfig>,
+	): ProjectConfig | undefined {
+		const project = this.getProjects().find(
+			(candidate) => candidate.id === projectId,
+		);
+		if (!project) return undefined;
+
+		const config = saveProjectConfig(project.repoPath, updates);
+		const context = this.contexts.get(projectId);
+		if (context) {
+			context.config = config;
+			context.featureManager.setProjectConfig(config);
+			context.agentManager.setProjectConfig(config);
+		}
+		this.notifyChange();
+		return config;
 	}
 
 	// ── Cross-window sync ────────────────────────────────

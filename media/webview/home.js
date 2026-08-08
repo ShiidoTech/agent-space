@@ -23,6 +23,11 @@ function addProject() {
 	send("addProject");
 }
 
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function editProjectBaseBranch(projectId) {
+	send("editProjectBaseBranch", { projectId });
+}
+
 // -- Feature Home Actions ------------------------------------
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function goHome() {

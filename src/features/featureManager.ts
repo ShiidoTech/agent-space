@@ -28,7 +28,7 @@ export class FeatureManager {
 		private readonly store: Store,
 		private readonly repoRoot: string,
 		private readonly worktreeBase: string,
-		private readonly config: ProjectConfig = {},
+		private config: ProjectConfig = {},
 	) {
 		this.features = store.loadFeatures();
 	}
@@ -69,6 +69,11 @@ export class FeatureManager {
 	/** Default branch kind, if any is declared by the project. */
 	getDefaultBranchKind(): string | undefined {
 		return this.config.defaultBranchKind;
+	}
+
+	setProjectConfig(config: ProjectConfig): void {
+		this.config = config;
+		this.cachedBaseBranch = undefined;
 	}
 
 	private getBaseBranch(): string {
