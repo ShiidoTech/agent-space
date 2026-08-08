@@ -120,6 +120,11 @@
 				"category": "Agent Space"
 			},
 			{
+				"command": "agentSpace.doctor",
+				"title": "Doctor",
+				"category": "Agent Space"
+			},
+			{
 				"command": "agentSpace.reopenAgent",
 				"title": "Reopen Agent",
 				"category": "Agent Space"
