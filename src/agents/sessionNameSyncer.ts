@@ -42,9 +42,9 @@ export class SessionNameSyncer {
 		if (!this.projectManager) return;
 
 		for (const ctx of this.projectManager.getAllContexts()) {
-			for (const feature of this.getManagedFeatures(ctx)) {
-				for (const agent of ctx.agentManager.getAgents(feature.id)) {
-					this.syncAgent(ctx, feature.id, agent);
+			for (const featureId of this.getManagedFeatureIds(ctx)) {
+				for (const agent of ctx.agentManager.getAgents(featureId)) {
+					this.syncAgent(ctx, featureId, agent);
 				}
 			}
 		}
@@ -54,13 +54,13 @@ export class SessionNameSyncer {
 		if (!this.projectManager) return;
 
 		for (const ctx of this.projectManager.getAllContexts()) {
-			for (const feature of this.getManagedFeatures(ctx)) {
+			for (const featureId of this.getManagedFeatureIds(ctx)) {
 				const agent = ctx.agentManager
-					.getAgents(feature.id)
+					.getAgents(featureId)
 					.find((candidate) => candidate.id === agentId);
 				if (!agent) continue;
 
-				this.syncAgent(ctx, feature.id, agent);
+				this.syncAgent(ctx, featureId, agent);
 				return;
 			}
 		}
@@ -94,10 +94,10 @@ export class SessionNameSyncer {
 		if (!this.projectManager) return;
 
 		for (const ctx of this.projectManager.getAllContexts()) {
-			for (const feature of this.getManagedFeatures(ctx)) {
-				for (const agent of ctx.agentManager.getAgents(feature.id)) {
+			for (const featureId of this.getManagedFeatureIds(ctx)) {
+				for (const agent of ctx.agentManager.getAgents(featureId)) {
 					if (!this.isUnnamed(agent.name)) continue;
-					this.syncAgent(ctx, feature.id, agent);
+					this.syncAgent(ctx, featureId, agent);
 				}
 			}
 		}
@@ -125,11 +125,12 @@ export class SessionNameSyncer {
 		}
 	}
 
-	private getManagedFeatures(ctx: ProjectContext) {
-		return [
-			ctx.featureManager.getBaseFeature(ctx.project.id),
-			...ctx.featureManager.getFeatures(),
-		];
+	private getManagedFeatureIds(ctx: ProjectContext): string[] {
+		const baseFeatureId = ctx.featureManager.getBaseFeature(ctx.project.id).id;
+		// Name synchronization only needs stable feature ids. Read the persisted
+		// feature list directly so the 15s retry loop never triggers Git branch
+		// reconciliation or any other worktree side effect.
+		return [baseFeatureId, ...ctx.store.loadFeatures().map((feature) => feature.id)];
 	}
 
 	private stopPolling(): void {
