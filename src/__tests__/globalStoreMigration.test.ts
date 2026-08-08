@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { migrateLegacyExtensionStorage } from "../storage/globalStore";
+import {
+	GlobalStore,
+	migrateLegacyExtensionStorage,
+} from "../storage/globalStore";
 
 const tempDirs: string[] = [];
 
@@ -72,6 +75,22 @@ describe("migrateLegacyExtensionStorage", () => {
 		const currentDir = path.join(root, "ShiidoTech.agent-space");
 
 		expect(migrateLegacyExtensionStorage(currentDir)).toBeNull();
+		expect(fs.existsSync(currentDir)).toBe(false);
+	});
+
+	it("can read without migrating legacy storage", () => {
+		const root = makeStorageRoot();
+		const legacyDir = path.join(root, "paql4711.agent-space");
+		const currentDir = path.join(root, "ShiidoTech.agent-space");
+		fs.mkdirSync(legacyDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(legacyDir, "projects.json"),
+			JSON.stringify([{ id: "legacy-project" }]),
+		);
+
+		const store = new GlobalStore(currentDir, { migrateLegacy: false });
+
+		expect(store.getProjects()).toEqual([]);
 		expect(fs.existsSync(currentDir)).toBe(false);
 	});
 });
