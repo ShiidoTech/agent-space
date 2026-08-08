@@ -20,7 +20,13 @@ import type {
 	ProjectManager,
 } from "../projects/projectManager";
 import type { ServiceManager } from "../services/serviceManager";
-import type { Agent, Feature, GitAwareStatus, Service } from "../types";
+import type {
+	Agent,
+	AgentAttentionStatus,
+	Feature,
+	GitAwareStatus,
+	Service,
+} from "../types";
 import type { FeatureManager } from "./featureManager";
 
 function gitStatusLabel(status: GitAwareStatus): string {
@@ -33,6 +39,23 @@ function gitStatusLabel(status: GitAwareStatus): string {
 			return "Ahead";
 		case "merged":
 			return "Merged";
+	}
+}
+
+function attentionStatusLabel(status: AgentAttentionStatus): string {
+	switch (status) {
+		case "working":
+			return "Working";
+		case "waiting_for_user":
+			return "Waiting for you";
+		case "idle":
+			return "Idle";
+		case "failed":
+			return "Failed";
+		case "done":
+			return "Done";
+		case "unknown":
+			return "Unknown";
 	}
 }
 
@@ -211,6 +234,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				id: string;
 				name: string;
 				status: string;
+				attentionStatus?: AgentAttentionStatus;
+				attentionReason?: string;
 				toolId?: string;
 				lastError?: string;
 			}
@@ -248,6 +273,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 							id: a.id,
 							name: a.name,
 							status: a.status,
+							attentionStatus: a.attentionStatus,
+							attentionReason: a.attentionReason,
 							toolId: a.toolId,
 							lastError: a.lastError,
 						})),
@@ -272,6 +299,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 							id: a.id,
 							name: a.name,
 							status: a.status,
+							attentionStatus: a.attentionStatus,
+							attentionReason: a.attentionReason,
 							toolId: a.toolId,
 							lastError: a.lastError,
 						})),
@@ -298,6 +327,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	startPolling(): void {
 		this.stopPolling();
+		this.sendUpdate().catch(() => {});
 		this._pollingTimer = setInterval(() => {
 			this.sendUpdate().catch(() => {});
 		}, 15_000);
@@ -453,6 +483,17 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${cssUri}">
+<style>
+.attention-badge { margin-left: 6px; padding: 1px 5px; border-radius: 8px; font-size: 9px; font-weight: 600; white-space: nowrap; color: var(--vscode-descriptionForeground); background: var(--vscode-button-secondaryBackground); }
+.attention-badge.attention-working { color: var(--vscode-testing-iconPassed); }
+.attention-badge.attention-waiting_for_user { color: var(--vscode-notificationsWarningIcon-foreground); background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent); }
+.attention-badge.attention-failed { color: var(--vscode-errorForeground); }
+.status-dot.working { background-color: var(--vscode-testing-iconPassed); animation: pulse-green 2s ease-in-out infinite; }
+.status-dot.waiting_for_user { background-color: var(--vscode-notificationsWarningIcon-foreground); box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 18%, transparent); }
+.status-dot.failed { background-color: var(--vscode-errorForeground); }
+.status-dot.idle, .status-dot.unknown { background-color: var(--vscode-disabledForeground); }
+.status-dot.done { background-color: var(--vscode-disabledForeground); opacity: .5; }
+</style>
 </head>
 <body>
 	${body}
@@ -595,6 +636,12 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const activeAgents = agents.filter((a) => a.status !== "done");
 		const doneAgents = agents.filter((a) => a.status === "done");
 
+		const renderAttentionBadge = (a: Agent) => {
+			const attention = a.attentionStatus ?? "unknown";
+			const reason = a.attentionReason ?? "No current attention evidence";
+			return `<span class="attention-badge attention-${attention}" data-attention-badge="${a.id}" title="${this.escapeHtml(reason)}">${attentionStatusLabel(attention)}</span>`;
+		};
+
 		const renderAgentCard = (a: Agent, i: number) => {
 			const tool = this.toolRegistry.resolveAgentTool(a.toolId);
 			const toolLabel =
@@ -602,24 +649,19 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					? ` &middot; ${this.escapeHtml(tool.name)}`
 					: "";
 			const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
-
-			let statusClass = "idle";
-			if (a.status === "running") statusClass = "running";
-			if (a.status === "stopped") statusClass = "stopped";
-			if (a.status === "done") statusClass = "done";
-			if (a.status === "errored") statusClass = "errored";
+			const attention = a.attentionStatus ?? "unknown";
 			const errorNote = a.lastError
 				? `<div class="agent-error-note" title="${this.escapeHtml(a.lastError)}">${this.escapeHtml(a.lastError)}</div>`
 				: "";
 
 			return `
-		<div class="agent-card ${statusClass}" data-agent-id="${a.id}"
+		<div class="agent-card ${a.status}" data-agent-id="${a.id}"
 			onclick="focusAgent(event, '${feature.id}', '${a.id}')"
 			oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">
             <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
-            <div class="status-dot ${statusClass}"></div>
+            <div class="status-dot ${attention}" data-attention-dot="${a.id}"></div>
 			<div class="agent-copy">
-				<span class="agent-name" title="${this.escapeHtml(a.name)}">${this.escapeHtml(a.name)}<span class="agent-tool">${toolLabel}</span></span>
+				<span class="agent-name" title="${this.escapeHtml(a.name)}">${this.escapeHtml(a.name)}<span class="agent-tool">${toolLabel}</span>${renderAttentionBadge(a)}</span>
 				${errorNote}
 			</div>
 		</div>`;
@@ -638,8 +680,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					return `
 		<div class="agent-card done" data-agent-id="${a.id}" oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">
             <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
-            <div class="status-dot done"></div>
-			<span class="agent-name">${this.escapeHtml(a.name)}</span>
+            <div class="status-dot done" data-attention-dot="${a.id}"></div>
+			<span class="agent-name">${this.escapeHtml(a.name)}${renderAttentionBadge(a)}</span>
 			<button class="action-btn" onclick="reopenAgent(event, '${feature.id}', '${a.id}')" title="Re-enable agent">${ICON_RESTART}</button>
 			<button class="action-btn agent-delete-btn" onclick="deleteAgent(event, '${feature.id}', '${a.id}')" title="Delete agent">${ICON_DELETE}</button>
 		</div>`;
