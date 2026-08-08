@@ -31,7 +31,7 @@ export class ClaudeSessionProvider
 
 	constructor(projectsDir?: string, toolId = "claude") {
 		this.toolId = toolId;
-		this.projectsDir = projectsDir ?? DEFAULT_PROJECTS_DIR;
+		this.projectsDir = normalizeProjectsDir(projectsDir ?? DEFAULT_PROJECTS_DIR);
 	}
 
 	scanSessions(): SessionInfo[] {
@@ -406,6 +406,20 @@ export function readClaudeAttentionSignal(
 	sessionId: string,
 ): ProviderAttentionSignal | undefined {
 	return new ClaudeSessionProvider().readAttention(sessionId);
+}
+
+function normalizeProjectsDir(projectsDir: string): string {
+	const normalized = path.normalize(projectsDir);
+	// Callers historically appended `/projects` to `sessionsDir`. Accept the
+	// equally natural setting where sessionsDir already points at that folder,
+	// preventing `.../projects/projects` from silently disabling discovery.
+	if (
+		path.basename(normalized) === "projects" &&
+		path.basename(path.dirname(normalized)) === "projects"
+	) {
+		return path.dirname(normalized);
+	}
+	return normalized;
 }
 
 function titleFromEvent(
