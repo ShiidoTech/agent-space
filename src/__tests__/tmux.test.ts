@@ -303,15 +303,12 @@ describe("TmuxIntegration", () => {
 			expect(mockExec).not.toHaveBeenCalled();
 		});
 
-		it("kills the duplicate current session when both names exist", () => {
+		it("reports ambiguity without killing either session when both exist", () => {
 			mockExecSilent.mockReturnValue(true);
-			mockExec.mockReturnValue("");
 			expect(tmux.adoptSession("agent-space-f1-a1", "companion-f1-a1")).toBe(
-				true,
+				false,
 			);
-			expect(mockExec).toHaveBeenCalledWith(
-				'tmux kill-session -t "companion-f1-a1"',
-			);
+			expect(mockExec).not.toHaveBeenCalled();
 		});
 
 		it("renames the current session when only the legacy session exists", () => {
