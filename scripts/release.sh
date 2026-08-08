@@ -103,6 +103,7 @@ echo "Changelog updated."
 
 # --- Build VSIX ---
 echo "Building VSIX package..."
+bun run compile
 bun run package
 VSIX_FILE="$(ls -1t *.vsix 2>/dev/null | head -1)"
 echo "VSIX built: ${VSIX_FILE:-agent-space-${NEW_VERSION}.vsix}"
