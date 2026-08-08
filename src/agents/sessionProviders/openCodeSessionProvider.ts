@@ -5,6 +5,11 @@ import type {
 	SessionRenameAdapter,
 } from "./types";
 
+export interface OpenCodeAttentionSignal {
+	status: "working" | "waiting_for_user" | "idle" | "failed";
+	reason: string;
+}
+
 /**
  * In-memory reservation of opencode session ids picked by a capture. opencode
  * session ids are globally unique, so a flat set is enough: once a session is
@@ -48,7 +53,7 @@ export class OpenCodeSessionProvider
 	}
 
 	readName(sessionId: string): string | null {
-		if (!/^[-_a-zA-Z0-9]+$/.test(sessionId)) return null;
+		if (!isSafeSessionId(sessionId)) return null;
 
 		try {
 			const raw = execSync(
@@ -64,6 +69,93 @@ export class OpenCodeSessionProvider
 			return null;
 		}
 	}
+
+	/**
+	 * Read provider-native activity evidence without scraping terminal text.
+	 *
+	 * OpenCode persists each message as JSON in SQLite. An assistant message is
+	 * created before generation and receives `time.completed` only when that
+	 * turn settles, which gives us a durable working/idle boundary. A currently
+	 * running `question`/`plan_exit` tool is an explicit human-attention gate and
+	 * therefore wins over the generic in-progress assistant state.
+	 */
+	readAttention(sessionId: string): OpenCodeAttentionSignal | null {
+		if (!isSafeSessionId(sessionId)) return null;
+
+		try {
+			const raw = execSync(
+				`opencode db "SELECT (SELECT data FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AS message_data, (SELECT data FROM part WHERE session_id = '${sessionId}' AND json_extract(data, '$.type') = 'tool' AND json_extract(data, '$.state.status') IN ('pending', 'running') AND json_extract(data, '$.tool') IN ('question', 'plan_exit') ORDER BY time_updated DESC, id DESC LIMIT 1) AS gate_data" --format json`,
+				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
+			);
+			const rows = JSON.parse(raw);
+			if (!Array.isArray(rows) || rows.length === 0) return null;
+
+			const row = rows[0] as Record<string, unknown>;
+			const gate = parseJsonRecord(row.gate_data);
+			if (gate) {
+				const tool = typeof gate.tool === "string" ? gate.tool : "question";
+				return {
+					status: "waiting_for_user",
+					reason: `OpenCode is waiting on the ${tool} tool`,
+				};
+			}
+
+			const message = parseJsonRecord(row.message_data);
+			if (!message) return null;
+			const role = typeof message.role === "string" ? message.role : "";
+			if (role === "user") {
+				return {
+					status: "working",
+					reason: "OpenCode has received user input and has not completed a response",
+				};
+			}
+			if (role !== "assistant") return null;
+
+			if (message.error) {
+				return {
+					status: "failed",
+					reason: "OpenCode recorded an error on the current assistant turn",
+				};
+			}
+
+			const time = asRecord(message.time);
+			if (time && time.completed !== undefined && time.completed !== null) {
+				return {
+					status: "idle",
+					reason: "OpenCode completed its current turn",
+				};
+			}
+
+			return {
+				status: "working",
+				reason: "OpenCode has an assistant turn in progress",
+			};
+		} catch {
+			return null;
+		}
+	}
+}
+
+function isSafeSessionId(sessionId: string): boolean {
+	return /^[-_a-zA-Z0-9]+$/.test(sessionId);
+}
+
+function parseJsonRecord(value: unknown): Record<string, unknown> | null {
+	if (value && typeof value === "object" && !Array.isArray(value)) {
+		return value as Record<string, unknown>;
+	}
+	if (typeof value !== "string" || !value.trim()) return null;
+	try {
+		return asRecord(JSON.parse(value));
+	} catch {
+		return null;
+	}
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
 }
 
 function epochMsToIso(value: unknown): string {
