@@ -62,7 +62,7 @@ describe("computeGitStatus", () => {
 			// merge-base --is-ancestor succeeds (no throw)
 			.mockReturnValueOnce("")
 			// reflog proves the feature moved from its creation point
-			.mockReturnValueOnce("000000\naaa111\n");
+			.mockReturnValueOnce("aaa111\n000000\n");
 
 		expect(computeGitStatus(baseInput)).toBe("merged");
 	});
@@ -84,7 +84,7 @@ describe("computeGitStatus", () => {
 
 		expect(computeGitStatus(baseInput)).toBe("new");
 		expect(mockExecSync).toHaveBeenCalledWith(
-			'git reflog show --reverse --format=%H "feat/auth"',
+			'git reflog show --format=%H "feat/auth"',
 			expect.objectContaining({ cwd: baseInput.repoRoot }),
 		);
 	});
