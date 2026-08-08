@@ -1,14 +1,6 @@
-import * as path from "node:path";
 import * as vscode from "vscode";
-import {
-	CodingToolRegistry,
-	isClaudeFamily,
-} from "./agents/codingToolRegistry";
+import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
-import { ClaudeSessionProvider } from "./agents/sessionProviders/claudeSessionProvider";
-import { CodexSessionProvider } from "./agents/sessionProviders/codexSessionProvider";
-import { CodexSessionWatcher } from "./agents/sessionProviders/codexSessionWatcher";
-import { OpenCodeSessionProvider } from "./agents/sessionProviders/openCodeSessionProvider";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
 import { validateFeatureNameInput } from "./features/featureName";
@@ -22,7 +14,6 @@ import {
 import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
 import { PrerequisiteChecker } from "./prerequisites";
-import { expandHome } from "./projects/projectConfig";
 import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
@@ -149,7 +140,7 @@ export async function activate(
 		const defaultTool = toolRegistry.resolveAgentTool(defaultToolId);
 		if (!toolRegistry.isToolAvailable(defaultTool)) {
 			vscode.window.showWarningMessage(
-				`${defaultTool.name} CLI not found. New agents will use ${availableTools[0].name} until the default tool is installed.`,
+				`${defaultTool.name} CLI not found. New features will not launch another tool automatically until the default is installed or changed.`,
 			);
 		}
 	}
@@ -283,32 +274,10 @@ export async function activate(
 		void showAgentSpace();
 	});
 
-	const claudeProvider = new ClaudeSessionProvider();
-	// Any claude-family tool declaring a `sessionsDir` gets its own session
-	// provider, so a wrapped/custom Claude variant is resumed and renamed via
-	// its own profile directory — configured declaratively, not hard-coded.
-	// Family uses the same `isClaudeFamily` resolution as the registry.
-	const extraClaudeProviders = toolRegistry
-		.getTools()
-		.filter((t) => isClaudeFamily(t) && t.id !== "claude")
-		.flatMap((t) =>
-			t.sessionsDir
-				? [
-						new ClaudeSessionProvider(
-							path.join(expandHome(t.sessionsDir), "projects"),
-							t.id,
-						),
-					]
-				: [],
-		);
-	const codexProvider = new CodexSessionProvider();
-	const openCodeProvider = new OpenCodeSessionProvider();
-	const sessionNameSyncer = new SessionNameSyncer([
-		claudeProvider,
-		...extraClaudeProviders,
-		codexProvider,
-		openCodeProvider,
-	]);
+	const sessionNameSyncer = new SessionNameSyncer(
+		toolRegistry.getSessionRenameAdapters(),
+	);
+	terminalController.onSessionDiscovered(() => sessionNameSyncer.syncAll());
 	sessionNameSyncer.onAgentRenamed((agentId, featureId) => {
 		projectManager.notifyChange();
 		const resolved = projectManager.resolveFeature(featureId);
@@ -339,17 +308,12 @@ export async function activate(
 		}),
 	);
 
-	const codexWatcher = new CodexSessionWatcher();
-	codexWatcher.onDiscovered(() => sidebarProvider.refresh());
-	codexWatcher.start(projectManager);
-
 	const config = vscode.workspace.getConfiguration("agentSpace");
 	if (config.get("syncSessionNames", config.get("autoNameAgents", true))) {
 		sessionNameSyncer.start(projectManager);
 		sessionNameSyncer.syncAll();
 	}
 	context.subscriptions.push({ dispose: () => sessionNameSyncer.dispose() });
-	context.subscriptions.push({ dispose: () => codexWatcher.dispose() });
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand("agentSpace.syncSessionNames", () => {
@@ -472,7 +436,9 @@ export async function activate(
 					);
 					activeFeatureId = feature.id;
 
-					const initialTool = toolRegistry.getPreferredAvailableTool();
+					const initialTool = toolRegistry.getPreferredAvailableTool(
+						ctx.config,
+					);
 					if (initialTool) {
 						const launchNow = await vscode.window.showQuickPick(
 							[
@@ -548,7 +514,28 @@ export async function activate(
 				const { ctx, feature } = resolved;
 
 				// Tool selection — only show installed tools
-				const tools = toolRegistry.getAvailableToolsPreferredFirst();
+				const tools = toolRegistry.getAvailableToolsPreferredFirst(ctx.config);
+				const unavailable = toolRegistry.getUnavailableTools(ctx.config);
+				const unknown = toolRegistry.getUnknownProjectAgentIds(ctx.config);
+				const configuredDefault = ctx.config.agents?.default;
+				if (
+					configuredDefault &&
+					!tools.some((tool) => tool.id === configuredDefault)
+				) {
+					vscode.window.showWarningMessage(
+						`Project default agent "${configuredDefault}" is unavailable; no other executable will be selected automatically.`,
+					);
+				}
+				if (unavailable.length > 0) {
+					vscode.window.showInformationMessage(
+						`Project agents unavailable on PATH: ${unavailable.map((tool) => tool.id).join(", ")}.`,
+					);
+				}
+				if (unknown.length > 0) {
+					vscode.window.showWarningMessage(
+						`Project agents are not registered in this installation: ${unknown.join(", ")}.`,
+					);
+				}
 				if (tools.length === 0) {
 					vscode.window.showErrorMessage(
 						`No coding tools found on PATH. Install one of: ${toolRegistry
@@ -892,7 +879,7 @@ export async function activate(
 						},
 						async () => {
 							// Push the feature from its worktree. Do not alter branch
-							// upstream metadata: it describes Git tracking, not PR base.
+							// tracking metadata: it describes Git tracking, not PR base.
 							await execAsync(`git push origin "${feature.branch}"`, {
 								cwd: feature.worktreePath,
 							});

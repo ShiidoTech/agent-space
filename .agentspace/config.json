@@ -1,0 +1,6 @@
+{
+	"agents": {
+		"enabled": ["codex", "claude", "opencode"],
+		"default": "opencode"
+	}
+}

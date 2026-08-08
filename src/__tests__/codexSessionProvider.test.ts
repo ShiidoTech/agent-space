@@ -137,6 +137,24 @@ describe("CodexSessionProvider", () => {
 		});
 	});
 
+	it("discovers distinct sessions through the provider hook for shared cwds", () => {
+		const cwd = path.join(tmpDir, "shared-worktree");
+		writeSessionFile("2026/03/04/session-a.jsonl", [
+			sessionMeta("session-a", { cwd, created: "2026-03-04T10:00:00.000Z" }),
+		]);
+		writeSessionFile("2026/03/04/session-b.jsonl", [
+			sessionMeta("session-b", { cwd, created: "2026-03-04T10:01:00.000Z" }),
+		]);
+
+		const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
+		const first = provider.discoverSessionId(cwd, new Set());
+		const second = provider.discoverSessionId(cwd, new Set());
+
+		expect(first).toBe("session-b");
+		expect(second).toBe("session-a");
+		expect(second).not.toBe(first);
+	});
+
 	describe("findSessionFile", () => {
 		it("finds file in nested directory by sessionId", () => {
 			writeSessionFile("2026/03/04/rollout-1709550000-sess-find.jsonl", [
@@ -350,5 +368,68 @@ describe("CodexSessionProvider", () => {
 	it("has toolId codex", () => {
 		const provider = new CodexSessionProvider(tmpDir);
 		expect(provider.toolId).toBe("codex");
+	});
+
+	describe("readAttention", () => {
+		it("reads Codex task lifecycle events", () => {
+			writeSessionFile("2026/03/04/rollout-1000-sess-attention.jsonl", [
+				sessionMeta("sess-attention"),
+				JSON.stringify({
+					type: "event_msg",
+					payload: { type: "task_started" },
+				}),
+				JSON.stringify({
+					type: "response_item",
+					payload: { type: "function_call" },
+				}),
+				JSON.stringify({
+					type: "event_msg",
+					payload: { type: "task_complete" },
+				}),
+			]);
+
+			expect(
+				new CodexSessionProvider(tmpDir).readAttention("sess-attention"),
+			).toEqual({
+				status: "idle",
+				evidence: "codex.task_complete",
+			});
+		});
+
+		it("reports active tool work when completion is absent", () => {
+			writeSessionFile("2026/03/04/rollout-1000-sess-working.jsonl", [
+				sessionMeta("sess-working"),
+				JSON.stringify({
+					type: "event_msg",
+					payload: { type: "task_started" },
+				}),
+			]);
+
+			expect(
+				new CodexSessionProvider(tmpDir).readAttention("sess-working"),
+			).toEqual({
+				status: "working",
+				evidence: "codex.task_started",
+			});
+		});
+
+		describe("session title fallback", () => {
+			it("uses a structured thread name or first user message", () => {
+				writeSessionFile("2026/03/04/rollout-1000-sess-title.jsonl", [
+					sessionMeta("sess-title"),
+					JSON.stringify({
+						type: "event_msg",
+						payload: {
+							type: "user_message",
+							message: "Investigate the picker",
+						},
+					}),
+				]);
+
+				expect(new CodexSessionProvider(tmpDir).readName("sess-title")).toBe(
+					"Investigate the picker",
+				);
+			});
+		});
 	});
 });

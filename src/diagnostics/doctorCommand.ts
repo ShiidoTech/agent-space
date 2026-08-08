@@ -22,7 +22,10 @@ export function registerDoctorCommand(context: vscode.ExtensionContext): void {
 					projects: globalStore.getProjects(),
 					tools: toolRegistry.getTools(),
 					defaultToolId: toolRegistry.getDefaultToolId(),
-					worktreeBasePath: config.get<string>("worktreeBasePath", ".worktrees"),
+					worktreeBasePath: config.get<string>(
+						"worktreeBasePath",
+						".worktrees",
+					),
 					perAgentIsolation: config.get<boolean>(
 						"enablePerAgentIsolation",
 						false,

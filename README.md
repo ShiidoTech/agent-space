@@ -20,7 +20,7 @@ Organize your real coding agents — real CLIs, real terminals, real Git worktre
 - Sidebar + home dashboard: features, agents, services and status at a glance
 - Feature workspaces and PR handoff from inside VS Code
 
-It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`, `copilot`, `opencode`, `hermes`. Add any other tool with `agentSpace.codingTools`.
+It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`, `copilot`, `opencode`, `hermes`. Add any other tool with `agentSpace.codingTools`. Pull requests adding new built-in providers are welcome; see [Creating a Provider](docs/providers/creating-a-provider.md).
 
 ## Philosophy
 
@@ -98,7 +98,7 @@ Launch package scripts such as dev servers and watch tasks, or open an interacti
 
 Some repositories do not branch off `main`. A `.agentspace/config.json` at the repository root lets a project declare the real **base branch**, the **branch kinds** offered at feature creation, and a dedicated **worktrees directory** — so Agent Space branches and creates worktrees where the project actually works.
 
-This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It is not implicitly gitignored. User-local values — a personal CLI profile, a private sessions directory, machine-specific `env` — do not belong here: declare those via `agentSpace.codingTools` in your user settings, or in workspace settings you keep explicitly untracked (e.g. a gitignored `.vscode/settings.json`).
+This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It can also curate providers with `agents.enabled` and `agents.default`; when present, the allowlist is the only set shown by Add Agent. It is not implicitly gitignored. User-local values — a personal CLI profile, a private sessions directory, machine-specific `env` — do not belong here: declare those via `agentSpace.codingTools` in your user settings, or in workspace settings you keep explicitly untracked (e.g. a gitignored `.vscode/settings.json`).
 
 ### Custom Coding Tools
 
@@ -142,6 +142,27 @@ All commands are available from the Command Palette.
 | `agentSpace.syncSessionNames` | `true` | Sync agent display names from supported CLI rename metadata |
 
 Projects can also override branching defaults via a committed `.agentspace/config.json` at the repository root.
+
+### Provider Support Matrix
+
+| Provider | Launch | Resume | Session naming | Working | Waiting |
+|---|---:|---:|---:|---:|---:|
+| Claude | yes | yes | yes | yes | yes |
+| Codex | yes | yes | yes | yes | yes |
+| OpenCode | yes | yes | yes | unavailable | unavailable |
+| Hermes | yes | no evidence | no evidence | no evidence | no evidence |
+
+The matrix only claims behavior covered by structured adapter tests. An
+unsupported attention capability is displayed as `unknown`, never `Idle`.
+
+**Session naming** means reading a provider's persisted session title and using
+it for the Agent Space display name when session-name sync is enabled. It does
+not mean renaming the provider's native terminal prompt. **Working** means a
+structured signal proves that the agent is actively processing. **Waiting**
+means a structured signal proves that the agent has finished its turn and is
+waiting for user input. These two attention signals are structured for Claude
+and Codex. OpenCode and Hermes remain `unknown`; Agent Space does not infer
+their state from terminal output.
 
 ## GitHub
 

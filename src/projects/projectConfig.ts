@@ -10,8 +10,9 @@ import * as path from "node:path";
  *   happens to be checked out in the main checkout;
  * - the branch kinds offered at feature creation (e.g. `feature`/`fix`);
  * - a dedicated worktrees directory, distinct from the main checkout.
+ * - the provider IDs exposed by this project and its preferred provider.
  *
- * Coding tools are NOT part of this file: their identity and family are
+ * Coding tool commands are NOT part of this file: their identity and family are
  * resolved exclusively through `agentSpace.codingTools` (built-ins merged with
  * user/workspace settings). User-local values (a personal CLI profile, a
  * private sessions directory, machine-specific `env`) belong in that setting,
@@ -22,6 +23,25 @@ export interface ProjectConfig {
 	branchKinds?: string[];
 	defaultBranchKind?: string;
 	worktreesDir?: string;
+	agents?: {
+		enabled?: string[];
+		default?: string;
+	};
+}
+
+export interface ProjectAgentPolicy {
+	enabledIds?: string[];
+	defaultId?: string;
+}
+
+export function getProjectAgentPolicy(
+	config: ProjectConfig,
+): ProjectAgentPolicy | undefined {
+	if (!config.agents) return undefined;
+	return {
+		enabledIds: config.agents.enabled,
+		defaultId: config.agents.default,
+	};
 }
 
 const CONFIG_DIR_NAME = ".agentspace";

@@ -84,10 +84,12 @@ function defaultReadProjectConfig(repoPath: string): ProjectConfigProbe {
 		}
 		const config = parsed as Record<string, unknown>;
 		if (
-			(config.baseBranch !== undefined && typeof config.baseBranch !== "string") ||
+			(config.baseBranch !== undefined &&
+				typeof config.baseBranch !== "string") ||
 			(config.defaultBranchKind !== undefined &&
 				typeof config.defaultBranchKind !== "string") ||
-			(config.worktreesDir !== undefined && typeof config.worktreesDir !== "string") ||
+			(config.worktreesDir !== undefined &&
+				typeof config.worktreesDir !== "string") ||
 			(config.branchKinds !== undefined &&
 				(!Array.isArray(config.branchKinds) ||
 					config.branchKinds.some((kind) => typeof kind !== "string")))
@@ -131,7 +133,10 @@ export const defaultDoctorDeps: DoctorDeps = {
 	},
 	currentBranch(repoPath) {
 		try {
-			return exec("git rev-parse --abbrev-ref HEAD", { cwd: repoPath }).trim() || null;
+			return (
+				exec("git rev-parse --abbrev-ref HEAD", { cwd: repoPath }).trim() ||
+				null
+			);
 		} catch {
 			return null;
 		}
@@ -151,9 +156,8 @@ export const defaultDoctorDeps: DoctorDeps = {
 	worktreeCount(repoPath) {
 		try {
 			const output = exec("git worktree list --porcelain", { cwd: repoPath });
-			return output
-				.split("\n")
-				.filter((line) => line.startsWith("worktree ")).length;
+			return output.split("\n").filter((line) => line.startsWith("worktree "))
+				.length;
 		} catch {
 			return null;
 		}
@@ -212,7 +216,13 @@ export function runDoctor(
 			deps.commandVersion("git") ?? "available (version unavailable)",
 		);
 	} else {
-		add(systemChecks, "error", "Git", "not found on PATH", "Install Git and reload VS Code.");
+		add(
+			systemChecks,
+			"error",
+			"Git",
+			"not found on PATH",
+			"Install Git and reload VS Code.",
+		);
 	}
 
 	const tmuxAvailable = deps.commandExists("tmux");
@@ -235,13 +245,13 @@ export function runDoctor(
 		);
 	}
 
-	add(configChecks, "info", "Extension", `${input.extensionId} v${input.extensionVersion}`);
 	add(
 		configChecks,
 		"info",
-		"Worktree base",
-		input.worktreeBasePath,
+		"Extension",
+		`${input.extensionId} v${input.extensionVersion}`,
 	);
+	add(configChecks, "info", "Worktree base", input.worktreeBasePath);
 	add(
 		configChecks,
 		"info",
@@ -300,7 +310,10 @@ export function runDoctor(
 		);
 	}
 
-	if (input.defaultToolId && !input.tools.some((tool) => tool.id === input.defaultToolId)) {
+	if (
+		input.defaultToolId &&
+		!input.tools.some((tool) => tool.id === input.defaultToolId)
+	) {
 		add(
 			toolChecks,
 			"error",
@@ -373,7 +386,8 @@ export function runDoctor(
 			typeof config.config?.baseBranch === "string"
 				? config.config.baseBranch.trim()
 				: undefined;
-		const effectiveBase = configuredBase || deps.currentBranch(project.repoPath);
+		const effectiveBase =
+			configuredBase || deps.currentBranch(project.repoPath);
 		if (!effectiveBase) {
 			add(
 				projectChecks,
@@ -382,7 +396,10 @@ export function runDoctor(
 				"could not determine an effective base branch",
 				"Set baseBranch explicitly in .agentspace/config.json.",
 			);
-		} else if (configuredBase && !deps.branchExists(project.repoPath, configuredBase)) {
+		} else if (
+			configuredBase &&
+			!deps.branchExists(project.repoPath, configuredBase)
+		) {
 			add(
 				projectChecks,
 				"error",

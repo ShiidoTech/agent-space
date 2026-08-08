@@ -4,11 +4,6 @@ import type { ProjectManager } from "../projects/projectManager";
 import type { Agent, Feature, Service } from "../types";
 import { exec, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
-import { isOpenCodeFamily } from "./codingToolRegistry";
-import {
-	claimNewestSessionIdForDirectory,
-	sessionIdsForDirectory,
-} from "./sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "./tmux";
 
 const AGENT_COLORS = getThemeColors();
@@ -25,6 +20,7 @@ export class TerminalController implements vscode.Disposable {
 	private terminalMetadata = new Map<vscode.Terminal, TerminalMetadata>();
 	private disposables: vscode.Disposable[] = [];
 	private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private sessionDiscoveredCallback?: () => void;
 
 	constructor(
 		private readonly projectManager: ProjectManager,
@@ -46,6 +42,10 @@ export class TerminalController implements vscode.Disposable {
 				}
 			}),
 		);
+	}
+
+	onSessionDiscovered(callback: () => void): void {
+		this.sessionDiscoveredCallback = callback;
 	}
 
 	createTerminal(
@@ -72,9 +72,16 @@ export class TerminalController implements vscode.Disposable {
 			// pre-existing session (e.g. another agent in the same worktree)
 			// must never become this agent's id just because it is the most
 			// recent in the same cwd.
-			const openCodeBaseline =
-				isOpenCodeFamily(tool) && !agent.sessionId
-					? sessionIdsForDirectory(cwd)
+			const sessionAdapter =
+				this.toolRegistry.getProvider?.(tool)?.sessionAdapter;
+			const sessionBaseline =
+				sessionAdapter?.scanSessions && !agent.sessionId
+					? new Set(
+							sessionAdapter
+								.scanSessions()
+								.filter((session) => session.projectPath === cwd)
+								.map((session) => session.sessionId),
+						)
 					: undefined;
 			try {
 				const launchCommand = shouldResume
@@ -83,12 +90,13 @@ export class TerminalController implements vscode.Disposable {
 				exec(this.tmux.createCommand(sessionName, launchCommand), { cwd });
 				this.tmux.configureSession(sessionName);
 				sessionReady = this.tmux.isSessionAlive(sessionName);
-				if (openCodeBaseline) {
-					void this.captureOpenCodeSessionId(
+				if (sessionBaseline && sessionAdapter?.discoverSessionId) {
+					void this.captureSessionId(
 						feature,
 						agent,
 						cwd,
-						openCodeBaseline,
+						sessionAdapter.discoverSessionId.bind(sessionAdapter),
+						sessionBaseline,
 					);
 				}
 			} catch (err) {
@@ -402,16 +410,20 @@ export class TerminalController implements vscode.Disposable {
 	 * exactly one of them and the other keeps waiting for a newer one. Never
 	 * blocks the UI and swallows failures (e.g. opencode not installed).
 	 */
-	private async captureOpenCodeSessionId(
+	private async captureSessionId(
 		feature: Feature,
 		agent: Agent,
 		cwd: string,
-		baseline: Set<string>,
+		discover: (
+			cwd: string,
+			knownSessionIds: ReadonlySet<string>,
+		) => string | undefined | Promise<string | undefined>,
+		baseline: ReadonlySet<string>,
 	): Promise<void> {
 		for (let attempt = 0; attempt < 10; attempt += 1) {
 			let sessionId: string | undefined;
 			try {
-				sessionId = claimNewestSessionIdForDirectory(cwd, baseline);
+				sessionId = await discover(cwd, baseline);
 			} catch {
 				// opencode CLI unavailable — nothing to discover
 				return;
@@ -420,6 +432,7 @@ export class TerminalController implements vscode.Disposable {
 				const ctx = this.projectManager.findContextByFeatureId(feature.id);
 				ctx?.agentManager.updateAgentSessionId(agent.id, feature.id, sessionId);
 				this.projectManager.notifyChange();
+				this.sessionDiscoveredCallback?.();
 				return;
 			}
 			await new Promise((resolve) => setTimeout(resolve, 750));

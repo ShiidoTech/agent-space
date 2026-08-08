@@ -49,6 +49,8 @@ export interface CodingTool {
 	family?: "claude" | "codex" | "opencode" | "generic";
 	sessionsDir?: string;
 	resumeCommand?: string;
+	/** Internal adapter. Never loaded from project/user configuration. */
+	provider?: import("./agents/providers/types").CodingAgentProvider;
 }
 
 export interface Agent {

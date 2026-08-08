@@ -1,5 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ProviderAttentionSignal } from "../providers/types";
+import {
+	type IncrementalJsonlState,
+	readFirstJsonlLine,
+	readIncrementalJsonl,
+} from "./incrementalJsonl";
 import type {
 	SessionInfo,
 	SessionProvider,
@@ -21,9 +27,15 @@ export class ClaudeSessionProvider
 	readonly toolId: string;
 	private readonly projectsDir: string;
 	private readonly pathCache = new Map<string, string>();
+	private readonly contentPathIndex = new Map<string, string>();
+	private contentPathIndexBuiltAt = 0;
 	private readonly indexCache = new Map<
 		string,
 		{ mtimeMs: number; titles: Map<string, string> }
+	>();
+	private readonly attentionCache = new Map<
+		string,
+		IncrementalJsonlState<ProviderAttentionSignal>
 	>();
 
 	constructor(projectsDir?: string, toolId = "claude") {
@@ -94,6 +106,16 @@ export class ClaudeSessionProvider
 		try {
 			const dirs = fs.readdirSync(this.projectsDir);
 			for (const dir of dirs) {
+				const indexPath = path.join(
+					this.projectsDir,
+					dir,
+					"sessions-index.json",
+				);
+				const indexedPath = this.findIndexedSessionFile(indexPath, sessionId);
+				if (indexedPath) {
+					this.pathCache.set(sessionId, indexedPath);
+					return indexedPath;
+				}
 				const candidate = path.join(
 					this.projectsDir,
 					dir,
@@ -104,6 +126,20 @@ export class ClaudeSessionProvider
 					return candidate;
 				}
 			}
+			this.ensureContentPathIndex();
+			const found = this.contentPathIndex.get(sessionId);
+			if (found) {
+				this.pathCache.set(sessionId, found);
+				return found;
+			}
+			if (Date.now() - this.contentPathIndexBuiltAt > 1000) {
+				this.buildContentPathIndex();
+				const refreshed = this.contentPathIndex.get(sessionId);
+				if (refreshed) {
+					this.pathCache.set(sessionId, refreshed);
+					return refreshed;
+				}
+			}
 		} catch {
 			// Ignore directory read errors
 		}
@@ -111,13 +147,176 @@ export class ClaudeSessionProvider
 		return null;
 	}
 
+	private ensureContentPathIndex(): void {
+		if (this.contentPathIndexBuiltAt > 0) return;
+		this.buildContentPathIndex();
+	}
+
+	private buildContentPathIndex(): void {
+		this.contentPathIndex.clear();
+		this.contentPathIndexBuiltAt = Date.now();
+		this.indexSessionFiles(this.projectsDir);
+	}
+
+	private indexSessionFiles(dir: string): void {
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const candidate = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				this.indexSessionFiles(candidate);
+				continue;
+			}
+			if (!entry.name.endsWith(".jsonl")) continue;
+			try {
+				const firstLine = readFirstJsonlLine(candidate);
+				if (!firstLine) continue;
+				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+				if (typeof parsed.sessionId === "string") {
+					this.contentPathIndex.set(parsed.sessionId, candidate);
+				}
+			} catch {
+				// Ignore files that are not readable session JSONL.
+			}
+		}
+	}
+
+	private findIndexedSessionFile(
+		indexPath: string,
+		sessionId: string,
+	): string | null {
+		if (!fs.existsSync(indexPath)) return null;
+		try {
+			const parsed = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+			const entries = Array.isArray(parsed)
+				? parsed
+				: Array.isArray(parsed?.entries)
+					? parsed.entries
+					: [];
+			const entry = entries.find(
+				(candidate: Record<string, unknown>) =>
+					candidate.sessionId === sessionId &&
+					typeof candidate.fullPath === "string",
+			);
+			return entry && fs.existsSync(entry.fullPath as string)
+				? (entry.fullPath as string)
+				: null;
+		} catch {
+			return null;
+		}
+	}
+
 	readName(sessionId: string): string | null {
 		const filePath = this.findSessionFile(sessionId);
-		if (!filePath) return null;
+		if (!filePath) return this.readIndexedName(sessionId);
 		return (
 			this.readTitle(filePath) ??
-			this.readIndexFallback(path.dirname(filePath), sessionId)
+			this.readIndexFallback(path.dirname(filePath), sessionId) ??
+			this.readIndexedName(sessionId)
 		);
+	}
+
+	private readIndexedName(sessionId: string): string | null {
+		if (!fs.existsSync(this.projectsDir)) return null;
+		try {
+			for (const dir of fs.readdirSync(this.projectsDir)) {
+				const indexPath = path.join(
+					this.projectsDir,
+					dir,
+					"sessions-index.json",
+				);
+				if (!fs.existsSync(indexPath)) continue;
+				const parsed = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+				const entries = Array.isArray(parsed)
+					? parsed
+					: Array.isArray(parsed?.entries)
+						? parsed.entries
+						: [];
+				const entry = entries.find(
+					(candidate: Record<string, unknown>) =>
+						candidate.sessionId === sessionId,
+				);
+				const title =
+					entry?.summary ?? entry?.firstPrompt ?? entry?.first_prompt;
+				if (typeof title === "string" && title.trim()) return title.trim();
+			}
+		} catch {
+			return null;
+		}
+		return null;
+	}
+
+	readAttention(sessionId: string): ProviderAttentionSignal | undefined {
+		const filePath = this.findSessionFile(sessionId);
+		if (!filePath) return undefined;
+
+		const state = readIncrementalJsonl(
+			filePath,
+			this.attentionCache.get(sessionId),
+			(line, previous) => {
+				const event = JSON.parse(line) as Record<string, unknown>;
+				let signal = previous;
+				const explicitSessionId = event.sessionId ?? event.session_id;
+				if (
+					typeof explicitSessionId === "string" &&
+					explicitSessionId !== sessionId
+				) {
+					return signal;
+				}
+
+				if (event.type === "user") {
+					signal = { status: "working", evidence: "claude.user" };
+					return signal;
+				}
+				if (event.type === "result") {
+					signal = {
+						status: event.is_error === true ? "failed" : "idle",
+						evidence:
+							event.is_error === true ? "claude.result.error" : "claude.result",
+					};
+					return signal;
+				}
+				if (event.type === "assistant") {
+					const message = event.message as Record<string, unknown> | undefined;
+					const stopReason = message?.stop_reason ?? event.stop_reason;
+					const content = Array.isArray(message?.content)
+						? message.content
+						: [];
+					const asksUser = content.some((item) => {
+						const block = item as Record<string, unknown>;
+						return (
+							block.type === "tool_use" && block.name === "AskUserQuestion"
+						);
+					});
+					if (asksUser) {
+						signal = {
+							status: "waiting_for_user",
+							evidence: "claude.assistant.ask_user_question",
+						};
+					} else if (stopReason === "tool_use") {
+						signal = {
+							status: "working",
+							evidence: "claude.assistant.tool_use",
+						};
+					} else if (stopReason === "end_turn") {
+						signal = {
+							status: "idle",
+							evidence: "claude.assistant.end_turn",
+						};
+					}
+					return signal;
+				}
+				// A newer unrecognized event invalidates the previous precise signal.
+				return undefined;
+			},
+		);
+		if (!state) return undefined;
+		this.attentionCache.set(sessionId, state);
+		return state.value;
 	}
 
 	readTitle(filePath: string): string | null {
@@ -186,11 +385,16 @@ export class ClaudeSessionProvider
 
 	clearCache(sessionId: string): void {
 		this.pathCache.delete(sessionId);
+		this.contentPathIndex.delete(sessionId);
+		this.attentionCache.delete(sessionId);
 	}
 
 	dispose(): void {
 		this.pathCache.clear();
+		this.contentPathIndex.clear();
+		this.contentPathIndexBuiltAt = 0;
 		this.indexCache.clear();
+		this.attentionCache.clear();
 	}
 
 	private readIndexFallback(
@@ -229,6 +433,12 @@ export class ClaudeSessionProvider
 			return null;
 		}
 	}
+}
+
+export function readClaudeAttentionSignal(
+	sessionId: string,
+): ProviderAttentionSignal | undefined {
+	return new ClaudeSessionProvider().readAttention(sessionId);
 }
 
 function normalizeProjectsDir(projectsDir: string): string {

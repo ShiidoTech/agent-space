@@ -1,18 +1,195 @@
+import * as path from "node:path";
 import * as vscode from "vscode";
+import type { ProjectConfig } from "../projects/projectConfig";
+import { expandHome } from "../projects/projectConfig";
 import type { CodingTool } from "../types";
 import { commandExists } from "../utils/platform";
+import { resolveAttention } from "./providers/attentionResolver";
+import type {
+	CodingAgentProvider,
+	ProviderCapabilities,
+} from "./providers/types";
+import { NO_ATTENTION_CAPABILITIES } from "./providers/types";
+import { ClaudeSessionProvider } from "./sessionProviders/claudeSessionProvider";
+import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
+import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
+
+const claudeSessionAdapter = new ClaudeSessionProvider();
+const codexSessionAdapter = new CodexSessionProvider();
+const openCodeSessionAdapter = new OpenCodeSessionProvider();
+
+const fullSessionCapabilities = (
+	attention = NO_ATTENTION_CAPABILITIES,
+): ProviderCapabilities => ({
+	launch: true,
+	resume: true,
+	sessionDiscovery: true,
+	sessionNaming: true,
+	attention,
+});
+
+const FULL_ATTENTION_CAPABILITIES = {
+	"attention.working": true,
+	"attention.waitingForUser": true,
+	"attention.idle": true,
+	"attention.failed": true,
+} as const;
+
+export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
+	{
+		id: "claude",
+		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
+		getAttentionSignal: (sessionId) =>
+			claudeSessionAdapter.readAttention(sessionId),
+		sessionAdapter: claudeSessionAdapter,
+	},
+	{
+		id: "codex",
+		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
+		getAttentionSignal: (sessionId) =>
+			codexSessionAdapter.readAttention(sessionId),
+		sessionAdapter: codexSessionAdapter,
+	},
+	{
+		id: "opencode",
+		capabilities: fullSessionCapabilities(),
+		launchArgs: () => [],
+		resumeArgs: (sessionId) =>
+			sessionId ? ["--session", sessionId] : ["--continue"],
+		sessionAdapter: openCodeSessionAdapter,
+	},
+	{
+		id: "copilot",
+		capabilities: {
+			launch: true,
+			resume: false,
+			sessionDiscovery: false,
+			sessionNaming: false,
+			attention: NO_ATTENTION_CAPABILITIES,
+		},
+	},
+	{
+		id: "hermes",
+		capabilities: {
+			launch: true,
+			resume: false,
+			sessionDiscovery: false,
+			sessionNaming: false,
+			attention: NO_ATTENTION_CAPABILITIES,
+		},
+	},
+];
+
+const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
+	claude: {
+		launchArgs: (sessionId) => (sessionId ? ["--session-id", sessionId] : []),
+		resumeArgs: (sessionId) => (sessionId ? ["--resume", sessionId] : []),
+	},
+	codex: {
+		launchArgs: () => [],
+		resumeArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
+	},
+};
+
+for (const provider of BUILTIN_PROVIDERS) {
+	Object.assign(provider, providerOverrides[provider.id]);
+}
+
+const providerById = new Map(BUILTIN_PROVIDERS.map((p) => [p.id, p]));
+
+function providerForTool(
+	id: string,
+	family?: CodingTool["family"],
+	sessionsDir?: string,
+): CodingAgentProvider {
+	const builtin = providerById.get(id);
+	if (builtin) return builtin;
+	const sessionFamily =
+		family === "claude" || family === "codex" || family === "opencode";
+	const launchArgs =
+		family === "claude"
+			? (sessionId?: string | null) =>
+					sessionId ? ["--session-id", sessionId] : []
+			: () => [];
+	const resumeArgs =
+		family === "claude"
+			? (sessionId?: string | null) =>
+					sessionId ? ["--resume", sessionId] : []
+			: family === "codex"
+				? (sessionId?: string | null) =>
+						sessionId ? ["resume", sessionId] : []
+				: family === "opencode"
+					? (sessionId?: string | null) =>
+							sessionId ? ["--session", sessionId] : ["--continue"]
+					: undefined;
+	const claudeSessionProvider =
+		family === "claude"
+			? new ClaudeSessionProvider(
+					sessionsDir
+						? path.join(expandHome(sessionsDir), "projects")
+						: undefined,
+					id,
+				)
+			: undefined;
+	const codexSessionProvider =
+		family === "codex" ? new CodexSessionProvider(sessionsDir) : undefined;
+	const sessionAdapter = claudeSessionProvider ?? codexSessionProvider;
+	return {
+		id,
+		capabilities: {
+			launch: true,
+			resume: Boolean(sessionFamily),
+			sessionDiscovery: Boolean(sessionAdapter),
+			sessionNaming: Boolean(sessionAdapter),
+			attention: sessionAdapter
+				? FULL_ATTENTION_CAPABILITIES
+				: NO_ATTENTION_CAPABILITIES,
+		},
+		launchArgs,
+		resumeArgs,
+		getAttentionSignal: sessionAdapter
+			? (sessionId) => sessionAdapter.readAttention(sessionId)
+			: undefined,
+		sessionAdapter,
+	};
+}
 
 export const BUILTIN_CODING_TOOLS: CodingTool[] = [
-	{ id: "claude", name: "Claude Code", command: "claude", family: "claude" },
-	{ id: "codex", name: "Codex CLI", command: "codex", family: "codex" },
+	{
+		id: "claude",
+		name: "Claude Code",
+		command: "claude",
+		family: "claude",
+		provider: providerById.get("claude"),
+	},
+	{
+		id: "codex",
+		name: "Codex CLI",
+		command: "codex",
+		family: "codex",
+		provider: providerById.get("codex"),
+	},
 	{
 		id: "copilot",
 		name: "GitHub Copilot",
 		command: "copilot",
 		family: "generic",
+		provider: providerById.get("copilot"),
 	},
-	{ id: "opencode", name: "OpenCode", command: "opencode", family: "opencode" },
-	{ id: "hermes", name: "Hermes", command: "hermes", family: "generic" },
+	{
+		id: "opencode",
+		name: "OpenCode",
+		command: "opencode",
+		family: "opencode",
+		provider: providerById.get("opencode"),
+	},
+	{
+		id: "hermes",
+		name: "Hermes",
+		command: "hermes",
+		family: "generic",
+		provider: providerById.get("hermes"),
+	},
 ];
 
 export function isClaudeFamily(tool: {
@@ -26,10 +203,6 @@ export function isClaudeFamily(tool: {
 
 export function isOpenCodeFamily(tool: CodingTool): boolean {
 	return (tool.family ?? tool.command) === "opencode";
-}
-
-function isCodexFamily(tool: CodingTool): boolean {
-	return tool.family === "codex";
 }
 
 function shellQuote(value: string): string {
@@ -51,6 +224,11 @@ function mergeTool(base: CodingTool | undefined, over: CodingTool): CodingTool {
 		args: over.args ?? base?.args,
 		env: base?.env ? { ...base.env, ...over.env } : over.env,
 		resumeCommand: over.resumeCommand ?? base?.resumeCommand,
+		provider: providerForTool(
+			over.id,
+			over.family ?? base?.family,
+			over.sessionsDir ?? base?.sessionsDir,
+		),
 	};
 }
 
@@ -63,7 +241,7 @@ function envPrefix(tool: CodingTool): string {
 }
 
 export class CodingToolRegistry {
-	getTools(): CodingTool[] {
+	getTools(config?: ProjectConfig): CodingTool[] {
 		const custom = vscode.workspace
 			.getConfiguration("agentSpace")
 			.get<CodingTool[]>("codingTools", []);
@@ -83,11 +261,18 @@ export class CodingToolRegistry {
 			const base = merged.get(tool.id);
 			merged.set(tool.id, mergeTool(base, tool));
 		}
-		return [...merged.values()];
+		const tools = [...merged.values()];
+		const enabled = config?.agents?.enabled;
+		return enabled
+			? enabled.flatMap((id) => {
+					const tool = tools.find((candidate) => candidate.id === id);
+					return tool ? [tool] : [];
+				})
+			: tools;
 	}
 
-	getTool(toolId: string): CodingTool | undefined {
-		return this.getTools().find((t) => t.id === toolId);
+	getTool(toolId: string, config?: ProjectConfig): CodingTool | undefined {
+		return this.getTools(config).find((t) => t.id === toolId);
 	}
 
 	getDefaultToolId(): string | undefined {
@@ -96,13 +281,23 @@ export class CodingToolRegistry {
 			.get<string | undefined>("defaultTool");
 	}
 
-	getAvailableTools(): CodingTool[] {
-		return this.getTools().filter((tool) => this.isToolAvailable(tool));
+	getAvailableTools(config?: ProjectConfig): CodingTool[] {
+		return this.getTools(config).filter((tool) => this.isToolAvailable(tool));
 	}
 
-	getAvailableToolsPreferredFirst(): CodingTool[] {
-		const availableTools = this.getAvailableTools();
-		const defaultToolId = this.getDefaultToolId();
+	getUnavailableTools(config?: ProjectConfig): CodingTool[] {
+		return this.getTools(config).filter((tool) => !this.isToolAvailable(tool));
+	}
+
+	getUnknownProjectAgentIds(config?: ProjectConfig): string[] {
+		const enabled = config?.agents?.enabled ?? [];
+		const known = new Set(this.getTools().map((tool) => tool.id));
+		return enabled.filter((id) => !known.has(id));
+	}
+
+	getAvailableToolsPreferredFirst(config?: ProjectConfig): CodingTool[] {
+		const availableTools = this.getAvailableTools(config);
+		const defaultToolId = config?.agents?.default ?? this.getDefaultToolId();
 		if (!defaultToolId) {
 			return availableTools;
 		}
@@ -119,8 +314,19 @@ export class CodingToolRegistry {
 		return availableTools;
 	}
 
-	getPreferredAvailableTool(): CodingTool | undefined {
-		const availableTools = this.getAvailableToolsPreferredFirst();
+	getPreferredAvailableTool(config?: ProjectConfig): CodingTool | undefined {
+		const configuredDefault =
+			config?.agents?.default ?? this.getDefaultToolId();
+		const configuredTool = configuredDefault
+			? this.getTool(configuredDefault, config)
+			: undefined;
+		if (
+			configuredDefault &&
+			(!configuredTool || !this.isToolAvailable(configuredTool))
+		) {
+			return undefined;
+		}
+		const availableTools = this.getAvailableToolsPreferredFirst(config);
 		if (availableTools.length === 0) {
 			return undefined;
 		}
@@ -141,6 +347,41 @@ export class CodingToolRegistry {
 			command: id,
 			family: isClaudeFamily({ command: id }) ? "claude" : "generic",
 		};
+	}
+
+	getProvider(tool: CodingTool): CodingAgentProvider {
+		return tool.provider ?? providerForTool(tool.id, tool.family);
+	}
+
+	resolveAttention(tool: CodingTool, sessionId?: string | null) {
+		return resolveAttention(this.getProvider(tool), sessionId);
+	}
+
+	getStructuredAttentionSignal(tool: CodingTool, sessionId: string) {
+		const provider = this.getProvider(tool);
+		const signal = provider.getAttentionSignal?.(sessionId);
+		if (!signal) return undefined;
+		const statusCapability = {
+			working: "attention.working",
+			waiting_for_user: "attention.waitingForUser",
+			idle: "attention.idle",
+			failed: "attention.failed",
+		}[signal.status] as keyof typeof provider.capabilities.attention;
+		return provider.capabilities.attention[statusCapability]
+			? signal
+			: undefined;
+	}
+
+	getSessionRenameAdapters(config?: ProjectConfig) {
+		const adapters = new Map<
+			string,
+			NonNullable<CodingAgentProvider["sessionAdapter"]>
+		>();
+		for (const tool of this.getTools(config)) {
+			const adapter = this.getProvider(tool).sessionAdapter;
+			if (adapter) adapters.set(adapter.toolId, adapter);
+		}
+		return [...adapters.values()];
 	}
 
 	isToolAvailable(tool: CodingTool): boolean {
@@ -170,10 +411,8 @@ export class CodingToolRegistry {
 		if (tool.args && tool.args.length > 0) {
 			parts.push(...tool.args);
 		}
-		if (isClaudeFamily(tool) && sessionId) {
-			parts.push("--session-id", sessionId);
-		}
-		// Codex auto-generates session IDs — no flag needed on launch
+		const provider = this.getProvider(tool);
+		if (provider.launchArgs) parts.push(...provider.launchArgs(sessionId));
 		return `${envPrefix(tool)}${parts.join(" ")}`;
 	}
 
@@ -198,21 +437,12 @@ export class CodingToolRegistry {
 			return this.buildLaunchCommand(tool);
 		}
 
-		if (isClaudeFamily(tool) && sessionId) {
-			return `${envPrefix(tool)}${tool.command} --resume ${sessionId}`;
-		}
-		if (isCodexFamily(tool) && sessionId) {
-			return `${envPrefix(tool)}${tool.command} resume ${sessionId}`;
-		}
-		if (isOpenCodeFamily(tool)) {
-			// opencode generates its own session ids. Resume the exact session
-			// when one is known; otherwise continue the latest one for the
-			// current directory (which is the right session in a per-worktree
-			// setup). Never fall back to a fresh launch.
-			if (sessionId) {
-				return `${envPrefix(tool)}${tool.command} --session ${sessionId}`;
+		const provider = this.getProvider(tool);
+		if (provider.resumeArgs && provider.capabilities.resume) {
+			const args = provider.resumeArgs(sessionId);
+			if (args.length > 0) {
+				return `${envPrefix(tool)}${tool.command} ${args.join(" ")}`;
 			}
-			return `${envPrefix(tool)}${tool.command} --continue`;
 		}
 		// No sessionId — launch fresh so each agent gets its own session
 		return this.buildLaunchCommand(tool);

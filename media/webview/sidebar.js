@@ -269,7 +269,9 @@ window.addEventListener("message", function (event) {
 				}
 
 				var attention = agent.attentionStatus || "unknown";
-				var dot = agentEl.querySelector('[data-attention-dot="' + agent.id + '"]');
+				var dot = agentEl.querySelector(
+					'[data-attention-dot="' + agent.id + '"]',
+				);
 				if (dot) {
 					dot.className = "status-dot " + attention;
 				}
@@ -280,7 +282,8 @@ window.addEventListener("message", function (event) {
 				if (attentionBadge) {
 					attentionBadge.className = "attention-badge attention-" + attention;
 					attentionBadge.textContent = ATTENTION_LABELS[attention] || attention;
-					attentionBadge.title = agent.attentionReason || "No current attention evidence";
+					attentionBadge.title =
+						agent.attentionReason || "No current attention evidence";
 				}
 
 				// Keep card-level classes tied to persisted lifecycle state.

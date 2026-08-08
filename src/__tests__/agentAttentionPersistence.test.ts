@@ -68,7 +68,7 @@ describe("agent attention persistence", () => {
 		);
 
 		const read = manager.getAgents("feature-1")[0];
-		expect(read.attentionStatus).toBe("idle");
+		expect(read.attentionStatus).toBe("unknown");
 		expect(read.attentionReason).toBeTruthy();
 
 		const persisted = store.loadAgents("feature-1")[0] as Agent;
