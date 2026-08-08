@@ -980,8 +980,7 @@ export class HomePanel {
 				<div class="section-label">Features</div>
 				<div class="project-feature-list">${featureRows}</div>
 				<button class="quick-action-btn primary project-new-feature" onclick="newFeature('${projectId}')">New Feature</button>
-			</div>
-			${projectSettingsCard}`;
+			</div>`;
 
 		const body = `
 		<div class="workspace-header">
