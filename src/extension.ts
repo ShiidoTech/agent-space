@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
-import { CodexSessionWatcher } from "./agents/sessionProviders/codexSessionWatcher";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
 import { validateFeatureNameInput } from "./features/featureName";
@@ -309,20 +308,12 @@ export async function activate(
 		}),
 	);
 
-	const codexWatcher = new CodexSessionWatcher();
-	codexWatcher.onDiscovered(() => {
-		sessionNameSyncer.syncAll();
-		sidebarProvider.refresh();
-	});
-	codexWatcher.start(projectManager);
-
 	const config = vscode.workspace.getConfiguration("agentSpace");
 	if (config.get("syncSessionNames", config.get("autoNameAgents", true))) {
 		sessionNameSyncer.start(projectManager);
 		sessionNameSyncer.syncAll();
 	}
 	context.subscriptions.push({ dispose: () => sessionNameSyncer.dispose() });
-	context.subscriptions.push({ dispose: () => codexWatcher.dispose() });
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand("agentSpace.syncSessionNames", () => {

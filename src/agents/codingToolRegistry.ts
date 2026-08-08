@@ -131,23 +131,26 @@ function providerForTool(
 					id,
 				)
 			: undefined;
+	const codexSessionProvider =
+		family === "codex" ? new CodexSessionProvider(sessionsDir) : undefined;
+	const sessionAdapter = claudeSessionProvider ?? codexSessionProvider;
 	return {
 		id,
 		capabilities: {
 			launch: true,
 			resume: Boolean(sessionFamily),
-			sessionDiscovery: Boolean(claudeSessionProvider),
-			sessionNaming: Boolean(claudeSessionProvider),
-			attention: claudeSessionProvider
+			sessionDiscovery: Boolean(sessionAdapter),
+			sessionNaming: Boolean(sessionAdapter),
+			attention: sessionAdapter
 				? FULL_ATTENTION_CAPABILITIES
 				: NO_ATTENTION_CAPABILITIES,
 		},
 		launchArgs,
 		resumeArgs,
-		getAttentionSignal: claudeSessionProvider
-			? (sessionId) => claudeSessionProvider.readAttention(sessionId)
+		getAttentionSignal: sessionAdapter
+			? (sessionId) => sessionAdapter.readAttention(sessionId)
 			: undefined,
-		sessionAdapter: claudeSessionProvider ?? undefined,
+		sessionAdapter,
 	};
 }
 

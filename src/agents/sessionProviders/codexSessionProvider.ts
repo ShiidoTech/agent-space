@@ -25,6 +25,7 @@ const DEFAULT_CODEX_SESSION_INDEX_PATH = path.join(
 );
 
 const CHUNK_SIZE = 4096;
+const claimedCodexSessionIds = new Set<string>();
 
 export class CodexSessionProvider
 	implements SessionProvider, SessionRenameAdapter, SessionTitleProvider
@@ -57,6 +58,24 @@ export class CodexSessionProvider
 		}
 
 		return results;
+	}
+
+	discoverSessionId(
+		cwd: string,
+		knownSessionIds: ReadonlySet<string>,
+	): string | undefined {
+		const normalizedCwd = path.resolve(cwd);
+		const candidate = this.scanSessions()
+			.filter(
+				(session) =>
+					path.resolve(session.projectPath) === normalizedCwd &&
+					!knownSessionIds.has(session.sessionId) &&
+					!claimedCodexSessionIds.has(session.sessionId),
+			)
+			.sort((left, right) => right.created.localeCompare(left.created))[0];
+		if (!candidate) return undefined;
+		claimedCodexSessionIds.add(candidate.sessionId);
+		return candidate.sessionId;
 	}
 
 	findSessionFile(sessionId: string): string | null {
