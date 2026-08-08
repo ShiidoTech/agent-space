@@ -96,16 +96,49 @@ export class FeatureManager {
 		return this.cachedBaseBranch;
 	}
 
+	/**
+	 * A feature is represented by a dedicated worktree. Git therefore owns the
+	 * authoritative branch identity. If that branch is renamed or changed
+	 * outside Agent Space, reconcile the persisted metadata before any status,
+	 * PR, deletion-safety, or per-agent operation consumes `feature.branch`.
+	 *
+	 * Detached/missing worktrees deliberately keep the persisted value: there is
+	 * no trustworthy replacement branch to invent in that state.
+	 */
+	private reconcileFeatureBranch(feature: Feature): void {
+		try {
+			const branch = String(
+				execSync("git symbolic-ref --quiet --short HEAD", {
+					cwd: feature.worktreePath,
+					encoding: "utf-8",
+					stdio: ["ignore", "pipe", "pipe"],
+				}),
+			).trim();
+			if (!branch || branch === feature.branch) return;
+
+			feature.branch = branch;
+			this.store.saveFeatures(this.features);
+		} catch {
+			// Detached HEAD, missing worktree, or unavailable Git: retain the
+			// persisted branch instead of guessing.
+		}
+	}
+
 	reload(): void {
 		this.features = this.store.loadFeatures();
 	}
 
 	getFeatures(): Feature[] {
+		for (const feature of this.features) {
+			this.reconcileFeatureBranch(feature);
+		}
 		return [...this.features];
 	}
 
 	getFeature(id: string): Feature | undefined {
-		return this.features.find((f) => f.id === id);
+		const feature = this.features.find((f) => f.id === id);
+		if (feature) this.reconcileFeatureBranch(feature);
+		return feature;
 	}
 
 	/**
@@ -181,6 +214,7 @@ export class FeatureManager {
 	 * any destructive step.
 	 */
 	getDeletionSafety(feature: Feature) {
+		this.reconcileFeatureBranch(feature);
 		return checkWorktreeDeletionSafety({
 			repoRoot: this.repoRoot,
 			worktreeBase: this.worktreeBase,
@@ -251,6 +285,7 @@ export class FeatureManager {
 	}
 
 	getFeatureGitStatus(feature: Feature): GitAwareStatus {
+		this.reconcileFeatureBranch(feature);
 		return computeGitStatus({
 			featureBranch: feature.branch,
 			baseBranch: this.getBaseBranch(),
@@ -260,6 +295,7 @@ export class FeatureManager {
 	}
 
 	async getFeatureGitStatusAsync(feature: Feature): Promise<GitAwareStatus> {
+		this.reconcileFeatureBranch(feature);
 		return computeGitStatusAsync({
 			featureBranch: feature.branch,
 			baseBranch: this.getBaseBranch(),
