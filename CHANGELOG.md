@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixes
+- Reconcile persisted feature branch metadata with the branch actually checked out in its worktree after an external rename, so status/PR/deletion flows do not keep using a stale branch name.
 - Retry provider-backed names for still-unnamed agents during long-running sessions instead of requiring a terminal focus change.
 - Include agents attached to the repository base feature in session-name synchronization.
 - Accept Claude-family session configuration that points either to a profile root or directly to its `projects` directory.
