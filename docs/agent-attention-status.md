@@ -14,11 +14,13 @@ This separation prevents a VS Code restart, a stale tmux session, or a provider-
 | Status | Meaning |
 |---|---|
 | `working` | Structured provider evidence says the current turn is in progress. |
-| `waiting_for_user` | Structured provider evidence says the current turn completed or explicitly requested user input/approval. |
-| `idle` | The tmux session is alive, but Agent Space has no strong evidence that a turn is currently running or needs attention. |
+| `waiting_for_user` | Structured provider evidence says the agent has an explicit open request for human input or approval. |
+| `idle` | The current turn is complete, or the tmux session is alive without evidence of active work or an open human-attention request. |
 | `failed` | The persisted lifecycle recorded a failure, the pane exited non-zero, or the provider emitted a terminal error event. |
 | `done` | The human explicitly marked the agent done. |
 | `unknown` | There is insufficient current evidence, for example the agent never started or its previously-running tmux session disappeared. |
+
+A completed model turn is **not** the same thing as needing the user. `waiting_for_user` is reserved for explicit questions, approvals, permissions, or equivalent provider-native gates.
 
 ## Evidence precedence
 
@@ -27,7 +29,7 @@ The resolver uses the strongest facts first:
 1. Explicit lifecycle `done` / recorded failure.
 2. Whether the agent has ever started.
 3. Current tmux session and pane state.
-4. Structured provider events for the exact session.
+4. Structured provider evidence for the exact session.
 5. Conservative `idle` fallback for a live unsupported/ambiguous CLI.
 
 A persisted `running` value by itself is **not** evidence that an agent is still working.
@@ -40,7 +42,7 @@ Agent Space reads only the tail of the session JSONL and, where an event carries
 
 Strong signals:
 
-- assistant `stop_reason: end_turn` → `waiting_for_user`;
+- assistant `stop_reason: end_turn` → `idle`;
 - `AskUserQuestion` tool call → `waiting_for_user`;
 - assistant `stop_reason: tool_use` → `working`;
 - new user/tool-result input or assistant activity before completion → `working`.
@@ -55,14 +57,27 @@ Strong signals include:
 
 - `task_started` / `turn_started` → `working`;
 - `request_user_input` or an `*_approval_request` event → `waiting_for_user`;
-- `task_complete` / `turn_complete` → `waiting_for_user`;
+- `task_complete` / `turn_complete` → `idle`;
 - terminal error event → `failed`.
+
+### OpenCode
+
+Agent Space reads the OpenCode SQLite store through `opencode db`; it does not scrape the TUI text.
+
+The latest persisted message provides the turn boundary:
+
+- latest assistant message without `time.completed` → `working`;
+- latest assistant message with `time.completed` → `idle`;
+- latest user message before an assistant response settles → `working`;
+- assistant message with an error → `failed`.
+
+A live `question` or `plan_exit` tool in `pending`/`running` state is treated as an explicit human-attention gate and therefore maps to `waiting_for_user`.
 
 ### Other tools
 
-For OpenCode, Hermes, Copilot, and generic/custom tools, Agent Space does not invent a provider-specific parser unless a stable structured signal is available. A live tmux session therefore reports `idle` rather than a false `working` or `waiting_for_user` state.
+Hermes, Copilot, and generic/custom tools remain conservative unless a stable structured signal is available. A live tmux session therefore reports `idle` rather than a false `working` or `waiting_for_user` state.
 
-This is deliberate first-pass coverage, not a claim that those tools can never expose richer status. New provider adapters can be added later without changing the provider-neutral UI contract.
+New provider adapters can be added without changing the provider-neutral UI contract.
 
 ## UI refresh
 
