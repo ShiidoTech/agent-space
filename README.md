@@ -70,11 +70,24 @@ Agent Space hosts your coding tools without wrapping them: each agent runs its o
 - **tmux** for persistent agent sessions
 - **One coding CLI tool on PATH**: works out of the box with `claude`, `codex`, `copilot`, `opencode`, `hermes`
 - **Optional custom CLI tools**: add any other terminal-based tool with `agentSpace.codingTools`
-- **Windows**: use Git for Windows (Git Bash). Install tmux with `pacman -S tmux` inside Git Bash.
+- **Windows**: VS Code Remote WSL is the recommended and supported path. Native Windows is experimental until a usable tmux runtime is qualified end-to-end.
 
 Optional:
 
 - [GitHub Pull Requests](https://marketplace.visualstudio.com/items?itemName=GitHub.vscode-pull-request-github) for the integrated "Create Pull Request" flow
+
+### Runtime support
+
+Agent Space validates the extension-host runtime, not only the desktop operating system:
+
+| Runtime | Status |
+|---|---|
+| Linux native | Supported |
+| macOS with tmux | Supported |
+| Windows with VS Code Remote WSL | Supported and recommended |
+| Native Windows | Experimental; requires a functional tmux backend |
+
+Use `Agent Space: Doctor` to check the runtime, Git, tmux version and functional tmux smoke test in the same environment that runs the extension. If native Windows cannot run tmux reliably, reopen the repository in WSL rather than installing a package manager that is not included with standard Git for Windows.
 
 ## Quick Start
 

@@ -16,6 +16,21 @@ export function isWindows(): boolean {
 	return process.platform === "win32";
 }
 
+export function isWsl(): boolean {
+	return (
+		process.platform === "linux" &&
+		Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP)
+	);
+}
+
+export function runtimeLabel(): string {
+	if (isWsl()) return "WSL / Linux extension host";
+	if (isWindows()) return "Windows native extension host";
+	if (process.platform === "darwin") return "macOS";
+	if (process.platform === "linux") return "Linux native";
+	return process.platform;
+}
+
 // ---------------------------------------------------------------------------
 // Git Bash discovery (Windows only, cached)
 // ---------------------------------------------------------------------------
@@ -115,6 +130,18 @@ export function commandExists(command: string): boolean {
 
 	commandExistsCache.set(command, exists);
 	return exists;
+}
+
+export function tmuxFunctional(): boolean {
+	const session = `agentspace-doctor-${process.pid}-${Date.now()}`;
+	try {
+		exec(`tmux new-session -d -s ${session}`);
+		return execSilent(`tmux has-session -t ${session}`);
+	} catch {
+		return false;
+	} finally {
+		execSilent(`tmux kill-session -t ${session}`);
+	}
 }
 
 /**
