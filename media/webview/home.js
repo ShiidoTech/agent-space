@@ -28,6 +28,18 @@ function editProjectBaseBranch(projectId) {
 	send("editProjectBaseBranch", { projectId });
 }
 
+/** @param {string} projectId */
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function showProject(projectId) {
+	send("showProject", { projectId });
+}
+
+/** @param {string} projectId */
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function showProjectSettings(projectId) {
+	send("showProjectSettings", { projectId });
+}
+
 // -- Feature Home Actions ------------------------------------
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function goHome() {

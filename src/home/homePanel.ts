@@ -38,6 +38,7 @@ export class HomePanel {
 	private terminalController?: TerminalController;
 	private currentFeatureId: string | null = null;
 	private currentProjectId: string | null = null;
+	private currentProjectSettings = false;
 	private refreshTimer?: ReturnType<typeof setInterval>;
 	private onViewStateChangeCallback?:
 		| ((state: { active: boolean; visible: boolean }) => void)
@@ -159,14 +160,23 @@ export class HomePanel {
 	}
 
 	public showProject(projectId: string): void {
+		this.showProjectPage(projectId, false);
+	}
+
+	public showProjectSettings(projectId: string): void {
+		this.showProjectPage(projectId, true);
+	}
+
+	private showProjectPage(projectId: string, settings: boolean): void {
 		const context = this.projectManager.getContext(projectId);
 		if (!context) return;
 		this.currentFeatureId = null;
 		this.currentProjectId = projectId;
+		this.currentProjectSettings = settings;
 		this.panel.title = `Agent Space: ${context.project.name}`;
 		this.stopGitPolling();
 		this.panel.reveal(vscode.ViewColumn.One, true);
-		this.panel.webview.html = this.getProjectHtml(projectId);
+		this.panel.webview.html = this.getProjectHtml(projectId, settings);
 	}
 
 	public refresh(): void {
@@ -174,7 +184,10 @@ export class HomePanel {
 			if (this.currentFeatureId) {
 				this.panel.webview.html = this.getFeatureHtml(this.currentFeatureId);
 			} else if (this.currentProjectId) {
-				this.panel.webview.html = this.getProjectHtml(this.currentProjectId);
+				this.panel.webview.html = this.getProjectHtml(
+					this.currentProjectId,
+					this.currentProjectSettings,
+				);
 			} else {
 				this.panel.webview.html = this.getWelcomeHtml();
 			}
@@ -242,6 +255,9 @@ export class HomePanel {
 				break;
 			case "showProject":
 				run("agentSpace.openProject", message.projectId as string);
+				break;
+			case "showProjectSettings":
+				run("agentSpace.openProjectSettings", message.projectId as string);
 				break;
 			// Agent actions
 			case "addAgent":
@@ -911,7 +927,7 @@ export class HomePanel {
 </html>`;
 	}
 
-	private getProjectHtml(projectId: string): string {
+	private getProjectHtml(projectId: string, settings = false): string {
 		const context = this.projectManager.getContext(projectId);
 		if (!context) return this.emptyHtml("Project not found");
 
@@ -941,6 +957,31 @@ export class HomePanel {
 					.join("")
 			: '<div class="activity-empty">No features yet.</div>';
 
+		const projectSettingsCard = `
+			<div class="project-settings-card">
+				<div class="section-label">Project Settings</div>
+				<div class="project-settings-grid">
+					<div><span class="project-setting-label">Base branch</span><strong>${this.escapeHtml(effectiveBaseBranch)}</strong><span class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</span></div>
+					<div><span class="project-setting-label">Branch kinds</span><span>${this.escapeHtml(branchKinds.join(", ") || "Default")}</span>${defaultBranchKind ? `<span class="project-setting-source">Default: ${this.escapeHtml(defaultBranchKind)}</span>` : ""}</div>
+					<div><span class="project-setting-label">Worktrees</span><span class="project-worktree-cell">${this.escapeHtml(context.featureManager.getWorktreeBase())}</span></div>
+				</div>
+				<button class="quick-action-btn" onclick="editProjectBaseBranch('${projectId}')">Edit base branch</button>
+			</div>`;
+		const projectPageContent = settings
+			? `<div class="project-page-nav">
+				<button class="quick-action-btn" onclick="showProject('${projectId}')">Overview</button>
+				<button class="quick-action-btn primary">Settings</button>
+			</div>${projectSettingsCard}`
+			: `<div class="project-page-nav">
+				<button class="quick-action-btn primary">Overview</button>
+				<button class="quick-action-btn" onclick="showProjectSettings('${projectId}')">Settings</button>
+			</div>
+			<div>
+				<div class="section-label">Features</div>
+				<div class="project-feature-list">${featureRows}</div>
+				<button class="quick-action-btn primary project-new-feature" onclick="newFeature('${projectId}')">New Feature</button>
+			</div>`;
+
 		const body = `
 		<div class="workspace-header">
 			<button class="home-back-btn" onclick="goHome()" title="Back to Agent Space">&larr;</button>
@@ -950,24 +991,7 @@ export class HomePanel {
 			</div>
 		</div>
 		<div class="workspace-content project-page">
-			<div class="project-page-nav">
-				<button class="quick-action-btn primary">Overview</button>
-				<button class="quick-action-btn" onclick="document.getElementById('project-settings').scrollIntoView({ behavior: 'smooth' })">Settings</button>
-			</div>
-			<div>
-				<div class="section-label">Features</div>
-				<div class="project-feature-list">${featureRows}</div>
-				<button class="quick-action-btn primary project-new-feature" onclick="newFeature('${projectId}')">New Feature</button>
-			</div>
-			<div id="project-settings" class="project-settings-card">
-				<div class="section-label">Project Settings</div>
-				<div class="project-settings-grid">
-					<div><span class="project-setting-label">Base branch</span><strong>${this.escapeHtml(effectiveBaseBranch)}</strong><span class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</span></div>
-					<div><span class="project-setting-label">Branch kinds</span><span>${this.escapeHtml(branchKinds.join(", ") || "Default")}</span>${defaultBranchKind ? `<span class="project-setting-source">Default: ${this.escapeHtml(defaultBranchKind)}</span>` : ""}</div>
-					<div><span class="project-setting-label">Worktrees</span><span class="project-worktree-cell">${this.escapeHtml(context.featureManager.getWorktreeBase())}</span></div>
-				</div>
-				<button class="quick-action-btn" onclick="editProjectBaseBranch('${projectId}')">Edit base branch</button>
-			</div>
+			${projectPageContent}
 		</div>`;
 
 		return `<!DOCTYPE html>
