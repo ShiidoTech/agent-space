@@ -1,7 +1,7 @@
 import { commandExists, exec, execSilent } from "../utils/platform";
 
 export const TMUX_SESSION_PREFIX = "agent-space";
-const LEGACY_TMUX_SESSION_PREFIX = "companion";
+export const LEGACY_TMUX_SESSION_PREFIX = "companion";
 
 /**
  * Replace characters that tmux interprets as target-specification separators.

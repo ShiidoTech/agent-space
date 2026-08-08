@@ -5,6 +5,7 @@ import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
+import { classifyLiveTmuxSession } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
@@ -973,14 +974,14 @@ export async function activate(
 			);
 			const tracked = new Map<string, string[]>();
 			for (const ctx of projectManager.getAllContexts()) {
-				for (const feature of ctx.featureManager.getFeatures()) {
-					for (const agent of ctx.agentManager.getAgents(feature.id)) {
+				for (const feature of ctx.store.loadFeatures()) {
+					for (const agent of ctx.store.loadAgents(feature.id)) {
 						if (!agent.tmuxSession) continue;
 						const owners = tracked.get(agent.tmuxSession) ?? [];
 						owners.push(`${ctx.project.name}/${feature.name}/${agent.name}`);
 						tracked.set(agent.tmuxSession, owners);
 					}
-					for (const service of ctx.serviceManager.getServices(feature.id)) {
+					for (const service of ctx.store.loadServices(feature.id)) {
 						const owners = tracked.get(service.tmuxSession) ?? [];
 						owners.push(
 							`${ctx.project.name}/${feature.name}/service:${service.name}`,
@@ -994,12 +995,10 @@ export async function activate(
 			output.clear();
 			for (const session of [...live].sort()) {
 				const owners = tracked.get(session);
-				if (!owners) {
-					output.appendLine(`untracked ${session}`);
-					continue;
-				}
-				const state = owners.length > 1 ? "conflict" : "tracked";
-				output.appendLine(`${state} ${session} owners=${owners.join(",")}`);
+				const state = classifyLiveTmuxSession(session, owners);
+				output.appendLine(
+					`${state} ${session}${owners ? ` owners=${owners.join(",")}` : ""}`,
+				);
 			}
 			for (const [session, owners] of tracked) {
 				if (!live.has(session)) {

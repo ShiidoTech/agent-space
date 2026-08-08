@@ -282,7 +282,7 @@ export class ProjectManager {
 		);
 
 		// Populate reverse index
-		for (const feature of featureManager.getFeatures()) {
+		for (const feature of store.loadFeatures()) {
 			this.featureToProject.set(feature.id, project.id);
 		}
 
