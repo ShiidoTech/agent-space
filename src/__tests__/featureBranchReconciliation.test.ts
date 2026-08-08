@@ -13,8 +13,8 @@ vi.mock("../features/featureGitStatus", () => ({
 }));
 
 import { execSync } from "node:child_process";
-import { FeatureManager } from "../features/featureManager";
 import { computeGitStatus } from "../features/featureGitStatus";
+import { FeatureManager } from "../features/featureManager";
 import { Store } from "../storage/store";
 
 const mockExecSync = vi.mocked(execSync);
