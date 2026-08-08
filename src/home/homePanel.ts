@@ -1073,11 +1073,7 @@ export class HomePanel {
 		const idx = allAgents.indexOf(agent);
 		const color = TERMINAL_COLOR_HEX[idx % TERMINAL_COLOR_HEX.length];
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
-		const defaultToolId = this.toolRegistry.getDefaultToolId();
-		const toolBadge =
-			tool.id !== defaultToolId
-				? `<span class="agent-tool-badge">${this.escapeHtml(tool.name)}</span>`
-				: "";
+		const toolBadge = `<span class="agent-tool-badge">${this.escapeHtml(tool.name)}</span>`;
 		const attention = agent.attentionStatus ?? "unknown";
 		const attentionReason =
 			agent.attentionReason ?? "No current attention evidence";
