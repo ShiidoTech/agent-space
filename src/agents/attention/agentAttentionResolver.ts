@@ -6,6 +6,7 @@ import type { CodingToolRegistry } from "../codingToolRegistry";
 import { isClaudeFamily } from "../codingToolRegistry";
 import { ClaudeSessionProvider } from "../sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "../sessionProviders/codexSessionProvider";
+import { OpenCodeSessionProvider } from "../sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "../tmux";
 
 const MAX_TAIL_BYTES = 128 * 1024;
@@ -13,16 +14,23 @@ const MAX_TAIL_BYTES = 128 * 1024;
 export interface AgentAttentionSnapshot {
 	status: AgentAttentionStatus;
 	reason: string;
-	source: "lifecycle" | "tmux" | "claude" | "codex" | "fallback";
+	source:
+		| "lifecycle"
+		| "tmux"
+		| "claude"
+		| "codex"
+		| "opencode"
+		| "fallback";
 }
 
 interface ProviderSignal {
-	status: "working" | "waiting_for_user" | "failed";
+	status: "working" | "waiting_for_user" | "idle" | "failed";
 	reason: string;
 }
 
 export interface AgentAttentionResolverOptions {
 	codexProvider?: CodexSessionProvider;
+	openCodeProvider?: OpenCodeSessionProvider;
 	claudeProviderFactory?: (tool: CodingTool) => ClaudeSessionProvider;
 }
 
@@ -37,6 +45,7 @@ export interface AgentAttentionResolverOptions {
  */
 export class AgentAttentionResolver {
 	private readonly codexProvider: CodexSessionProvider;
+	private readonly openCodeProvider: OpenCodeSessionProvider;
 	private readonly claudeProviders = new Map<string, ClaudeSessionProvider>();
 
 	constructor(
@@ -45,6 +54,8 @@ export class AgentAttentionResolver {
 		private readonly options: AgentAttentionResolverOptions = {},
 	) {
 		this.codexProvider = options.codexProvider ?? new CodexSessionProvider();
+		this.openCodeProvider =
+			options.openCodeProvider ?? new OpenCodeSessionProvider();
 	}
 
 	resolve(agent: Agent): AgentAttentionSnapshot {
@@ -112,7 +123,7 @@ export class AgentAttentionResolver {
 		if (providerSignal) {
 			return {
 				...providerSignal,
-				source: isClaudeFamily(tool) ? "claude" : "codex",
+				source: providerSource(tool),
 			};
 		}
 
@@ -133,6 +144,9 @@ export class AgentAttentionResolver {
 		}
 		if (tool.family === "codex" || tool.id === "codex") {
 			return this.readCodexSignal(sessionId);
+		}
+		if (tool.family === "opencode" || tool.id === "opencode") {
+			return this.openCodeProvider.readAttention(sessionId);
 		}
 		return null;
 	}
@@ -161,8 +175,8 @@ export class AgentAttentionResolver {
 				const stopReason = message?.stop_reason;
 				if (stopReason === "end_turn") {
 					return {
-						status: "waiting_for_user",
-						reason: "Claude completed its turn",
+						status: "idle",
+						reason: "Claude completed its current turn",
 					};
 				}
 				if (stopReason === "tool_use") {
@@ -217,7 +231,7 @@ export class AgentAttentionResolver {
 				}
 				if (eventType === "task_complete" || eventType === "turn_complete") {
 					return {
-						status: "waiting_for_user",
+						status: "idle",
 						reason: "Codex completed its current turn",
 					};
 				}
@@ -271,6 +285,15 @@ export class AgentAttentionResolver {
 		this.claudeProviders.set(key, provider);
 		return provider;
 	}
+}
+
+function providerSource(
+	tool: CodingTool,
+): "claude" | "codex" | "opencode" | "fallback" {
+	if (isClaudeFamily(tool)) return "claude";
+	if (tool.family === "codex" || tool.id === "codex") return "codex";
+	if (tool.family === "opencode" || tool.id === "opencode") return "opencode";
+	return "fallback";
 }
 
 function readTailJsonObjects(filePath: string): Record<string, unknown>[] {
