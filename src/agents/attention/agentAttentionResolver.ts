@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { expandHome } from "../../projects/projectConfig";
 import type { Agent, AgentAttentionStatus, CodingTool } from "../../types";
-import { isClaudeFamily } from "../codingToolRegistry";
 import type { CodingToolRegistry } from "../codingToolRegistry";
+import { isClaudeFamily } from "../codingToolRegistry";
 import { ClaudeSessionProvider } from "../sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "../sessionProviders/codexSessionProvider";
 import type { TmuxIntegration } from "../tmux";
@@ -176,9 +176,11 @@ export class AgentAttentionResolver {
 				if (message) {
 					return {
 						status: "working",
-						reason: "Claude emitted assistant activity without completing the turn",
+						reason:
+							"Claude emitted assistant activity without completing the turn",
 					};
 				}
+				return null;
 			}
 
 			if (event.type === "user" && event.isMeta !== true) {
@@ -187,6 +189,8 @@ export class AgentAttentionResolver {
 					reason: "Claude received user/tool-result input for the current turn",
 				};
 			}
+
+			return null;
 		}
 		return null;
 	}
@@ -242,6 +246,8 @@ export class AgentAttentionResolver {
 					reason: `Codex emitted ${String(type)} activity before turn completion`,
 				};
 			}
+
+			return null;
 		}
 		return null;
 	}

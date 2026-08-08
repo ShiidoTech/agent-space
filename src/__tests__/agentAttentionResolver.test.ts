@@ -1,13 +1,19 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentAttentionResolver } from "../agents/attention/agentAttentionResolver";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { ClaudeSessionProvider } from "../agents/sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "../agents/sessionProviders/codexSessionProvider";
 import type { TmuxIntegration } from "../agents/tmux";
 import type { Agent, CodingTool } from "../types";
+
+vi.mock("vscode", () => ({
+	workspace: {
+		getConfiguration: vi.fn(),
+	},
+}));
 
 const tempDirs: string[] = [];
 
@@ -71,9 +77,8 @@ describe("AgentAttentionResolver", () => {
 
 		expect(resolver.resolve(agent({ status: "done" })).status).toBe("done");
 		expect(
-			resolver.resolve(
-				agent({ status: "errored", lastError: "launch failed" }),
-			).status,
+			resolver.resolve(agent({ status: "errored", lastError: "launch failed" }))
+				.status,
 		).toBe("failed");
 		expect(
 			resolver.resolve(agent({ status: "stopped", hasStarted: false })).status,
@@ -211,6 +216,39 @@ describe("AgentAttentionResolver", () => {
 		expect(resolver.resolve(agent()).status).toBe("waiting_for_user");
 	});
 
+	it("does not reuse an older Claude signal after a newer unknown event", () => {
+		const root = tempDir();
+		const projectsDir = path.join(root, "projects");
+		const sessionFile = path.join(projectsDir, "project", "session-1.jsonl");
+		writeJsonl(sessionFile, [
+			{
+				type: "assistant",
+				sessionId: "session-1",
+				message: { content: [], stop_reason: "tool_use" },
+			},
+			{
+				type: "progress",
+				sessionId: "session-1",
+				data: { status: "compacting" },
+			},
+		]);
+
+		const resolver = new AgentAttentionResolver(
+			tmux(),
+			registry({
+				id: "claude",
+				name: "Claude Code",
+				command: "claude",
+				family: "claude",
+			}),
+			{
+				claudeProviderFactory: () => new ClaudeSessionProvider(projectsDir),
+			},
+		);
+
+		expect(resolver.resolve(agent()).status).toBe("idle");
+	});
+
 	it("maps Codex structured turn lifecycle and user-attention events", () => {
 		const sessionsDir = tempDir();
 		const sessionId = "019f5ab3-2ab3-7da3-b727-f5646b23bac6";
@@ -224,7 +262,12 @@ describe("AgentAttentionResolver", () => {
 		);
 		const resolver = new AgentAttentionResolver(
 			tmux(),
-			registry({ id: "codex", name: "Codex", command: "codex", family: "codex" }),
+			registry({
+				id: "codex",
+				name: "Codex",
+				command: "codex",
+				family: "codex",
+			}),
 			{ codexProvider: provider },
 		);
 		const codexAgent = agent({ sessionId, toolId: "codex" });

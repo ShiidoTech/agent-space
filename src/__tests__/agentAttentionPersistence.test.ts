@@ -7,6 +7,12 @@ import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { Store } from "../storage/store";
 import type { Agent } from "../types";
 
+vi.mock("vscode", () => ({
+	workspace: {
+		getConfiguration: vi.fn(),
+	},
+}));
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -17,7 +23,9 @@ afterEach(() => {
 
 describe("agent attention persistence", () => {
 	it("decorates reads without writing attention fields to agents.json", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-space-attention-store-"));
+		const dir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "agent-space-attention-store-"),
+		);
 		tempDirs.push(dir);
 		const store = new Store(dir);
 		const stored: Agent = {

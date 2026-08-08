@@ -6,12 +6,7 @@ import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_GIT } from "../constants/icons";
 import type { ProjectManager } from "../projects/projectManager";
 import type { GlobalStore } from "../storage/globalStore";
-import type {
-	Agent,
-	AgentAttentionStatus,
-	Feature,
-	Service,
-} from "../types";
+import type { Agent, AgentAttentionStatus, Feature, Service } from "../types";
 
 function attentionStatusLabel(status: AgentAttentionStatus): string {
 	switch (status) {
