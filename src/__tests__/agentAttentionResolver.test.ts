@@ -6,6 +6,7 @@ import { AgentAttentionResolver } from "../agents/attention/agentAttentionResolv
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { ClaudeSessionProvider } from "../agents/sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "../agents/sessionProviders/codexSessionProvider";
+import { OpenCodeSessionProvider } from "../agents/sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "../agents/tmux";
 import type { Agent, CodingTool } from "../types";
 
@@ -105,7 +106,7 @@ describe("AgentAttentionResolver", () => {
 		expect(resolver.resolve(agent({ toolId: "generic" })).status).toBe("idle");
 	});
 
-	it("maps Claude end_turn to waiting_for_user", () => {
+	it("maps Claude end_turn to idle, not waiting_for_user", () => {
 		const root = tempDir();
 		const projectsDir = path.join(root, "projects");
 		const sessionFile = path.join(projectsDir, "project", "session-1.jsonl");
@@ -139,7 +140,7 @@ describe("AgentAttentionResolver", () => {
 			},
 		);
 
-		expect(resolver.resolve(agent()).status).toBe("waiting_for_user");
+		expect(resolver.resolve(agent()).status).toBe("idle");
 	});
 
 	it("maps Claude tool continuation to working and AskUserQuestion to waiting", () => {
@@ -213,7 +214,7 @@ describe("AgentAttentionResolver", () => {
 			},
 		);
 
-		expect(resolver.resolve(agent()).status).toBe("waiting_for_user");
+		expect(resolver.resolve(agent()).status).toBe("idle");
 	});
 
 	it("does not reuse an older Claude signal after a newer unknown event", () => {
@@ -289,7 +290,31 @@ describe("AgentAttentionResolver", () => {
 			{ type: "session_meta", payload: { id: sessionId } },
 			{ type: "event_msg", payload: { type: "task_complete" } },
 		]);
-		expect(resolver.resolve(codexAgent).status).toBe("waiting_for_user");
+		expect(resolver.resolve(codexAgent).status).toBe("idle");
+	});
+
+	it("uses OpenCode provider evidence instead of the generic idle fallback", () => {
+		const openCodeProvider = {
+			readAttention: vi.fn(() => ({
+				status: "working" as const,
+				reason: "OpenCode has an assistant turn in progress",
+			})),
+		} as unknown as OpenCodeSessionProvider;
+		const resolver = new AgentAttentionResolver(
+			tmux(),
+			registry({
+				id: "opencode",
+				name: "OpenCode",
+				command: "opencode",
+				family: "opencode",
+			}),
+			{ openCodeProvider },
+		);
+
+		const snapshot = resolver.resolve(agent({ toolId: "opencode" }));
+		expect(snapshot.status).toBe("working");
+		expect(snapshot.source).toBe("opencode");
+		expect(openCodeProvider.readAttention).toHaveBeenCalledWith("session-1");
 	});
 
 	it("treats a non-zero dead pane as failed", () => {
