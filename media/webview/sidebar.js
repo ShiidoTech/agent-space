@@ -224,6 +224,15 @@ const STATUS_LABELS = {
 	merged: "Merged",
 };
 
+const ATTENTION_LABELS = {
+	working: "Working",
+	waiting_for_user: "Waiting for you",
+	idle: "Idle",
+	failed: "Failed",
+	done: "Done",
+	unknown: "Unknown",
+};
+
 window.addEventListener("message", function (event) {
 	var msg = event.data;
 	if (msg.type !== "sidebarUpdate" || !msg.data) return;
@@ -250,7 +259,7 @@ window.addEventListener("message", function (event) {
 				}
 			}
 
-			// Update agent status dots
+			// Update agent lifecycle + attention status
 			for (var a = 0; a < feat.agents.length; a++) {
 				var agent = feat.agents[a];
 				var agentEl = card.querySelector('[data-agent-id="' + agent.id + '"]');
@@ -259,19 +268,31 @@ window.addEventListener("message", function (event) {
 					continue;
 				}
 
-				var dot = agentEl.querySelector(".status-dot");
+				var attention = agent.attentionStatus || "unknown";
+				var dot = agentEl.querySelector(
+					'[data-attention-dot="' + agent.id + '"]',
+				);
 				if (dot) {
-					dot.className = "status-dot " + agent.status;
+					dot.className = "status-dot " + attention;
 				}
 
-				// Update card-level status class
+				var attentionBadge = agentEl.querySelector(
+					'[data-attention-badge="' + agent.id + '"]',
+				);
+				if (attentionBadge) {
+					attentionBadge.className = "attention-badge attention-" + attention;
+					attentionBadge.textContent = ATTENTION_LABELS[attention] || attention;
+					attentionBadge.title =
+						agent.attentionReason || "No current attention evidence";
+				}
+
+				// Keep card-level classes tied to persisted lifecycle state.
 				var statusClass = "idle";
 				if (agent.status === "running") statusClass = "running";
 				if (agent.status === "stopped") statusClass = "stopped";
 				if (agent.status === "done") statusClass = "done";
 				if (agent.status === "errored") statusClass = "errored";
 
-				// Replace status class on agent card
 				agentEl.className =
 					agentEl.className
 						.replace(/\b(idle|running|stopped|done|errored)\b/g, "")

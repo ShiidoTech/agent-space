@@ -103,6 +103,7 @@ echo "Changelog updated."
 
 # --- Build VSIX ---
 echo "Building VSIX package..."
+bun run compile
 bun run package
 VSIX_FILE="$(ls -1t *.vsix 2>/dev/null | head -1)"
 echo "VSIX built: ${VSIX_FILE:-agent-space-${NEW_VERSION}.vsix}"
@@ -119,5 +120,7 @@ echo "========================================="
 echo ""
 echo "Next steps:"
 echo "  git push && git push --tags"
-echo "  bunx @vscode/vsce publish"
+echo "  # VSIX distribution: install/share the package built above"
+echo "  # Marketplace distribution (intentional ShiidoTech release only):"
+echo "  AGENT_SPACE_ALLOW_MARKETPLACE_PUBLISH=1 bun run deploy"
 echo ""

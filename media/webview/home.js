@@ -221,6 +221,28 @@ function updateActivityContent(preId, emptyId, content) {
 	}
 }
 
+const ATTENTION_LABELS = {
+	working: "Working",
+	waiting_for_user: "Waiting for you",
+	idle: "Idle",
+	failed: "Failed",
+	done: "Done",
+	unknown: "Unknown",
+};
+
+function updateAttention(agent) {
+	const status = agent.status || "unknown";
+	const dot = document.getElementById(`agent-attention-dot-${agent.id}`);
+	if (dot) dot.className = `agent-status-dot attention-${status}`;
+
+	const badge = document.getElementById(`agent-attention-badge-${agent.id}`);
+	if (badge) {
+		badge.className = `agent-tool-badge agent-attention-badge attention-${status}`;
+		badge.textContent = ATTENTION_LABELS[status] || status;
+		badge.title = agent.reason || "No current attention evidence";
+	}
+}
+
 window.addEventListener("message", (event) => {
 	const message = event.data;
 	switch (message.type) {
@@ -237,6 +259,9 @@ window.addEventListener("message", (event) => {
 				`service-activity-empty-${message.serviceId}`,
 				message.content,
 			);
+			break;
+		case "agentAttentionUpdate":
+			for (const agent of message.agents || []) updateAttention(agent);
 			break;
 		case "gitStatsUpdate": {
 			const statsEl = document.getElementById("git-stats-content");
