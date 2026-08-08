@@ -72,7 +72,12 @@ export class AgentAttentionResolver {
 
 		const sessionName =
 			agent.tmuxSession ?? this.tmux.sessionName(agent.featureId, agent.id);
-		const alive = this.tmux.isSessionAlive(sessionName);
+		let alive = false;
+		try {
+			alive = this.tmux.isSessionAlive?.(sessionName) ?? false;
+		} catch {
+			alive = false;
+		}
 		if (!alive) {
 			return {
 				status: "unknown",
@@ -81,7 +86,12 @@ export class AgentAttentionResolver {
 			};
 		}
 
-		const pane = this.tmux.getPaneStatus(sessionName);
+		let pane: ReturnType<TmuxIntegration["getPaneStatus"]> = null;
+		try {
+			pane = this.tmux.getPaneStatus?.(sessionName) ?? null;
+		} catch {
+			pane = null;
+		}
 		if (pane?.dead) {
 			if (pane.exitCode !== 0) {
 				return {
