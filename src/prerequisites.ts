@@ -51,7 +51,7 @@ export class PrerequisiteChecker {
 		}
 
 		if (isWindows() && missing.includes("tmux")) {
-			const action = "Copy Install Command";
+			const action = "Copy Setup Instructions";
 			vscode.window
 				.showErrorMessage(
 					"Agent Space could not run tmux in the current Windows runtime. Recommended: reopen this repository in VS Code Remote WSL, then install tmux inside WSL.",
