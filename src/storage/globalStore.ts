@@ -48,9 +48,11 @@ export class GlobalStore {
 	private readonly projectsPath: string;
 	private readonly preferencesPath: string;
 
-	constructor(baseDir: string) {
+	constructor(baseDir: string, options: { migrateLegacy?: boolean } = {}) {
 		this.baseDir = baseDir;
-		migrateLegacyExtensionStorage(baseDir);
+		if (options.migrateLegacy !== false) {
+			migrateLegacyExtensionStorage(baseDir);
+		}
 		this.projectsPath = path.join(baseDir, "projects.json");
 		this.preferencesPath = path.join(baseDir, "preferences.json");
 	}

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { CodingTool, Project } from "../types";
-import { exec, execSilent } from "../utils/platform";
+import { commandExists, exec, execSilent } from "../utils/platform";
 
 export type DoctorLevel = "ok" | "info" | "warn" | "error";
 
@@ -82,6 +82,22 @@ function defaultReadProjectConfig(repoPath: string): ProjectConfigProbe {
 				error: "config.json must contain a JSON object",
 			};
 		}
+		const config = parsed as Record<string, unknown>;
+		if (
+			(config.baseBranch !== undefined && typeof config.baseBranch !== "string") ||
+			(config.defaultBranchKind !== undefined &&
+				typeof config.defaultBranchKind !== "string") ||
+			(config.worktreesDir !== undefined && typeof config.worktreesDir !== "string") ||
+			(config.branchKinds !== undefined &&
+				(!Array.isArray(config.branchKinds) ||
+					config.branchKinds.some((kind) => typeof kind !== "string")))
+		) {
+			return {
+				exists: true,
+				valid: false,
+				error: "config.json contains fields with invalid types",
+			};
+		}
 		return { exists: true, valid: true, config: parsed };
 	} catch (error) {
 		return {
@@ -93,9 +109,7 @@ function defaultReadProjectConfig(repoPath: string): ProjectConfigProbe {
 }
 
 export const defaultDoctorDeps: DoctorDeps = {
-	commandExists(command) {
-		return execSilent(`${process.platform === "win32" ? "where" : "which"} ${command}`);
-	},
+	commandExists,
 	commandVersion(command) {
 		try {
 			return exec(`${command} --version`).trim().split("\n")[0] || null;
@@ -355,7 +369,10 @@ export function runDoctor(
 			);
 		}
 
-		const configuredBase = config.config?.baseBranch?.trim();
+		const configuredBase =
+			typeof config.config?.baseBranch === "string"
+				? config.config.baseBranch.trim()
+				: undefined;
 		const effectiveBase = configuredBase || deps.currentBranch(project.repoPath);
 		if (!effectiveBase) {
 			add(

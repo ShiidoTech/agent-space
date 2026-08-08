@@ -109,4 +109,19 @@ describe("runDoctor", () => {
 		expect(report.errors).toBe(1);
 		expect(report.markdown).toContain("configured branch `main` was not found");
 	});
+
+	it("does not crash on a malformed base branch value", () => {
+		const report = runDoctor(
+			input(),
+			deps({
+				readProjectConfig: () => ({
+					exists: true,
+					valid: true,
+					config: { baseBranch: 42 as unknown as string },
+				}),
+			}),
+		);
+
+		expect(report.markdown).toContain("no explicit baseBranch");
+	});
 });

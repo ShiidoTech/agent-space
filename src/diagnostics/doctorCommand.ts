@@ -8,7 +8,9 @@ export function registerDoctorCommand(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		vscode.commands.registerCommand("agentSpace.doctor", async () => {
 			const config = vscode.workspace.getConfiguration("agentSpace");
-			const globalStore = new GlobalStore(context.globalStorageUri.fsPath);
+			const globalStore = new GlobalStore(context.globalStorageUri.fsPath, {
+				migrateLegacy: false,
+			});
 			const toolRegistry = new CodingToolRegistry();
 			const report = runDoctor(
 				{
