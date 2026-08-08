@@ -967,6 +967,53 @@ export async function activate(
 	);
 
 	context.subscriptions.push(
+		vscode.commands.registerCommand("agentSpace.inspectTmuxSessions", () => {
+			const output = vscode.window.createOutputChannel(
+				"Agent Space tmux Diagnostics",
+			);
+			const tracked = new Map<string, string[]>();
+			for (const ctx of projectManager.getAllContexts()) {
+				for (const feature of ctx.featureManager.getFeatures()) {
+					for (const agent of ctx.agentManager.getAgents(feature.id)) {
+						if (!agent.tmuxSession) continue;
+						const owners = tracked.get(agent.tmuxSession) ?? [];
+						owners.push(`${ctx.project.name}/${feature.name}/${agent.name}`);
+						tracked.set(agent.tmuxSession, owners);
+					}
+					for (const service of ctx.serviceManager.getServices(feature.id)) {
+						const owners = tracked.get(service.tmuxSession) ?? [];
+						owners.push(
+							`${ctx.project.name}/${feature.name}/service:${service.name}`,
+						);
+						tracked.set(service.tmuxSession, owners);
+					}
+				}
+			}
+
+			const live = new Set(projectManager.listTmuxSessions());
+			output.clear();
+			for (const session of [...live].sort()) {
+				const owners = tracked.get(session);
+				if (!owners) {
+					output.appendLine(`untracked ${session}`);
+					continue;
+				}
+				const state = owners.length > 1 ? "conflict" : "tracked";
+				output.appendLine(`${state} ${session} owners=${owners.join(",")}`);
+			}
+			for (const [session, owners] of tracked) {
+				if (!live.has(session)) {
+					output.appendLine(`missing ${session} owners=${owners.join(",")}`);
+				}
+			}
+			output.appendLine(
+				"No tmux session was stopped, renamed, or otherwise modified.",
+			);
+			output.show(true);
+		}),
+	);
+
+	context.subscriptions.push(
 		vscode.commands.registerCommand(
 			"agentSpace.createPR",
 			async (featureIdArg?: string) => {

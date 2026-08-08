@@ -122,6 +122,12 @@
 				"icon": "$(list-unordered)"
 			},
 			{
+				"command": "agentSpace.inspectTmuxSessions",
+				"title": "Inspect tmux Sessions",
+				"category": "Agent Space",
+				"icon": "$(pulse)"
+			},
+			{
 				"command": "agentSpace.addProject",
 				"title": "Add Project",
 				"category": "Agent Space"

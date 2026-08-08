@@ -192,6 +192,11 @@ export class ProjectManager {
 		return [...this.contexts.values()];
 	}
 
+	/** Return the current tmux sessions without mutating any session state. */
+	listTmuxSessions(): string[] {
+		return this.tmux.listSessions();
+	}
+
 	findContextByFeatureId(featureId: string): ProjectContext | undefined {
 		if (featureId.startsWith("base:")) {
 			const projectId = featureId.slice("base:".length);
