@@ -1,6 +1,6 @@
 # Agent Space
 
-Organize your real coding agents — real CLIs, real terminals, real Git worktrees, and VS Code's native Git. Agent Space is a thin layer that keeps parallel work visible and durable. It does **not** replace your coding tools or orchestrate their intelligence: each agent keeps its own native terminal interface and its own session.
+Use different coding agents on the same feature — real CLIs, real terminals, real Git worktrees, and VS Code's native Git. Agent Space is a thin layer that keeps parallel work visible and durable. Build with one agent, review with another, and keep the same feature context. It does **not** replace your coding tools or orchestrate their intelligence: each agent keeps its own native terminal interface and its own session.
 
 > **Philosophy — a layer, not an orchestrator.** Agent Space deliberately stays out of the way of the tools it hosts. You keep using whatever you can run from a terminal — `claude`, `codex`, `opencode`, `aider`, or anything else. Agent Space gives every feature an isolated Git worktree, keeps each agent's terminal alive in tmux across restarts, resumes the session when the tool supports it, and shows you exactly where everything stands.
 >
@@ -15,7 +15,7 @@ Organize your real coding agents — real CLIs, real terminals, real Git worktre
 ## What It Does
 
 - Dedicated Git worktree per feature branch
-- Multiple coding CLIs running in parallel on the same feature
+- Multiple coding CLIs running in parallel on the same feature, with each tool identified in the feature view
 - Agent terminals kept alive in tmux across VS Code restarts, with session resume for supported tools
 - Sidebar + home dashboard: features, agents, services and status at a glance
 - Feature workspaces and PR handoff from inside VS Code
@@ -42,6 +42,19 @@ It works with any terminal-based coding CLI. Built-in presets: `claude`, `codex`
 - **The problem.** Several agents in the same repository can overwrite each other or lose terminal context. Agent Space keeps each feature isolated in its own Git worktree, makes active work visible, and lets long-running agent sessions survive editor restarts.
 - **Why not just open terminals yourself?** A handful of terminals does not give you per-feature worktrees, durable tmux sessions that survive restarts, session resume, and a dashboard showing where everything stands — that bookkeeping is what Agent Space takes off your hands.
 - **Why use it when your coding CLI already has a multi-agent system?** Those systems organize what agents do *inside* one session. Agent Space works one level below: it organizes the persistent environments — worktrees, terminals, sessions — in which the human puts those tools to work, even several at once.
+
+## One feature, several agents
+
+Agent Space keeps the feature/worktree stable while you choose the tool for each stage. For example:
+
+1. Use Claude Code to implement a change in the feature worktree.
+2. Add Codex to the same feature and use it as an independent reviewer.
+3. Use OpenCode or another terminal-based CLI to run tests or investigate a follow-up.
+4. Review the result yourself and use VS Code's native GitHub Pull Requests flow for the final handoff.
+
+The agents remain native CLIs. Agent Space provides the shared Git worktree, terminals and project visibility; it does not route prompts or decide which model should run.
+
+This also supports provider and budget flexibility: use the tools, subscriptions, credits or API models available to you, and change the agent without moving the feature to another workspace. This is a choice, not a promise that using several providers costs less.
 
 ## Your Coding Tools Stay Native
 
