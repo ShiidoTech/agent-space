@@ -84,7 +84,7 @@ export class OpenCodeSessionProvider
 
 		try {
 			const raw = execSync(
-				`opencode db "SELECT (SELECT data FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AS message_data, (SELECT data FROM part WHERE session_id = '${sessionId}' AND json_extract(data, '$.type') = 'tool' AND json_extract(data, '$.state.status') IN ('pending', 'running') AND json_extract(data, '$.tool') IN ('question', 'plan_exit') ORDER BY time_updated DESC, id DESC LIMIT 1) AS gate_data" --format json`,
+				`opencode db "SELECT (SELECT data FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AS message_data, (SELECT data FROM part WHERE session_id = '${sessionId}' AND message_id = (SELECT id FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AND json_extract(data, '$.type') = 'tool' AND json_extract(data, '$.state.status') IN ('pending', 'running') AND json_extract(data, '$.tool') IN ('question', 'plan_exit') ORDER BY time_updated DESC, id DESC LIMIT 1) AS gate_data" --format json`,
 				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
 			);
 			const rows = JSON.parse(raw);
@@ -106,7 +106,8 @@ export class OpenCodeSessionProvider
 			if (role === "user") {
 				return {
 					status: "working",
-					reason: "OpenCode has received user input and has not completed a response",
+					reason:
+						"OpenCode has received user input and has not completed a response",
 				};
 			}
 			if (role !== "assistant") return null;

@@ -6,7 +6,7 @@ import { AgentAttentionResolver } from "../agents/attention/agentAttentionResolv
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { ClaudeSessionProvider } from "../agents/sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "../agents/sessionProviders/codexSessionProvider";
-import { OpenCodeSessionProvider } from "../agents/sessionProviders/openCodeSessionProvider";
+import type { OpenCodeSessionProvider } from "../agents/sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "../agents/tmux";
 import type { Agent, CodingTool } from "../types";
 
