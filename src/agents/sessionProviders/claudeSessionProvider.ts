@@ -31,7 +31,9 @@ export class ClaudeSessionProvider
 
 	constructor(projectsDir?: string, toolId = "claude") {
 		this.toolId = toolId;
-		this.projectsDir = normalizeProjectsDir(projectsDir ?? DEFAULT_PROJECTS_DIR);
+		this.projectsDir = normalizeProjectsDir(
+			projectsDir ?? DEFAULT_PROJECTS_DIR,
+		);
 	}
 
 	scanSessions(): SessionInfo[] {
