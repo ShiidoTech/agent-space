@@ -5,6 +5,7 @@ import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
+import { runBootstrapCommands } from "./features/bootstrapRunner";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
 import {
@@ -922,18 +923,17 @@ export async function activate(
 					return;
 				}
 
-				const terminal = vscode.window.createTerminal({
-					name: `Bootstrap: ${resolved.feature.name}`,
-					cwd: resolved.feature.worktreePath,
-				});
-				terminal.show(true);
-				terminal.sendText("set -e");
-				terminal.sendText(
-					`printf '\\n[Agent Space] Bootstrap started in ${resolved.feature.worktreePath.replace(/'/g, "'\\''")}\\n'`,
+				const output = vscode.window.createOutputChannel(
+					`Agent Space Bootstrap: ${resolved.feature.name}`,
 				);
-				for (const command of commands) terminal.sendText(command);
-				terminal.sendText(
-					"printf '\\n[Agent Space] Bootstrap commands finished. Review output above.\\n'",
+				output.show(true);
+				output.appendLine(
+					`Bootstrap worktree: ${resolved.feature.worktreePath}`,
+				);
+				await runBootstrapCommands(
+					commands,
+					resolved.feature.worktreePath,
+					output,
 				);
 			},
 		),
