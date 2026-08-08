@@ -643,8 +643,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private renderAgentsSection(feature: Feature, agents: Agent[]): string {
-		const defaultToolId = this.toolRegistry.getDefaultToolId();
-
 		const activeAgents = agents.filter((a) => a.status !== "done");
 		const doneAgents = agents.filter((a) => a.status === "done");
 
@@ -656,10 +654,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 		const renderAgentCard = (a: Agent, i: number) => {
 			const tool = this.toolRegistry.resolveAgentTool(a.toolId);
-			const toolLabel =
-				tool.id !== defaultToolId
-					? ` &middot; ${this.escapeHtml(tool.name)}`
-					: "";
+			const toolLabel = ` &middot; ${this.escapeHtml(tool.name)}`;
 			const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
 			const attention = a.attentionStatus ?? "unknown";
 			const errorNote = a.lastError
