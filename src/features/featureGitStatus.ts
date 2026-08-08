@@ -6,6 +6,7 @@ export interface GitStatusInput {
 	baseBranch: string;
 	worktreePath: string;
 	repoRoot: string;
+	createdFromSha?: string;
 }
 
 function git(command: string, cwd: string): string {
@@ -27,7 +28,9 @@ function branchMovedSinceCreation(
 		)
 			.split(/\r?\n/)
 			.filter(Boolean);
-		if (reflog.length === 0) return null;
+		// A single entry is not enough to distinguish a new branch from a
+		// reflog whose older entries have expired.
+		if (reflog.length < 2) return null;
 		return reflog[0] !== reflog[reflog.length - 1];
 	} catch {
 		// Reflog may be disabled or unavailable. Preserve the previous merged
@@ -100,7 +103,9 @@ function computeGitStatusUncached(input: GitStatusInput): GitAwareStatus {
 				`git merge-base --is-ancestor "${featureBranch}" "${baseBranch}"`,
 				repoRoot,
 			);
-			const moved = branchMovedSinceCreation(featureBranch, repoRoot);
+			const moved = input.createdFromSha
+				? featureSha !== input.createdFromSha
+				: branchMovedSinceCreation(featureBranch, repoRoot);
 			if (moved !== false) {
 				// If git() didn't throw, feature is ancestor of base. Treat it as
 				// merged unless reflog proves the branch never moved from creation.
@@ -138,7 +143,8 @@ export async function computeGitStatusAsync(
 	}
 
 	const { execAsync } = await import("../utils/platform");
-	const { featureBranch, baseBranch, worktreePath, repoRoot } = input;
+	const { featureBranch, baseBranch, worktreePath, repoRoot, createdFromSha } =
+		input;
 
 	const gitOpts = {
 		encoding: "utf-8" as const,
@@ -153,14 +159,11 @@ export async function computeGitStatusAsync(
 	async function branchMovedSinceCreationAsync(): Promise<boolean | null> {
 		try {
 			const reflog = (
-				await gitCmd(
-					`git reflog show --format=%H "${featureBranch}"`,
-					repoRoot,
-				)
+				await gitCmd(`git reflog show --format=%H "${featureBranch}"`, repoRoot)
 			)
 				.split(/\r?\n/)
 				.filter(Boolean);
-			if (reflog.length === 0) return null;
+			if (reflog.length < 2) return null;
 			return reflog[0] !== reflog[reflog.length - 1];
 		} catch {
 			return null;
@@ -193,7 +196,9 @@ export async function computeGitStatusAsync(
 				`git merge-base --is-ancestor "${featureBranch}" "${baseBranch}"`,
 				repoRoot,
 			);
-			const moved = await branchMovedSinceCreationAsync();
+			const moved = createdFromSha
+				? featureSha !== createdFromSha
+				: await branchMovedSinceCreationAsync();
 			if (moved !== false) {
 				result = "merged";
 				gitStatusCache.set(key, { result, timestamp: Date.now() });
