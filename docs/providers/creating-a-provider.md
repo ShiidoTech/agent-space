@@ -14,8 +14,16 @@ Implement `CodingAgentProvider` from
   new process.
 - `sessionDiscovery` and `sessionNaming` require parser tests against real
   provider data.
-- `attention.working`, `attention.waitingForUser`, and `attention.failed` may
+- `attention.working`, `attention.waitingForUser`, `attention.idle`, and
+  `attention.failed` may
   only be enabled when the provider exposes structured, reliable signals.
+
+Expose session behavior through `sessionAdapter` rather than wiring a watcher
+or parser in `extension.ts`. Its `readName()` method implements naming;
+`scanSessions()` and `discoverSessionId(cwd, knownSessionIds)` implement
+provider-owned discovery. `discoverSessionId()` must not return a session from
+`knownSessionIds`, and must reserve a returned ID so two agents sharing a cwd
+cannot claim the same session.
 
 Session naming is the provider session title used by Agent Space for the agent
 display name; it is not a rename of the native terminal prompt. Working means
