@@ -72,6 +72,22 @@ button {
 	background-color: var(--vscode-button-secondaryHoverBackground);
 }
 
+.btn-home {
+	width: 100%;
+	padding: 8px 12px;
+	margin-bottom: 8px;
+	text-align: left;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+	background: var(--vscode-sideBarSectionHeader-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 2px;
+}
+
+.btn-home:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+
 /* Project Section */
 .project-section {
 	border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
@@ -110,6 +126,12 @@ button {
 	text-overflow: ellipsis;
 }
 
+.project-nav-btn {
+	text-align: left;
+	font-weight: inherit;
+	font-size: inherit;
+}
+
 .project-path {
 	flex: 1;
 	font-size: 0.85em;
@@ -135,6 +157,19 @@ button {
 .project-remove-btn:hover {
 	background-color: var(--vscode-toolbar-hoverBackground);
 	color: var(--vscode-errorForeground);
+}
+
+.project-settings-btn {
+	padding: 2px 6px;
+	border: 1px solid var(--vscode-button-border, transparent);
+	border-radius: 3px;
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.project-settings-btn:hover {
+	background: var(--vscode-toolbar-hoverBackground);
+	color: var(--vscode-foreground);
 }
 
 .project-body {

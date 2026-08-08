@@ -110,6 +110,15 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				case "selectFeature":
 					run("agentSpace.selectFeature", message.featureId);
 					break;
+				case "openHome":
+					run("agentSpace.openHome");
+					break;
+				case "openProject":
+					run("agentSpace.openProject", message.projectId);
+					break;
+				case "openProjectSettings":
+					run("agentSpace.openProjectSettings", message.projectId);
+					break;
 				case "newFeature":
 					run("agentSpace.newFeature", message.projectId);
 					break;
@@ -462,6 +471,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		let body: string;
 		if (contexts.length === 0) {
 			body = `
+				<button class="btn-home" onclick="send('openHome')">Agent Space Home</button>
 				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				<div class="empty-state">
 					<div style="font-size: 24px; opacity: 0.3; margin-bottom: 8px;">Waiting for projects...</div>
@@ -473,6 +483,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				.map((ctx) => this.renderProjectSection(ctx, statusMap))
 				.join("");
 			body = `
+				<button class="btn-home" onclick="send('openHome')">Agent Space Home</button>
 				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				${sections}`;
 		}
@@ -537,8 +548,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		<div class="project-section">
 			<div class="project-header" onclick="toggleProject('${project.id}')">
 				<span class="project-toggle" id="project-toggle-${project.id}">${ICON_CHEVRON_DOWN}</span>
-				<span class="project-name">${this.escapeHtml(project.name)}</span>
+				<button class="project-name project-nav-btn" onclick="openProject(event, '${project.id}')">${this.escapeHtml(project.name)}</button>
 				<span class="project-path" title="${this.escapeHtml(project.repoPath)}">${this.escapeHtml(project.repoPath)}</span>
+				<button class="project-settings-btn" onclick="openProjectSettings(event, '${project.id}')">Settings</button>
 				<button class="project-remove-btn" onclick="removeProject(event)" title="Remove Project">${ICON_REMOVE}</button>
 			</div>
 			<div class="project-body" id="project-body-${project.id}">
