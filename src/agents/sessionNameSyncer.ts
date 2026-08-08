@@ -1,12 +1,18 @@
-import type { ProjectManager } from "../projects/projectManager";
+import type {
+	ProjectContext,
+	ProjectManager,
+} from "../projects/projectManager";
+import type { Agent } from "../types";
 import type { SessionRenameAdapter } from "./sessionProviders/types";
 
 const MAX_TITLE_LENGTH = 40;
+const UNNAMED_SYNC_INTERVAL_MS = 15_000;
 
 export class SessionNameSyncer {
 	private readonly knownTitles = new Map<string, string>();
 	private readonly adapters = new Map<string, SessionRenameAdapter>();
 	private projectManager: ProjectManager | undefined;
+	private syncTimer?: ReturnType<typeof setInterval>;
 	private onRenameCallback?: (agentId: string, featureId: string) => void;
 
 	constructor(adapters: SessionRenameAdapter[]) {
@@ -19,36 +25,32 @@ export class SessionNameSyncer {
 		this.onRenameCallback = callback;
 	}
 
-	start(projectManager: ProjectManager): void {
+	start(
+		projectManager: ProjectManager,
+		pollIntervalMs = UNNAMED_SYNC_INTERVAL_MS,
+	): void {
 		this.projectManager = projectManager;
+		this.stopPolling();
+		if (pollIntervalMs <= 0) return;
+
+		// Provider titles are often created shortly after the CLI starts. Retry
+		// only still-unnamed agents so a long-running active terminal does not
+		// require a focus change, while avoiding repeated scans of user-owned
+		// or already-synced sessions.
+		this.syncTimer = setInterval(
+			() => this.syncUnnamedAgents(),
+			pollIntervalMs,
+		);
+		this.syncTimer.unref?.();
 	}
 
 	syncAll(): void {
 		if (!this.projectManager) return;
 
 		for (const ctx of this.projectManager.getAllContexts()) {
-			for (const feature of ctx.featureManager.getFeatures()) {
-				const agents = ctx.agentManager.getAgents(feature.id);
-				for (const agent of agents) {
-					const adapter = this.getAdapter(agent.toolId);
-					if (!adapter) continue;
-					if (agent.status === "done") continue;
-					if (!agent.sessionId) continue;
-
-					const title = adapter.readName(agent.sessionId);
-					if (!title) continue;
-
-					const truncated = this.truncateTitle(title);
-					const previous = this.knownTitles.get(agent.sessionId);
-					this.knownTitles.set(agent.sessionId, truncated);
-
-					if (
-						agent.name !== truncated &&
-						this.shouldRename(agent.name, previous)
-					) {
-						ctx.agentManager.renameAgent(agent.id, feature.id, truncated);
-						this.onRenameCallback?.(agent.id, feature.id);
-					}
+			for (const featureId of this.getManagedFeatureIds(ctx)) {
+				for (const agent of ctx.agentManager.getAgents(featureId)) {
+					this.syncAgent(ctx, featureId, agent);
 				}
 			}
 		}
@@ -58,27 +60,13 @@ export class SessionNameSyncer {
 		if (!this.projectManager) return;
 
 		for (const ctx of this.projectManager.getAllContexts()) {
-			for (const feature of ctx.featureManager.getFeatures()) {
-				const agents = ctx.agentManager.getAgents(feature.id);
-				const agent = agents.find((a) => a.id === agentId);
+			for (const featureId of this.getManagedFeatureIds(ctx)) {
+				const agent = ctx.agentManager
+					.getAgents(featureId)
+					.find((candidate) => candidate.id === agentId);
 				if (!agent) continue;
 
-				const adapter = this.getAdapter(agent.toolId);
-				if (!adapter) return;
-				if (agent.status === "done") return;
-				if (!agent.sessionId) return;
-
-				const title = adapter.readName(agent.sessionId);
-				if (!title) return;
-
-				const truncated = this.truncateTitle(title);
-				const previous = this.knownTitles.get(agent.sessionId);
-				if (previous === truncated) return;
-
-				this.knownTitles.set(agent.sessionId, truncated);
-				if (!this.shouldRename(agent.name, previous)) return;
-				ctx.agentManager.renameAgent(agent.id, feature.id, truncated);
-				this.onRenameCallback?.(agent.id, feature.id);
+				this.syncAgent(ctx, featureId, agent);
 				return;
 			}
 		}
@@ -101,10 +89,64 @@ export class SessionNameSyncer {
 	}
 
 	dispose(): void {
+		this.stopPolling();
 		this.knownTitles.clear();
 		for (const adapter of this.adapters.values()) {
 			adapter.dispose?.();
 		}
+	}
+
+	private syncUnnamedAgents(): void {
+		if (!this.projectManager) return;
+
+		for (const ctx of this.projectManager.getAllContexts()) {
+			for (const featureId of this.getManagedFeatureIds(ctx)) {
+				for (const agent of ctx.agentManager.getAgents(featureId)) {
+					if (!this.isUnnamed(agent.name)) continue;
+					this.syncAgent(ctx, featureId, agent);
+				}
+			}
+		}
+	}
+
+	private syncAgent(
+		ctx: ProjectContext,
+		featureId: string,
+		agent: Agent,
+	): void {
+		const adapter = this.getAdapter(agent.toolId);
+		if (!adapter) return;
+		if (agent.status === "done") return;
+		if (!agent.sessionId) return;
+
+		const title = adapter.readName(agent.sessionId);
+		if (!title) return;
+
+		const truncated = this.truncateTitle(title);
+		const previous = this.knownTitles.get(agent.sessionId);
+		this.knownTitles.set(agent.sessionId, truncated);
+
+		if (agent.name !== truncated && this.shouldRename(agent.name, previous)) {
+			ctx.agentManager.renameAgent(agent.id, featureId, truncated);
+			this.onRenameCallback?.(agent.id, featureId);
+		}
+	}
+
+	private getManagedFeatureIds(ctx: ProjectContext): string[] {
+		const baseFeatureId = ctx.featureManager.getBaseFeature(ctx.project.id).id;
+		// Name synchronization only needs stable feature ids. Read the persisted
+		// feature list directly so the 15s retry loop never triggers Git branch
+		// reconciliation or any other worktree side effect.
+		return [
+			baseFeatureId,
+			...ctx.store.loadFeatures().map((feature) => feature.id),
+		];
+	}
+
+	private stopPolling(): void {
+		if (!this.syncTimer) return;
+		clearInterval(this.syncTimer);
+		this.syncTimer = undefined;
 	}
 
 	private getAdapter(toolId?: string): SessionRenameAdapter | undefined {

@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixes
+- Reconcile persisted feature branch metadata with the branch actually checked out in its worktree after an external rename, so status/PR/deletion flows do not keep using a stale branch name.
+- Retry provider-backed names for still-unnamed agents during long-running sessions instead of requiring a terminal focus change.
+- Include agents attached to the repository base feature in session-name synchronization.
+- Accept Claude-family session configuration that points either to a profile root or directly to its `projects` directory.
+
+
+## [0.5.3] - 2026-08-08
+
+### Features
+- Add provider-neutral agent attention states (`working`, `waiting_for_user`, `idle`, `failed`, `done`, `unknown`) to the sidebar and Home view, while keeping persisted lifecycle state separate.
+- Add **Agent Space: Doctor** for read-only diagnostics of Git, tmux, coding tools, session directories, project configuration, base branches and worktrees.
+- Add generic coding-tool profiles with `env`, `family`, `sessionsDir`, `resumeCommand`, and `enabled: false`, while keeping Claude, Codex, Copilot, OpenCode and Hermes as built-in presets.
+- Add project-scoped `.agentspace/config.json` conventions for non-standard base branches, branch kinds and worktree locations.
+- Add VSIX-first independent distribution under the `ShiidoTech.agent-space` extension identity, including migration from legacy `paql4711.agent-space` global storage.
+
+### Fixes
+- Sync real Claude `ai-title` metadata, with session-index fallbacks, and synchronize supported Codex/OpenCode session names while preserving user-owned names.
+- Use the project-configured GitHub compare base explicitly when handing a feature to the GitHub Pull Requests flow.
+- Push feature branches for PR creation without mutating `branch.<feature>.remote` / `branch.<feature>.merge` or changing the branch's existing upstream.
+- Keep stale tmux/session evidence from producing affirmative agent attention states; ambiguous evidence falls back conservatively.
+
+### Documentation
+- Reposition the ShiidoTech fork as a VS Code-native local control plane for real coding CLIs, Git worktrees, native terminals and durable tmux sessions.
+- Add distribution/release documentation, attention-status evidence rules, screenshots and fork-specific onboarding.
+
+
 ## [0.5.0] - 2026-03-12
 
 ### Other
