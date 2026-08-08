@@ -62,6 +62,12 @@ Strong signals include:
 
 For OpenCode, Hermes, Copilot, and generic/custom tools, Agent Space does not invent a provider-specific parser unless a stable structured signal is available. A live tmux session therefore reports `idle` rather than a false `working` or `waiting_for_user` state.
 
+This is deliberate first-pass coverage, not a claim that those tools can never expose richer status. New provider adapters can be added later without changing the provider-neutral UI contract.
+
+## UI refresh
+
+The sidebar and feature Home view recompute attention periodically while visible. A status badge is an informational projection only; clicking the agent still opens/focuses the native terminal where the actual interaction happens.
+
 ## Non-goals
 
 Attention status does not:
