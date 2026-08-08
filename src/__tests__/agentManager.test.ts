@@ -186,7 +186,7 @@ describe("AgentManager", () => {
 			expect(manager.getAgents("unknown")).toEqual([]);
 		});
 
-		it("normalizes missing tmuxSession to the canonical name", () => {
+		it("keeps the legacy session when adoption is not confirmed", () => {
 			store.saveAgents("f1", [
 				{
 					id: "a1",
@@ -198,12 +198,12 @@ describe("AgentManager", () => {
 				},
 			]);
 
-			expect(manager.getAgents("f1")[0]?.tmuxSession).toBe("agent-space-f1-a1");
+			expect(manager.getAgents("f1")[0]?.tmuxSession).toBe("companion-f1-a1");
 			expect(tmux.adoptSession).toHaveBeenCalledWith(
 				"agent-space-f1-a1",
 				"companion-f1-a1",
 			);
-			expect(store.loadAgents("f1")[0]?.tmuxSession).toBe("agent-space-f1-a1");
+			expect(store.loadAgents("f1")[0]?.tmuxSession).toBe("companion-f1-a1");
 		});
 
 		it("normalizes legacy stored tmuxSession to the canonical name", () => {
@@ -218,6 +218,7 @@ describe("AgentManager", () => {
 					createdAt: "2026-03-04T00:00:00Z",
 				},
 			]);
+			tmux.adoptSession.mockReturnValue(true);
 
 			expect(manager.getAgents("f1")[0]?.tmuxSession).toBe("agent-space-f1-a1");
 			expect(tmux.adoptSession).toHaveBeenCalledWith(
