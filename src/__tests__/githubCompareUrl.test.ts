@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildGitHubCompareUrl } from "../git/githubCompareUrl";
+import {
+	buildGitHubCompareUrl,
+	buildGitHubPullRequestBaseMetadata,
+} from "../git/githubCompareUrl";
 
 describe("buildGitHubCompareUrl", () => {
 	it("builds an explicit base-to-head URL for an HTTPS remote", () => {
@@ -32,6 +35,32 @@ describe("buildGitHubCompareUrl", () => {
 				"https://gitlab.example.com/team/project.git",
 				"develop",
 				"feature/x",
+			),
+		).toBeNull();
+	});
+});
+
+describe("buildGitHubPullRequestBaseMetadata", () => {
+	it("uses the GitHub PR extension metadata format", () => {
+		expect(
+			buildGitHubPullRequestBaseMetadata(
+				"git@github.com:ShiidoTech/agent-space.git",
+				"v2_ia_first",
+			),
+		).toBe("ShiidoTech#agent-space#v2_ia_first");
+	});
+
+	it("returns null for a non-GitHub or incomplete base", () => {
+		expect(
+			buildGitHubPullRequestBaseMetadata(
+				"https://gitlab.example.com/team/project.git",
+				"main",
+			),
+		).toBeNull();
+		expect(
+			buildGitHubPullRequestBaseMetadata(
+				"https://github.com/team/project.git",
+				"",
 			),
 		).toBeNull();
 	});

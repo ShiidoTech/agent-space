@@ -7,7 +7,10 @@ import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
-import { buildGitHubCompareUrl } from "./git/githubCompareUrl";
+import {
+	buildGitHubCompareUrl,
+	buildGitHubPullRequestBaseMetadata,
+} from "./git/githubCompareUrl";
 import {
 	getGitViewHandoffAction,
 	openFeatureGitView,
@@ -936,11 +939,41 @@ export async function activate(
 						return;
 					}
 
-					// The installed GitHub PR extension accepts repoPath and
-					// compareBranch, but has no public baseBranch argument: its base
-					// comes from overrideDefaultBranch or GitHub's default branch.
-					// Open the explicit comparison instead of changing global or
-					// branch-specific Git configuration.
+					const nativeCreateCommand = "pr.create";
+					const nativeCreateAvailable = (
+						await vscode.commands.getCommands(true)
+					).includes(nativeCreateCommand);
+					if (nativeCreateAvailable) {
+						const baseMetadata = buildGitHubPullRequestBaseMetadata(
+							remote.stdout,
+							baseBranch,
+						);
+						if (baseMetadata) {
+							// The GitHub PR extension reads this dedicated metadata when
+							// selecting the base. It is intentionally separate from Git
+							// branch tracking metadata.
+							await execFileAsync(
+								"git",
+								[
+									"config",
+									`branch.${feature.branch}.github-pr-base-branch`,
+									baseMetadata,
+								],
+								{ cwd: feature.worktreePath },
+							);
+						}
+						await vscode.commands.executeCommand(nativeCreateCommand, {
+							repoPath: feature.worktreePath,
+							compareBranch: feature.branch,
+						});
+						vscode.window.showInformationMessage(
+							`Branch "${feature.branch}" pushed. Opening the GitHub Pull Requests editor.`,
+						);
+						return;
+					}
+
+					// Keep the explicit comparison as a fallback when the native
+					// GitHub Pull Requests integration is unavailable.
 					vscode.window.showInformationMessage(
 						`Branch "${feature.branch}" pushed. Opening GitHub comparison "${baseBranch}...${feature.branch}" — verify and submit the PR manually.`,
 					);
