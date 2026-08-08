@@ -1,6 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ProviderAttentionSignal } from "../providers/types";
+import {
+	type IncrementalJsonlState,
+	readFirstJsonlLine,
+	readIncrementalJsonl,
+} from "./incrementalJsonl";
 import type {
 	SessionInfo,
 	SessionProvider,
@@ -30,6 +35,10 @@ export class CodexSessionProvider
 	private readonly pathCache = new Map<string, string>();
 	private readonly nameCache = new Map<string, string>();
 	private lastIndexMtimeMs: number | null = null;
+	private readonly attentionCache = new Map<
+		string,
+		IncrementalJsonlState<ProviderAttentionSignal>
+	>();
 
 	constructor(sessionsDir?: string, sessionIndexPath?: string) {
 		this.sessionsDir = sessionsDir ?? DEFAULT_CODEX_SESSIONS_DIR;
@@ -141,17 +150,12 @@ export class CodexSessionProvider
 		const filePath = this.findSessionFile(sessionId);
 		if (!filePath) return undefined;
 
-		try {
-			const raw = fs.readFileSync(filePath, "utf-8");
-			let signal: ProviderAttentionSignal | undefined;
-			for (const line of raw.split("\n")) {
-				if (!line.trim()) continue;
-				let event: Record<string, unknown>;
-				try {
-					event = JSON.parse(line) as Record<string, unknown>;
-				} catch {
-					continue;
-				}
+		const state = readIncrementalJsonl(
+			filePath,
+			this.attentionCache.get(sessionId),
+			(line, previous) => {
+				const event = JSON.parse(line) as Record<string, unknown>;
+				let signal = previous;
 
 				const payload = event.payload as Record<string, unknown> | undefined;
 				const type = event.type;
@@ -202,23 +206,26 @@ export class CodexSessionProvider
 						evidence: `codex.${String(eventType)}`,
 					};
 				}
-			}
-			return signal;
-		} catch {
-			return undefined;
-		}
+				return signal;
+			},
+		);
+		if (!state) return undefined;
+		this.attentionCache.set(sessionId, state);
+		return state.value;
 	}
 
 	clearCache(sessionId: string): void {
 		this.pathCache.delete(sessionId);
 		this.nameCache.delete(sessionId);
 		this.lastIndexMtimeMs = null;
+		this.attentionCache.delete(sessionId);
 	}
 
 	dispose(): void {
 		this.pathCache.clear();
 		this.nameCache.clear();
 		this.lastIndexMtimeMs = null;
+		this.attentionCache.clear();
 	}
 
 	private walkDir(dir: string, results: SessionInfo[]): void {
@@ -281,9 +288,8 @@ export class CodexSessionProvider
 				return fullPath;
 			} else if (entry.name.endsWith(".jsonl")) {
 				try {
-					const firstLine = fs
-						.readFileSync(fullPath, "utf-8")
-						.split("\n", 1)[0];
+					const firstLine = readFirstJsonlLine(fullPath);
+					if (!firstLine) continue;
 					const parsed = JSON.parse(firstLine) as Record<string, unknown>;
 					const payload = parsed.payload as Record<string, unknown> | undefined;
 					if (payload?.id === sessionId) {
