@@ -56,6 +56,11 @@
 		"views": {
 			"agentSpace": [
 				{
+					"id": "agentSpace.home",
+					"name": "Home",
+					"type": "webview"
+				},
+				{
 					"id": "agentSpace.features",
 					"name": "Features",
 					"type": "webview"

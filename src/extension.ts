@@ -15,6 +15,7 @@ import {
 } from "./git/gitViewHandoff";
 import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
+import { HomeSidebarProvider } from "./home/homeSidebarProvider";
 import { PrerequisiteChecker } from "./prerequisites";
 import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
@@ -169,6 +170,16 @@ export async function activate(
 		),
 	);
 	context.subscriptions.push({ dispose: () => sidebarProvider.stopPolling() });
+
+	const homeSidebarProvider = new HomeSidebarProvider(() => {
+		void showAgentSpace();
+	}, context.extensionUri);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(
+			HomeSidebarProvider.viewType,
+			homeSidebarProvider,
+		),
+	);
 
 	const ensureHomePanel = () => {
 		const panel = HomePanel.createOrShow(
@@ -326,6 +337,7 @@ export async function activate(
 
 	projectManager.onChange(() => {
 		sidebarProvider.refresh();
+		homeSidebarProvider.refresh();
 		const home = HomePanel.getInstance();
 		if (home) home.refresh();
 	});
