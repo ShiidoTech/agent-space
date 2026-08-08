@@ -140,7 +140,11 @@ describe("FeatureManager", () => {
 			const worktreePath = path.join(tmpDir, "mismatch");
 			fs.mkdirSync(worktreePath);
 			saveFeature(worktreePath);
-			mockExecSync.mockReturnValue(Buffer.from("fix/actual\n"));
+			mockExecSync.mockImplementation((command) =>
+				command.includes("rev-parse")
+					? Buffer.from("true\n")
+					: Buffer.from("fix/actual\n"),
+			);
 
 			expect(manager.inspectFeatureLifecycle()[0]).toMatchObject({
 				status: "branch_mismatch",
@@ -152,12 +156,42 @@ describe("FeatureManager", () => {
 			const worktreePath = path.join(tmpDir, "detached");
 			fs.mkdirSync(worktreePath);
 			saveFeature(worktreePath);
-			mockExecSync.mockImplementation(() => {
+			mockExecSync.mockImplementation((command) => {
+				if (command.includes("rev-parse")) return Buffer.from("true\n");
 				throw new Error("detached");
 			});
 
 			expect(manager.inspectFeatureLifecycle()[0]).toMatchObject({
 				status: "detached_head",
+			});
+		});
+
+		it("reports a valid worktree explicitly", () => {
+			const worktreePath = path.join(tmpDir, "valid");
+			fs.mkdirSync(worktreePath);
+			saveFeature(worktreePath);
+			mockExecSync.mockImplementation((command) =>
+				command.includes("rev-parse")
+					? Buffer.from("true\n")
+					: Buffer.from("feat/example\n"),
+			);
+
+			expect(manager.inspectFeatureLifecycle()[0]).toMatchObject({
+				status: "valid",
+				actualBranch: "feat/example",
+			});
+		});
+
+		it("reports generic Git failure as unknown", () => {
+			const worktreePath = path.join(tmpDir, "invalid");
+			fs.mkdirSync(worktreePath);
+			saveFeature(worktreePath);
+			mockExecSync.mockImplementation(() => {
+				throw new Error("git unavailable");
+			});
+
+			expect(manager.inspectFeatureLifecycle()[0]).toMatchObject({
+				status: "git_state_unknown",
 			});
 		});
 	});

@@ -25,7 +25,8 @@ export type FeatureLifecycleStatus =
 	| "valid"
 	| "missing_worktree"
 	| "detached_head"
-	| "branch_mismatch";
+	| "branch_mismatch"
+	| "git_state_unknown";
 
 export interface FeatureLifecycleDiagnostic {
 	featureId: string;
@@ -110,13 +111,39 @@ export class FeatureManager {
 			}
 
 			try {
-				const actualBranch = String(
-					execSync("git symbolic-ref --quiet --short HEAD", {
+				const isWorktree = String(
+					execSync("git rev-parse --is-inside-work-tree", {
 						cwd: feature.worktreePath,
 						encoding: "utf-8",
 						stdio: ["ignore", "pipe", "pipe"],
 					}),
 				).trim();
+				if (isWorktree !== "true") {
+					return {
+						featureId: feature.id,
+						featurePath: feature.worktreePath,
+						declaredBranch: feature.branch,
+						status: "git_state_unknown",
+					};
+				}
+
+				let actualBranch: string;
+				try {
+					actualBranch = String(
+						execSync("git symbolic-ref --quiet --short HEAD", {
+							cwd: feature.worktreePath,
+							encoding: "utf-8",
+							stdio: ["ignore", "pipe", "pipe"],
+						}),
+					).trim();
+				} catch {
+					return {
+						featureId: feature.id,
+						featurePath: feature.worktreePath,
+						declaredBranch: feature.branch,
+						status: "detached_head",
+					};
+				}
 				return {
 					featureId: feature.id,
 					featurePath: feature.worktreePath,
@@ -129,7 +156,7 @@ export class FeatureManager {
 					featureId: feature.id,
 					featurePath: feature.worktreePath,
 					declaredBranch: feature.branch,
-					status: "detached_head",
+					status: "git_state_unknown",
 				};
 			}
 		});
