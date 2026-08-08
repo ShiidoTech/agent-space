@@ -955,8 +955,26 @@ export async function activate(
 		vscode.commands.registerCommand(
 			"agentSpace.editProjectBaseBranch",
 			async (projectId?: string) => {
-				if (!projectId) return;
-				const context = projectManager.getContext(projectId);
+				let selectedProjectId = projectId;
+				if (!selectedProjectId) {
+					const projects = projectManager.getProjects();
+					if (projects.length === 0) {
+						vscode.window.showInformationMessage("No projects registered.");
+						return;
+					}
+					const pick = await vscode.window.showQuickPick(
+						projects.map((project) => ({
+							label: project.name,
+							description: project.repoPath,
+							id: project.id,
+						})),
+						{ placeHolder: "Select project to edit" },
+					);
+					if (!pick) return;
+					selectedProjectId = pick.id;
+				}
+
+				const context = projectManager.getContext(selectedProjectId);
 				if (!context) return;
 
 				const current = context.config.baseBranch?.trim() ?? "";
@@ -976,12 +994,23 @@ export async function activate(
 				});
 				if (value === undefined) return;
 
-				const config = projectManager.updateProjectConfig(projectId, {
-					baseBranch: value.trim() || undefined,
+				const branch = value.trim();
+				if (
+					branch &&
+					!(await ensureLocalBranchAsync(context.project.repoPath, branch))
+				) {
+					vscode.window.showErrorMessage(
+						`Branch "${branch}" is no longer available locally or on origin.`,
+					);
+					return;
+				}
+
+				const config = projectManager.updateProjectConfig(selectedProjectId, {
+					baseBranch: branch || undefined,
 				});
 				if (config) {
 					const effective = projectManager
-						.getContext(projectId)
+						.getContext(selectedProjectId)
 						?.featureManager.getBaseBranchName();
 					vscode.window.showInformationMessage(
 						`Base branch for ${context.project.name}: ${effective}`,
@@ -1056,15 +1085,45 @@ async function branchExistsAsync(
 	cwd: string,
 	branch: string,
 ): Promise<boolean> {
-	for (const ref of [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`]) {
+	return (await getBranchRefAsync(cwd, branch)) !== undefined;
+}
+
+async function ensureLocalBranchAsync(
+	cwd: string,
+	branch: string,
+): Promise<boolean> {
+	const ref = await getBranchRefAsync(cwd, branch);
+	if (!ref) return false;
+	if (ref === "local") return true;
+
+	try {
+		await execFileAsync(
+			"git",
+			["branch", "--track", branch, `refs/remotes/origin/${branch}`],
+			{ cwd },
+		);
+		return true;
+	} catch {
+		return (await getBranchRefAsync(cwd, branch)) === "local";
+	}
+}
+
+async function getBranchRefAsync(
+	cwd: string,
+	branch: string,
+): Promise<"local" | "remote" | undefined> {
+	for (const [kind, ref] of [
+		["local", `refs/heads/${branch}`],
+		["remote", `refs/remotes/origin/${branch}`],
+	] as const) {
 		try {
 			await execFileAsync("git", ["show-ref", "--verify", "--quiet", ref], {
 				cwd,
 			});
-			return true;
+			return kind;
 		} catch {
 			// Try the next ref.
 		}
 	}
-	return false;
+	return undefined;
 }
