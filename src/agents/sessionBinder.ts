@@ -63,9 +63,10 @@ interface PendingAgent {
  *   never adopted (the baseline is persisted, so a restart cannot lose it);
  * - an attribution is made only when the provider supplies a correlation that
  *   proves ownership: either an already assigned session id resolves in the
- *   provider store, or the provider's own `discoverSessionId` hook returns and
- *   reserves the session. A single new session is not proof: a human can
- *   start a CLI in the same cwd after Agent Space launched;
+ *   provider store, or a provider's explicit `correlateOwnedSession` hook
+ *   returns an id using provider-specific ownership evidence. Candidate
+ *   discovery is never enough: a human can start a CLI in the same cwd after
+ *   Agent Space launched;
  * - ordering
  *   agents by launch time and sessions by creation time looks like it resolves
  *   siblings sharing a worktree, but the two orders are unrelated: a session is
@@ -75,8 +76,8 @@ interface PendingAgent {
  *   agent sends the user's next prompt, and this agent's name, into somebody
  *   else's conversation, while looking perfectly bound. So when the provider
  *   cannot correlate a session, nothing is bound: the state is reported
- *   `ambiguous` until provider-owned discovery or explicit attachment supplies
- *   the missing proof.
+ *   `ambiguous` until strong provider correlation or explicit attachment
+ *   supplies the missing proof.
  */
 export class SessionBinder {
 	private projectManager: ProjectManager | undefined;
@@ -204,7 +205,7 @@ export class SessionBinder {
 					return scanned;
 				})();
 			const candidates = candidatesFor(entry, sessions, taken);
-			const providerSessionId = safeDiscover(entry, taken);
+			const providerSessionId = safeCorrelate(entry, taken);
 			return { entry, candidates, providerSessionId };
 		});
 
@@ -283,7 +284,7 @@ export class SessionBinder {
 			}
 			// Fall through: the store no longer knows this id. Never rewrite the
 			// id silently — the agent goes back through the normal path, which
-			// reports `unverified` unless provider-owned discovery supplies proof.
+			// reports `unverified` unless explicit ownership evidence is supplied.
 		}
 
 		if (agent.sessionId && adapter.hasSession?.(agent.sessionId) === true) {
@@ -383,9 +384,9 @@ export class SessionBinder {
 					attempts,
 					detail:
 						candidates.length === 1 && !providerSessionId
-							? `One unclaimed session appeared in ${where} after this agent started, but provider data cannot prove it belongs to Agent Space rather than a manually launched CLI; refusing to guess`
+							? `Session candidate detected in ${where}, but ownership cannot be proven; Agent Space refused to attach it automatically`
 							: providerSessionId && candidates.length > 0
-								? `The provider discovery hook did not return a session that passes the launch baseline and worktree checks in ${where}; refusing to guess`
+								? `The provider ownership correlator did not return a session that passes the launch baseline and worktree checks in ${where}; refusing to guess`
 								: `${candidates.length} unclaimed sessions appeared in ${where} after this agent started; none can be attributed with certainty`,
 				}),
 			};
@@ -518,18 +519,19 @@ function safeScan(
 }
 
 /**
- * Provider-owned discovery is the only acceptable correlation for a new
- * Codex/OpenCode session. A Promise is ignored because reconciliation is
- * synchronous; providers used by the runtime expose the synchronous form.
+ * Only an explicit provider-owned correlation is acceptable for a new session.
+ * Candidate enumeration hooks are intentionally not called here. A Promise is
+ * ignored because reconciliation is synchronous; providers used by the
+ * runtime expose the synchronous form.
  */
-function safeDiscover(
+function safeCorrelate(
 	entry: PendingAgent,
 	taken: ReadonlySet<string>,
 ): string | undefined {
-	if (!entry.adapter.discoverSessionId) return undefined;
+	if (!entry.adapter.correlateOwnedSession) return undefined;
 	try {
 		const known = new Set([...(entry.agent.sessionBaseline ?? []), ...taken]);
-		const discovered = entry.adapter.discoverSessionId(entry.cwd, known);
+		const discovered = entry.adapter.correlateOwnedSession(entry.cwd, known);
 		return typeof discovered === "string" ? discovered : undefined;
 	} catch {
 		return undefined;

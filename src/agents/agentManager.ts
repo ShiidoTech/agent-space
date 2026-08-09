@@ -14,7 +14,6 @@ import type {
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
 import { CodingToolRegistry } from "./codingToolRegistry";
-import { releaseClaimedOpenCodeSessionId } from "./sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "./tmux";
 
 export class AgentManager {
@@ -313,7 +312,6 @@ export class AgentManager {
 		if (agent?.worktreePath) {
 			this.removeWorktree(agent.worktreePath);
 		}
-		if (agent?.sessionId) releaseClaimedOpenCodeSessionId(agent.sessionId);
 		this.saveAgents(
 			featureId,
 			agents.filter((a) => a.id !== agentId),
@@ -325,7 +323,6 @@ export class AgentManager {
 			if (agent.worktreePath) {
 				this.removeWorktree(agent.worktreePath);
 			}
-			if (agent.sessionId) releaseClaimedOpenCodeSessionId(agent.sessionId);
 		}
 		this.saveAgents(featureId, []);
 		this.store.deleteFeatureData(featureId);

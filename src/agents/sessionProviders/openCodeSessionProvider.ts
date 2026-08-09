@@ -10,31 +10,6 @@ export interface OpenCodeAttentionSignal {
 	evidence: string;
 }
 
-/**
- * In-memory reservation of opencode session ids picked by a capture. opencode
- * session ids are globally unique, so a flat set is enough: once a session is
- * claimed by one capture, no concurrent capture for the same cwd can select
- * it again. Reserved ids are never released — a session belongs to exactly one
- * agent for the lifetime of the process.
- */
-const claimedSessionIds = new Set<string>();
-
-/** Reset the in-memory claim registry. Exposed for tests. */
-export function resetClaimedOpenCodeSessionIds(): void {
-	claimedSessionIds.clear();
-}
-
-/**
- * Release a reservation so the session can be claimed again.
- *
- * Called when the agent holding it is deleted or closed. Without this a
- * reservation taken by a capture that never persisted its result would keep the
- * session unreachable for the rest of the process.
- */
-export function releaseClaimedOpenCodeSessionId(sessionId: string): void {
-	claimedSessionIds.delete(sessionId);
-}
-
 export class OpenCodeSessionProvider
 	implements SessionProvider, SessionRenameAdapter
 {
@@ -100,11 +75,11 @@ export class OpenCodeSessionProvider
 		}
 	}
 
-	discoverSessionId(
+	discoverSessionCandidates(
 		cwd: string,
 		knownSessionIds: ReadonlySet<string>,
-	): string | undefined {
-		return claimNewestSessionIdForDirectory(cwd, new Set(knownSessionIds));
+	): SessionInfo[] {
+		return sessionsForDirectory(cwd, knownSessionIds);
 	}
 
 	/**
@@ -228,28 +203,15 @@ export function sessionIdsForDirectory(cwd: string): Set<string> {
 }
 
 /**
- * Atomically claim the newest opencode session started in `cwd` that is not
- * among `knownIds` (the pre-launch snapshot) and not already claimed by a
- * concurrent capture. The scan and the claim happen in one synchronous step,
- * so two captures polling the same cwd can never both select the same
- * session: the first one reserves it, the others skip it and keep polling
- * until a newer session appears.
+ * Enumerate OpenCode candidates. This is intentionally best-effort and does
+ * not reserve or assign a session to an Agent Space agent.
  */
-export function claimNewestSessionIdForDirectory(
+export function sessionsForDirectory(
 	cwd: string,
-	knownIds: Set<string>,
-): string | undefined {
+	knownIds: ReadonlySet<string> = new Set(),
+): SessionInfo[] {
 	const provider = new OpenCodeSessionProvider();
-	for (const s of provider.scanSessions()) {
-		if (
-			s.projectPath === cwd &&
-			s.sessionId &&
-			!knownIds.has(s.sessionId) &&
-			!claimedSessionIds.has(s.sessionId)
-		) {
-			claimedSessionIds.add(s.sessionId);
-			return s.sessionId;
-		}
-	}
-	return undefined;
+	return provider
+		.scanSessions()
+		.filter((s) => s.projectPath === cwd && !knownIds.has(s.sessionId));
 }

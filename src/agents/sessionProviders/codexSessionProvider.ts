@@ -24,8 +24,6 @@ const DEFAULT_CODEX_SESSION_INDEX_PATH = path.join(
 	"session_index.jsonl",
 );
 
-const claimedCodexSessionIds = new Set<string>();
-
 export class CodexSessionProvider
 	implements SessionProvider, SessionRenameAdapter, SessionTitleProvider
 {
@@ -59,22 +57,18 @@ export class CodexSessionProvider
 		return results;
 	}
 
-	discoverSessionId(
+	discoverSessionCandidates(
 		cwd: string,
 		knownSessionIds: ReadonlySet<string>,
-	): string | undefined {
+	): SessionInfo[] {
 		const normalizedCwd = path.resolve(cwd);
-		const candidate = this.scanSessions()
+		return this.scanSessions()
 			.filter(
 				(session) =>
 					path.resolve(session.projectPath) === normalizedCwd &&
-					!knownSessionIds.has(session.sessionId) &&
-					!claimedCodexSessionIds.has(session.sessionId),
+					!knownSessionIds.has(session.sessionId),
 			)
-			.sort((left, right) => right.created.localeCompare(left.created))[0];
-		if (!candidate) return undefined;
-		claimedCodexSessionIds.add(candidate.sessionId);
-		return candidate.sessionId;
+			.sort((left, right) => right.created.localeCompare(left.created));
 	}
 
 	/** True when a rollout file for `sessionId` exists in this Codex home. */
@@ -299,9 +293,7 @@ export class CodexSessionProvider
 
 			// `session_meta` records the session start under `timestamp`; there is
 			// no `created` field. Reading the wrong key left every session with an
-			// empty date, which silently turned `discoverSessionId`'s
-			// "newest first" ordering into directory-walk order — a coin flip when
-			// two Codex agents share a worktree.
+			// empty date, which made candidate ordering dependent on directory walk.
 			const created =
 				parsed.payload.timestamp ||
 				parsed.payload.created ||

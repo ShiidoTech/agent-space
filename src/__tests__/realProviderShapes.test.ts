@@ -190,9 +190,12 @@ describe("Codex rollouts as they are actually written", () => {
 		);
 
 		const provider = new CodexSessionProvider(sessionsDir);
-		const chosen = provider.discoverSessionId(cwd, new Set([older]));
+		const candidates = provider.discoverSessionCandidates(
+			cwd,
+			new Set([older]),
+		);
 
-		expect(chosen).toBe(newer);
+		expect(candidates.map((session) => session.sessionId)).toEqual([newer]);
 	});
 });
 

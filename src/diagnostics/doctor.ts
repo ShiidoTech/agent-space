@@ -350,15 +350,15 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 		} else if (probe.bindingState === "unverified") {
 			level = "error";
 			remediation =
-				"The stored session id does not exist in the provider store. Agent Space will not replace it without provider-owned discovery; check sessionsDir or explicitly attach the intended session.";
+				"The stored session id does not exist in the provider store. Agent Space will not replace it with a best-effort candidate; check sessionsDir or explicitly attach the intended session.";
 		} else if (probe.bindingState === "ambiguous") {
 			level = "warn";
 			remediation =
-				"Provider data does not prove which session belongs to this agent. Agent Space will not guess; verify the provider store or use explicit session attachment.";
+				"Session candidate detected, but ownership cannot be proven. Agent Space refused to attach it automatically; use future explicit session attachment or a provider ownership correlator.";
 		} else {
 			level = "warn";
 			remediation =
-				"Providers record a session on the first prompt, not at launch. Send a prompt to this agent, then rerun Doctor.";
+				"The provider has not exposed a session yet. Claude-family can bind its preassigned id when it appears; other providers remain fail-closed until explicit attachment or provider ownership correlation.";
 		}
 
 		add(checks, level, label, facts.join("; "), remediation);

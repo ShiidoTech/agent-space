@@ -51,7 +51,13 @@ export interface ProviderSessionAdapter extends SessionRenameAdapter {
 	 * to an id the provider has never heard of".
 	 */
 	hasSession?(sessionId: string): boolean;
-	discoverSessionId?(
+	/** Best-effort candidates only; this never proves ownership. */
+	discoverSessionCandidates?(
+		cwd: string,
+		knownSessionIds: ReadonlySet<string>,
+	): SessionInfo[];
+	/** Return an id only with provider-specific proof this launch owns it. */
+	correlateOwnedSession?(
 		cwd: string,
 		knownSessionIds: ReadonlySet<string>,
 	): string | undefined | Promise<string | undefined>;

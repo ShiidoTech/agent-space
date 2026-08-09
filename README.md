@@ -192,8 +192,8 @@ Projects can also override branching defaults via a committed `.agentspace/confi
 | Provider | Launch | Session binding | Resume | Session naming | Working | Waiting |
 |---|---:|---:|---:|---:|---:|---:|
 | Claude | yes | yes | yes | yes | yes | only `AskUserQuestion` |
-| Codex | yes | yes | yes | yes | yes | yes |
-| OpenCode | yes | yes | yes | yes | yes | yes |
+| Codex | yes | no (fail-closed) | yes* | yes* | yes* | yes* |
+| OpenCode | yes | no (fail-closed) | yes* | yes* | yes* | yes* |
 | Hermes | yes | no | no evidence | no evidence | no evidence | no evidence |
 
 The matrix only claims behavior covered by structured adapter tests. An
@@ -208,13 +208,17 @@ is reconciled continuously while an agent is alive rather than captured once at
 launch. An agent's current binding state is visible in `Agent Space: Doctor`.
 
 Binding is only performed when the provider supplies an ownership correlation:
-an already assigned session id resolves in the provider store, or the provider
-discovery hook returns and reserves the new session. A single unclaimed session
-is not enough: session creation order says nothing about ownership, and a human
-can launch another CLI in the same worktree. When provider data cannot prove
-the attribution, Agent Space reports `ambiguous` and binds nothing. Running one
-agent per worktree may reduce ambiguity, but does not turn an unproven pairing
-into a binding.
+an already assigned session id resolves in the provider store, or an explicit
+provider correlator returns an id using provider-specific proof for this exact
+launch. Candidate discovery is not ownership proof. Codex and OpenCode can
+enumerate sessions, but their current stores do not correlate a new session to
+the Agent Space process, so Agent Space keeps such candidates `ambiguous` and
+does not attach them automatically. A single candidate, cwd, timing, ordering,
+claimant count, or internal reservation never changes that answer. Future
+explicit attachment can provide the missing user-confirmed correlation.
+
+\* Available after an explicit attachment; automatic binding is currently
+limited to Claude-family's preassigned session ID path.
 
 **Session naming** means reading a provider's persisted session title and using
 it for the Agent Space display name when session-name sync is enabled. It does

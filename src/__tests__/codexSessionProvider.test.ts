@@ -137,7 +137,7 @@ describe("CodexSessionProvider", () => {
 		});
 	});
 
-	it("discovers distinct sessions through the provider hook for shared cwds", () => {
+	it("enumerates all candidate sessions without claiming ownership", () => {
 		const cwd = path.join(tmpDir, "shared-worktree");
 		writeSessionFile("2026/03/04/session-a.jsonl", [
 			sessionMeta("session-a", { cwd, created: "2026-03-04T10:00:00.000Z" }),
@@ -147,12 +147,12 @@ describe("CodexSessionProvider", () => {
 		]);
 
 		const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
-		const first = provider.discoverSessionId(cwd, new Set());
-		const second = provider.discoverSessionId(cwd, new Set());
+		const candidates = provider.discoverSessionCandidates(cwd, new Set());
 
-		expect(first).toBe("session-b");
-		expect(second).toBe("session-a");
-		expect(second).not.toBe(first);
+		expect(candidates.map((session) => session.sessionId)).toEqual([
+			"session-b",
+			"session-a",
+		]);
 	});
 
 	describe("findSessionFile", () => {
