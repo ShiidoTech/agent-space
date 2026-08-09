@@ -53,6 +53,7 @@ export class TerminalController implements vscode.Disposable {
 		agent: Agent,
 		agentIndex: number,
 		resume = false,
+		attachExisting = false,
 	): vscode.Terminal | undefined {
 		const name = `[${feature.name}] ${agent.name}`;
 		const color = AGENT_COLORS[agentIndex % AGENT_COLORS.length];
@@ -61,7 +62,9 @@ export class TerminalController implements vscode.Disposable {
 		const sessionName =
 			agent.tmuxSession ?? this.tmux.sessionName(feature.id, agent.id);
 		const legacySessionName = this.tmux.legacySessionName(feature.id, agent.id);
-		let sessionReady = this.tmux.adoptSession(sessionName, legacySessionName);
+		let sessionReady = attachExisting
+			? this.tmux.isSessionAlive(sessionName)
+			: this.tmux.adoptSession(sessionName, legacySessionName);
 
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);

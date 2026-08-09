@@ -793,6 +793,39 @@ export async function activate(
 		),
 	);
 
+	// Command: Attach an existing persisted tmux session without recovery side effects
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.recoverAgentSession",
+			(featureIdArg?: string, agentIdArg?: string) => {
+				if (!featureIdArg || !agentIdArg) return;
+				const resolved = projectManager.resolveFeature(featureIdArg);
+				if (!resolved) return;
+				const { ctx, feature } = resolved;
+				const agents = ctx.store.loadAgents(featureIdArg);
+				const agent = agents.find((candidate) => candidate.id === agentIdArg);
+				if (!agent?.tmuxSession || !tmux.isSessionAlive(agent.tmuxSession)) {
+					vscode.window.showErrorMessage(
+						"The persisted agent tmux session is not currently alive.",
+					);
+					return;
+				}
+				const agentIndex = agents.findIndex(
+					(candidate) => candidate.id === agentIdArg,
+				);
+				terminalController.createTerminal(
+					feature,
+					agent,
+					agentIndex,
+					false,
+					true,
+				);
+				sidebarProvider.refresh();
+				HomePanel.getInstance()?.refresh();
+			},
+		),
+	);
+
 	// Command: Toggle Isolation Mode (requires enablePerAgentIsolation)
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
