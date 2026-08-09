@@ -92,16 +92,21 @@ export class AgentAttentionResolver {
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 		const providerSignal = this.readProviderSignal(tool, agent.sessionId);
 		if (providerSignal) {
+			const age = describeAge(providerSignal.observedAt);
 			return {
 				status: providerSignal.status,
-				reason: `Provider emitted ${providerSignal.evidence}`,
+				reason: `Provider emitted ${providerSignal.evidence}${age ? ` ${age}` : ""}`,
 				source: "provider",
 			};
 		}
 
+		// No structured evidence is not the same as "nothing is happening".
+		// Reporting idle here made a misconfigured provider, an unbound session
+		// and a genuinely quiet agent look identical, and hid exactly the state
+		// the user needs to see. Say unknown, and say why.
 		return {
 			status: "unknown",
-			reason: "Session is alive but no structured activity signal is available",
+			reason: unboundReason(agent),
 			source: "fallback",
 		};
 	}
@@ -115,4 +120,49 @@ export class AgentAttentionResolver {
 			this.toolRegistry.getStructuredAttentionSignal?.(tool, sessionId) ?? null
 		);
 	}
+}
+
+/**
+ * Explain an absent signal in the agent's own terms. The binding state is the
+ * usual answer: no session bound means there is nothing to read, which is a
+ * different problem from a provider that reports nothing.
+ */
+function unboundReason(agent: Agent): string {
+	const binding = agent.sessionBinding;
+	if (!agent.sessionId) {
+		return binding?.detail
+			? `No provider session bound yet — ${lowerFirst(binding.detail)}`
+			: "No provider session is bound to this agent yet";
+	}
+	if (binding?.state === "unverified") {
+		return `Bound session id is not in the provider store — ${lowerFirst(binding.detail)}`;
+	}
+	if (binding?.state === "ambiguous") {
+		return `Cannot tell which provider session belongs to this agent — ${lowerFirst(binding.detail)}`;
+	}
+	if (binding?.state === "unsupported") {
+		return "This provider exposes no structured activity signal";
+	}
+	return "Session is alive but the provider reported no structured activity";
+}
+
+/**
+ * Report how long the current state has held, when the provider timestamps its
+ * events. This is presentation only: an old `working` is still `working`,
+ * because silence is not evidence that a human is being waited on.
+ */
+function describeAge(observedAt: string | undefined): string | null {
+	if (!observedAt) return null;
+	const parsed = Date.parse(observedAt);
+	if (Number.isNaN(parsed)) return null;
+	const seconds = Math.floor((Date.now() - parsed) / 1000);
+	if (seconds < 0) return null;
+	if (seconds < 60) return `${seconds}s ago`;
+	const minutes = Math.floor(seconds / 60);
+	if (minutes < 60) return `${minutes}m ago`;
+	return `${Math.floor(minutes / 60)}h ago`;
+}
+
+function lowerFirst(value: string): string {
+	return value.charAt(0).toLowerCase() + value.slice(1);
 }

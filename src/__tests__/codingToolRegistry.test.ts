@@ -15,6 +15,7 @@ import {
 	BUILTIN_CODING_TOOLS,
 	BUILTIN_PROVIDERS,
 	CodingToolRegistry,
+	resolveSessionStoreDir,
 } from "../agents/codingToolRegistry";
 
 // Mock vscode
@@ -143,6 +144,68 @@ describe("CodingToolRegistry", () => {
 			} finally {
 				fs.rmSync(configDir, { recursive: true, force: true });
 			}
+		});
+
+		it("accepts a sessionsDir that already points at the projects directory", () => {
+			// Both spellings are natural, so both have to work. When only the
+			// provider normalised `<root>/projects` and capability probing did not,
+			// the registry looked for `<root>/projects/projects`, found nothing, and
+			// advertised naming and attention as unavailable for a profile it could
+			// in fact read — a misconfiguration that looked like a silent agent.
+			const configDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "claude-projects-registry-"),
+			);
+			try {
+				const projectsDir = path.join(configDir, "projects");
+				fs.mkdirSync(path.join(projectsDir, "project"), { recursive: true });
+				fs.writeFileSync(
+					path.join(projectsDir, "project", "local-session.jsonl"),
+					JSON.stringify({ type: "result" }),
+				);
+				mockConfig({
+					codingTools: [
+						{
+							id: "claude-perso",
+							name: "Claude perso",
+							command: "claude-perso",
+							family: "claude",
+							sessionsDir: projectsDir,
+						},
+					],
+				});
+				const tool = registry.resolveAgentTool("claude-perso");
+				const provider = registry.getProvider(tool);
+
+				expect(provider.capabilities.sessionNaming).toBe(true);
+				expect(provider.capabilities.sessionDiscovery).toBe(true);
+				expect(provider.getAttentionSignal?.("local-session")).toMatchObject({
+					status: "idle",
+					evidence: "claude.result",
+				});
+				expect(resolveSessionStoreDir("claude", projectsDir)).toBe(projectsDir);
+			} finally {
+				fs.rmSync(configDir, { recursive: true, force: true });
+			}
+		});
+
+		it("reports a Claude store that does not exist as not session-capable", () => {
+			mockConfig({
+				codingTools: [
+					{
+						id: "claude-ghost",
+						name: "Claude ghost",
+						command: "claude-ghost",
+						family: "claude",
+						sessionsDir: path.join(os.tmpdir(), "agent-space-absent-profile"),
+					},
+				],
+			});
+			const provider = registry.getProvider(
+				registry.resolveAgentTool("claude-ghost"),
+			);
+
+			expect(provider.capabilities.sessionNaming).toBe(false);
+			expect(provider.capabilities.sessionDiscovery).toBe(false);
 		});
 	});
 

@@ -34,10 +34,23 @@ export interface ProviderAttentionSignal {
 	>;
 	/** Structured evidence supplied by the provider, never terminal scraping. */
 	evidence: string;
+	/**
+	 * ISO timestamp of the provider event this signal was derived from, when
+	 * the provider records one. Used to show how long a state has held. It is
+	 * never converted into a different state: an old `working` stays `working`,
+	 * because silence is not evidence of waiting.
+	 */
+	observedAt?: string;
 }
 
 export interface ProviderSessionAdapter extends SessionRenameAdapter {
 	scanSessions?(): SessionInfo[];
+	/**
+	 * True when `sessionId` resolves to a session that actually exists in this
+	 * provider's store. Lets Agent Space tell "not bound yet" apart from "bound
+	 * to an id the provider has never heard of".
+	 */
+	hasSession?(sessionId: string): boolean;
 	discoverSessionId?(
 		cwd: string,
 		knownSessionIds: ReadonlySet<string>,

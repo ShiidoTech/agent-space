@@ -92,3 +92,25 @@ declare the local launcher privately:
 
 The built-in Claude adapter is reused with that separate `sessionsDir`; the
 project config does not contain the wrapper command or personal paths.
+`sessionsDir` accepts either the profile root (`~/.claude-perso`) or the
+transcripts directory itself (`~/.claude-perso/projects`) — both resolve to the
+same store.
+
+Enabling that private launcher on a curated project is what
+`.agentspace/config.local.json` is for. It is gitignored, has the same shape as
+`config.json`, and unions into `agents.enabled` rather than replacing it:
+
+```json
+{
+  "agents": {
+    "enabled": ["claude-perso"],
+    "default": "claude-perso"
+  }
+}
+```
+
+With the committed config above, this machine offers `codex`, `opencode` and
+`claude-perso`, and defaults to `claude-perso`; every other checkout is
+unaffected. Agent Space only reads this file — `saveProjectConfig` writes to
+`config.json` alone, so a base branch changed from the UI never bakes a personal
+profile into the committed file.

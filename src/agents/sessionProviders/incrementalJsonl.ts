@@ -13,15 +13,41 @@ export interface IncrementalJsonlState<T> {
 	value: T | undefined;
 }
 
+const FIRST_LINE_CHUNK_BYTES = 64 * 1024;
+const FIRST_LINE_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Read the first JSONL record, however long it is.
+ *
+ * A fixed small buffer is not safe here: a Codex `session_meta` header embeds
+ * the full base instructions and runs to ~19 KB in practice. Truncating it
+ * produced invalid JSON, which every caller treated as "not a session file" —
+ * so session discovery, title reading and lookup-by-content all silently
+ * returned nothing for real rollouts. Grow until the newline is found, with a
+ * ceiling so a pathological file cannot be read into memory whole.
+ */
 export function readFirstJsonlLine(filePath: string): string | undefined {
 	let fd: number | undefined;
 	try {
 		fd = fs.openSync(filePath, "r");
-		const buffer = Buffer.alloc(4096);
-		const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-		const content = buffer.toString("utf-8", 0, bytesRead);
-		const newline = content.indexOf("\n");
-		return (newline >= 0 ? content.slice(0, newline) : content).trim();
+		const size = fs.fstatSync(fd).size;
+		if (size === 0) return undefined;
+		const limit = Math.min(size, FIRST_LINE_MAX_BYTES);
+
+		let read = 0;
+		let content = "";
+		while (read < limit) {
+			const chunkSize = Math.min(FIRST_LINE_CHUNK_BYTES, limit - read);
+			const buffer = Buffer.alloc(chunkSize);
+			const bytesRead = fs.readSync(fd, buffer, 0, chunkSize, read);
+			if (bytesRead <= 0) break;
+			read += bytesRead;
+			content += buffer.toString("utf-8", 0, bytesRead);
+			const newline = content.indexOf("\n");
+			if (newline >= 0) return content.slice(0, newline).trim();
+		}
+		// No newline at all: the file holds a single record.
+		return read >= size ? content.trim() : undefined;
 	} catch {
 		return undefined;
 	} finally {

@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { ProjectConfig } from "../projects/projectConfig";
@@ -10,7 +11,10 @@ import type {
 	ProviderCapabilities,
 } from "./providers/types";
 import { NO_ATTENTION_CAPABILITIES } from "./providers/types";
-import { ClaudeSessionProvider } from "./sessionProviders/claudeSessionProvider";
+import {
+	ClaudeSessionProvider,
+	resolveClaudeProjectsDir,
+} from "./sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
 import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
 
@@ -97,6 +101,38 @@ for (const provider of BUILTIN_PROVIDERS) {
 
 const providerById = new Map(BUILTIN_PROVIDERS.map((p) => [p.id, p]));
 
+/**
+ * The directory a file-backed provider will read for `family`/`sessionsDir`.
+ *
+ * Mirrors what `providerForTool` hands to the adapter, including the defaults
+ * used when a tool declares no `sessionsDir`. Those defaults are exactly where
+ * an undeclared wrapped profile silently ends up looking.
+ */
+export function resolveSessionStoreDir(
+	family: CodingTool["family"],
+	sessionsDir?: string,
+): string | undefined {
+	if (family === "claude") {
+		return resolveClaudeProjectsDir(
+			sessionsDir ? expandHome(sessionsDir) : undefined,
+		);
+	}
+	if (family === "codex") {
+		return sessionsDir
+			? expandHome(sessionsDir)
+			: path.join(process.env.HOME || "~", ".codex", "sessions");
+	}
+	return undefined;
+}
+
+function directoryExists(target: string): boolean {
+	try {
+		return fs.statSync(target).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
 function providerForTool(
 	id: string,
 	family?: CodingTool["family"],
@@ -122,26 +158,34 @@ function providerForTool(
 					? (sessionId?: string | null) =>
 							sessionId ? ["--session", sessionId] : ["--continue"]
 					: undefined;
+	// One canonical store path per family, shared with `resolveSessionStoreDir`
+	// and Doctor, so the directory the adapter reads is exactly the directory
+	// whose reachability decides the capabilities and the one Doctor reports.
+	const storeDir = resolveSessionStoreDir(family, sessionsDir);
 	const claudeSessionProvider =
-		family === "claude"
-			? new ClaudeSessionProvider(
-					sessionsDir
-						? path.join(expandHome(sessionsDir), "projects")
-						: undefined,
-					id,
-				)
-			: undefined;
+		family === "claude" ? new ClaudeSessionProvider(storeDir, id) : undefined;
 	const codexSessionProvider =
-		family === "codex" ? new CodexSessionProvider(sessionsDir) : undefined;
+		family === "codex" ? new CodexSessionProvider(storeDir) : undefined;
 	const sessionAdapter = claudeSessionProvider ?? codexSessionProvider;
+	// A file-backed adapter is only worth anything if its store is actually
+	// reachable. Declaring sessionNaming/attention from the mere existence of an
+	// adapter let a tool point at the wrong home directory — the default
+	// `~/.claude` for a `claude-perso` profile whose sessions live elsewhere —
+	// while still advertising full capabilities. The result looked like a silent
+	// agent instead of a misconfiguration.
+	const storeReachable =
+		!sessionAdapter || !storeDir
+			? Boolean(sessionAdapter)
+			: directoryExists(storeDir);
+	const sessionCapable = Boolean(sessionAdapter) && storeReachable;
 	return {
 		id,
 		capabilities: {
 			launch: true,
 			resume: Boolean(sessionFamily),
-			sessionDiscovery: Boolean(sessionAdapter),
-			sessionNaming: Boolean(sessionAdapter),
-			attention: sessionAdapter
+			sessionDiscovery: sessionCapable,
+			sessionNaming: sessionCapable,
+			attention: sessionCapable
 				? FULL_ATTENTION_CAPABILITIES
 				: NO_ATTENTION_CAPABILITIES,
 		},
@@ -351,6 +395,29 @@ export class CodingToolRegistry {
 
 	getProvider(tool: CodingTool): CodingAgentProvider {
 		return tool.provider ?? providerForTool(tool.id, tool.family);
+	}
+
+	/**
+	 * Everything a diagnostic needs to explain how a persisted `toolId` is being
+	 * resolved right now: whether it is actually declared, which executable it
+	 * maps to, and which session store its provider will read. Resolved through
+	 * the same paths the runtime uses, so the report cannot disagree with the
+	 * running extension.
+	 */
+	describeAgentTool(toolId?: string): {
+		tool: CodingTool;
+		declared: boolean;
+		sessionStoreDir?: string;
+		adapter?: CodingAgentProvider["sessionAdapter"];
+	} {
+		const declared = this.getTool(toolId ?? "claude") !== undefined;
+		const tool = this.resolveAgentTool(toolId);
+		return {
+			tool,
+			declared,
+			sessionStoreDir: resolveSessionStoreDir(tool.family, tool.sessionsDir),
+			adapter: this.getProvider(tool).sessionAdapter,
+		};
 	}
 
 	resolveAttention(tool: CodingTool, sessionId?: string | null) {

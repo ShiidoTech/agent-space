@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { LOCAL_CONFIG_FILE_NAME } from "../projects/projectConfig";
 import type { CodingTool, Project } from "../types";
 import {
 	commandExists,
@@ -26,6 +27,38 @@ export interface DoctorReport {
 	warnings: number;
 }
 
+/**
+ * What Doctor needs to explain, for one persisted agent, why it does or does
+ * not have a name and an attention signal.
+ *
+ * Everything here is resolved through the same code paths the running extension
+ * uses, so a green Doctor means the runtime really can read that agent's
+ * session — not that the checks were re-implemented optimistically.
+ */
+export interface DoctorAgentProbe {
+	projectName: string;
+	featureLabel: string;
+	agentName: string;
+	toolId: string;
+	/** False when the agent's tool id resolves only through the unknown-tool fallback. */
+	toolDeclared: boolean;
+	/** Session store the provider will actually read, when it is file-backed. */
+	sessionsDir?: string;
+	sessionId: string | null;
+	bindingState: string;
+	bindingDetail?: string;
+	bindingAttempts?: number;
+	/** null when the provider exposes no session store to look in. */
+	sessionResolved: boolean | null;
+	attentionEvidence?: string;
+}
+
+/** A project agent id that is enabled in config but resolves to no known tool. */
+export interface DoctorUnknownAgentIds {
+	projectName: string;
+	ids: string[];
+}
+
 export interface DoctorInput {
 	extensionId: string;
 	extensionVersion: string;
@@ -38,6 +71,8 @@ export interface DoctorInput {
 	perAgentIsolation: boolean;
 	syncSessionNames: boolean;
 	homeDir?: string;
+	agents?: DoctorAgentProbe[];
+	unknownProjectAgentIds?: DoctorUnknownAgentIds[];
 }
 
 export interface ProjectConfigProbe {
@@ -50,6 +85,15 @@ export interface ProjectConfigProbe {
 		worktreesDir?: string;
 	};
 	error?: string;
+	/**
+	 * The untracked `config.local.json` overlay, when present. Reported by the
+	 * names of the settings it overrides and never by their values: the whole
+	 * point of the file is to hold machine-local paths and personal profiles,
+	 * and Doctor output gets pasted into issues. Its presence still has to be
+	 * visible, because "the committed config says X but this machine does Y" is
+	 * otherwise an invisible source of divergence.
+	 */
+	localOverlay?: { valid: boolean; keys: string[] };
 }
 
 export interface DoctorDeps {
@@ -76,10 +120,27 @@ function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+function readLocalOverlay(
+	repoPath: string,
+): ProjectConfigProbe["localOverlay"] {
+	const filePath = path.join(repoPath, ".agentspace", LOCAL_CONFIG_FILE_NAME);
+	if (!fs.existsSync(filePath)) return undefined;
+	try {
+		const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return { valid: false, keys: [] };
+		}
+		return { valid: true, keys: Object.keys(parsed).sort() };
+	} catch {
+		return { valid: false, keys: [] };
+	}
+}
+
 function defaultReadProjectConfig(repoPath: string): ProjectConfigProbe {
 	const filePath = path.join(repoPath, ".agentspace", "config.json");
+	const localOverlay = readLocalOverlay(repoPath);
 	if (!fs.existsSync(filePath)) {
-		return { exists: false, valid: true, config: {} };
+		return { exists: false, valid: true, config: {}, localOverlay };
 	}
 
 	try {
@@ -90,6 +151,7 @@ function defaultReadProjectConfig(repoPath: string): ProjectConfigProbe {
 				exists: true,
 				valid: false,
 				error: "config.json must contain a JSON object",
+				localOverlay,
 			};
 		}
 		const config = parsed as Record<string, unknown>;
@@ -108,14 +170,16 @@ function defaultReadProjectConfig(repoPath: string): ProjectConfigProbe {
 				exists: true,
 				valid: false,
 				error: "config.json contains fields with invalid types",
+				localOverlay,
 			};
 		}
-		return { exists: true, valid: true, config: parsed };
+		return { exists: true, valid: true, config: parsed, localOverlay };
 	} catch (error) {
 		return {
 			exists: true,
 			valid: false,
 			error: error instanceof Error ? error.message : "invalid JSON",
+			localOverlay,
 		};
 	}
 }
@@ -216,6 +280,99 @@ function renderSection(title: string, checks: DoctorCheck[]): string[] {
 	}
 	lines.push("");
 	return lines;
+}
+
+/**
+ * Report, agent by agent, whether Agent Space can actually reach the provider
+ * session behind it.
+ *
+ * This is the section that would have caught the whole class of failure it was
+ * written for: a tool id enabled in project config but declared nowhere, a
+ * session store resolved to the wrong home directory, and a session id that
+ * exists in Agent Space's own storage and nowhere else. All three used to
+ * render as a quiet agent with no name.
+ */
+function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
+	const checks: DoctorCheck[] = [];
+
+	for (const unknown of input.unknownProjectAgentIds ?? []) {
+		if (unknown.ids.length === 0) continue;
+		add(
+			checks,
+			"error",
+			`${unknown.projectName} agent curation`,
+			`.agentspace/config.json enables ${unknown.ids.map((id) => `\`${id}\``).join(", ")}, which resolve to no configured tool`,
+			"Declare the tool in agentSpace.codingTools (id, command, family, sessionsDir) or remove the id from agents.enabled.",
+		);
+	}
+
+	const agents = input.agents ?? [];
+	if (agents.length === 0) {
+		add(checks, "info", "Agents", "no agents are persisted yet");
+		return checks;
+	}
+
+	let bound = 0;
+	for (const probe of agents) {
+		const label = `${probe.projectName} / ${probe.featureLabel} / ${probe.agentName}`;
+		const facts = [`tool \`${probe.toolId}\``];
+		if (!probe.toolDeclared)
+			facts.push("not declared in agentSpace.codingTools");
+		if (probe.sessionsDir) {
+			facts.push(`sessions ${redactHome(probe.sessionsDir, homeDir)}`);
+		}
+		facts.push(
+			`session ${probe.sessionId ? `\`${probe.sessionId}\`` : "none"}`,
+		);
+		if (probe.sessionResolved !== null) {
+			facts.push(
+				probe.sessionResolved ? "found in store" : "not found in store",
+			);
+		}
+		facts.push(`binding ${probe.bindingState}`);
+		if (probe.attentionEvidence)
+			facts.push(`evidence ${probe.attentionEvidence}`);
+		if (probe.bindingDetail) facts.push(probe.bindingDetail.toLowerCase());
+
+		let level: DoctorLevel;
+		let remediation: string | undefined;
+		if (probe.bindingState === "unsupported") {
+			level = "info";
+		} else if (probe.sessionResolved === true) {
+			level = "ok";
+			bound += 1;
+		} else if (!probe.toolDeclared) {
+			level = "error";
+			remediation =
+				"Declare this tool in agentSpace.codingTools with its own command and sessionsDir; the fallback reads the default session store, which is the wrong one for a wrapped CLI profile.";
+		} else if (probe.bindingState === "unverified") {
+			level = "error";
+			remediation =
+				"The stored session id does not exist in the provider store. Agent Space will adopt the session this agent actually started on the next reconciliation; check sessionsDir if it never does.";
+		} else if (probe.bindingState === "ambiguous") {
+			level = "warn";
+			remediation =
+				"Several sessions or several agents compete for the same binding in this worktree, and provider session order does not say which is which. Agent Space will not guess. Close the agents you no longer need, or run one agent per worktree, and the attribution becomes forced.";
+		} else {
+			level = "warn";
+			remediation =
+				"Providers record a session on the first prompt, not at launch. Send a prompt to this agent, then rerun Doctor.";
+		}
+
+		add(checks, level, label, facts.join("; "), remediation);
+	}
+
+	add(
+		checks,
+		bound === agents.length ? "ok" : bound === 0 ? "error" : "warn",
+		"Session binding",
+		`${bound}/${agents.length} agent${agents.length === 1 ? "" : "s"} bound to a provider session`,
+		bound === agents.length
+			? undefined
+			: "Naming, attention and resume all read through this binding; unbound agents have none of them.",
+	);
+
+	return checks;
 }
 
 export function runDoctor(
@@ -426,6 +583,20 @@ export function runDoctor(
 			);
 		}
 
+		if (config.localOverlay) {
+			add(
+				projectChecks,
+				config.localOverlay.valid ? "info" : "error",
+				`${project.name} local overlay`,
+				config.localOverlay.valid
+					? `${LOCAL_CONFIG_FILE_NAME} overrides ${config.localOverlay.keys.length === 0 ? "nothing" : config.localOverlay.keys.join(", ")} on this machine`
+					: `${LOCAL_CONFIG_FILE_NAME} is not a readable JSON object and is being ignored`,
+				config.localOverlay.valid
+					? undefined
+					: `Fix or delete ${LOCAL_CONFIG_FILE_NAME}; until then this machine runs on the committed config alone.`,
+			);
+		}
+
 		const configuredBase =
 			typeof config.config?.baseBranch === "string"
 				? config.config.baseBranch.trim()
@@ -463,11 +634,14 @@ export function runDoctor(
 		}
 	}
 
+	const agentChecks = buildAgentChecks(input, homeDir);
+
 	const checks = [
 		...systemChecks,
 		...configChecks,
 		...toolChecks,
 		...projectChecks,
+		...agentChecks,
 	];
 	const errors = checks.filter((check) => check.level === "error").length;
 	const warnings = checks.filter((check) => check.level === "warn").length;
@@ -487,6 +661,7 @@ export function runDoctor(
 		...renderSection("Agent Space", configChecks),
 		...renderSection("Coding tools", toolChecks),
 		...renderSection("Projects", projectChecks),
+		...renderSection("Agent sessions", agentChecks),
 	].join("\n");
 
 	return { markdown, checks, errors, warnings };

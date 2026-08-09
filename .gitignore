@@ -5,3 +5,6 @@ node_modules
 feature/
 .worktrees/
 .codegraph/
+# Machine-local Agent Space overlay: personal CLI profiles and paths that only
+# resolve on one machine. Shared conventions live in .agentspace/config.json.
+.agentspace/config.local.json

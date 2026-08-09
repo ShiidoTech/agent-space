@@ -19,7 +19,33 @@ const DEFAULT_PROJECTS_DIR = path.join(
 	"projects",
 );
 
+/**
+ * The single answer to "where does this Claude profile keep its transcripts?".
+ *
+ * Everything that needs that path — the provider itself, capability probing in
+ * the tool registry, Doctor — must call this, because the two natural ways to
+ * write the setting have to agree. `sessionsDir: ~/.claude-perso` means the
+ * profile root and the transcripts are one level down in `projects/`, while
+ * `sessionsDir: ~/.claude-perso/projects` points straight at them. When only
+ * some callers accepted the second form, the provider read the right directory
+ * while the registry probed `.../projects/projects`, found nothing, and
+ * advertised naming and attention as unavailable for a profile that was in fact
+ * perfectly readable.
+ */
+export function resolveClaudeProjectsDir(sessionsDir?: string): string {
+	if (!sessionsDir) return DEFAULT_PROJECTS_DIR;
+	const root = path.normalize(sessionsDir);
+	// Already the transcripts directory: joining `projects` again would only
+	// invent a path that never exists.
+	if (path.basename(root) === "projects") return root;
+	return path.join(root, "projects");
+}
+
 const CHUNK_SIZE = 4096;
+/** Bytes of a transcript scanned to recover its session id, cwd and start time. */
+const HEADER_SCAN_BYTES = 64 * 1024;
+/** Minimum delay between two full rescans of the transcript tree. */
+const SCAN_CACHE_MS = 5_000;
 
 export class ClaudeSessionProvider
 	implements SessionProvider, SessionRenameAdapter, SessionTitleProvider
@@ -29,6 +55,7 @@ export class ClaudeSessionProvider
 	private readonly pathCache = new Map<string, string>();
 	private readonly contentPathIndex = new Map<string, string>();
 	private contentPathIndexBuiltAt = 0;
+	private scanCache: { builtAt: number; sessions: SessionInfo[] } | undefined;
 	private readonly indexCache = new Map<
 		string,
 		{ mtimeMs: number; titles: Map<string, string> }
@@ -45,7 +72,76 @@ export class ClaudeSessionProvider
 		);
 	}
 
+	/**
+	 * Enumerate the sessions this Claude profile knows about.
+	 *
+	 * Two sources, because neither is sufficient on its own. `sessions-index.json`
+	 * is the cheap path but it is not written by every Claude profile — a
+	 * `CLAUDE_CONFIG_DIR` profile can have none at all, in which case an
+	 * index-only scan reports zero sessions while transcripts sit right there.
+	 * So transcripts are also read directly: the first line carries `sessionId`,
+	 * and the first conversational event carries `cwd` and `timestamp`, which is
+	 * what binding needs to attribute a session to a worktree.
+	 */
 	scanSessions(): SessionInfo[] {
+		const now = Date.now();
+		if (this.scanCache && now - this.scanCache.builtAt < SCAN_CACHE_MS) {
+			return this.scanCache.sessions;
+		}
+		const byId = new Map<string, SessionInfo>();
+		for (const session of this.scanIndexedSessions()) {
+			byId.set(session.sessionId, session);
+		}
+		for (const session of this.scanTranscriptSessions(this.projectsDir)) {
+			const existing = byId.get(session.sessionId);
+			// Transcript headers win for projectPath/created: they are read from
+			// the session's own events rather than a lossy encoded directory name.
+			byId.set(session.sessionId, {
+				sessionId: session.sessionId,
+				prompt: existing?.prompt || session.prompt,
+				created: session.created || existing?.created || "",
+				projectPath: session.projectPath || existing?.projectPath || "",
+			});
+		}
+		const sessions = [...byId.values()];
+		this.scanCache = { builtAt: now, sessions };
+		return sessions;
+	}
+
+	/** True when the transcript for `sessionId` exists in this profile. */
+	hasSession(sessionId: string): boolean {
+		return this.findSessionFile(sessionId) !== null;
+	}
+
+	private scanTranscriptSessions(dir: string): SessionInfo[] {
+		const results: SessionInfo[] = [];
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			return results;
+		}
+		for (const entry of entries) {
+			const fullPath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				results.push(...this.scanTranscriptSessions(fullPath));
+				continue;
+			}
+			if (!entry.name.endsWith(".jsonl")) continue;
+			const header = readTranscriptHeader(fullPath);
+			if (!header) continue;
+			this.pathCache.set(header.sessionId, fullPath);
+			results.push({
+				sessionId: header.sessionId,
+				prompt: "",
+				created: header.created,
+				projectPath: header.projectPath,
+			});
+		}
+		return results;
+	}
+
+	private scanIndexedSessions(): SessionInfo[] {
 		const results: SessionInfo[] = [];
 		if (!fs.existsSync(this.projectsDir)) return results;
 
@@ -250,6 +346,20 @@ export class ClaudeSessionProvider
 		return null;
 	}
 
+	/**
+	 * Derive attention from the transcript's conversational events.
+	 *
+	 * Only `user` and `assistant` move the state. A real interactive transcript
+	 * interleaves a lot of bookkeeping — `attachment`, `system`, `pr-link`,
+	 * `mode`, `permission-mode`, `file-history-*`, `queue-operation`, `ai-title`
+	 * — around almost every turn. Treating those as "unknown, so forget what we
+	 * knew" erased the signal within seconds of it being produced and left every
+	 * live Claude agent with no evidence at all. Unrecognized events are now
+	 * carried through unchanged, which is also how the Codex reader behaves.
+	 *
+	 * Sub-agent turns (`isSidechain`) are skipped: a sidechain finishing its turn
+	 * says nothing about whether the main agent is still working.
+	 */
 	readAttention(sessionId: string): ProviderAttentionSignal | undefined {
 		const filePath = this.findSessionFile(sessionId);
 		if (!filePath) return undefined;
@@ -257,7 +367,7 @@ export class ClaudeSessionProvider
 		const state = readIncrementalJsonl(
 			filePath,
 			this.attentionCache.get(sessionId),
-			(line, previous) => {
+			(line, previous): ProviderAttentionSignal | undefined => {
 				const event = JSON.parse(line) as Record<string, unknown>;
 				let signal = previous;
 				const explicitSessionId = event.sessionId ?? event.session_id;
@@ -267,18 +377,25 @@ export class ClaudeSessionProvider
 				) {
 					return signal;
 				}
+				if (event.isSidechain === true) return signal;
+
+				const observedAt =
+					typeof event.timestamp === "string" ? event.timestamp : undefined;
 
 				if (event.type === "user") {
-					signal = { status: "working", evidence: "claude.user" };
-					return signal;
+					return { status: "working", evidence: "claude.user", observedAt };
 				}
+				// `result` events only exist in the `-p --output-format stream-json`
+				// transcript shape, never in an interactive session. Kept so headless
+				// runs stay readable.
 				if (event.type === "result") {
-					signal = {
-						status: event.is_error === true ? "failed" : "idle",
-						evidence:
-							event.is_error === true ? "claude.result.error" : "claude.result",
+					const failed = event.is_error === true;
+					const resultSignal: ProviderAttentionSignal = {
+						status: failed ? "failed" : "idle",
+						evidence: failed ? "claude.result.error" : "claude.result",
+						observedAt,
 					};
-					return signal;
+					return resultSignal;
 				}
 				if (event.type === "assistant") {
 					const message = event.message as Record<string, unknown> | undefined;
@@ -296,22 +413,26 @@ export class ClaudeSessionProvider
 						signal = {
 							status: "waiting_for_user",
 							evidence: "claude.assistant.ask_user_question",
+							observedAt,
 						};
 					} else if (stopReason === "tool_use") {
 						signal = {
 							status: "working",
 							evidence: "claude.assistant.tool_use",
+							observedAt,
 						};
 					} else if (stopReason === "end_turn") {
 						signal = {
 							status: "idle",
 							evidence: "claude.assistant.end_turn",
+							observedAt,
 						};
 					}
 					return signal;
 				}
-				// A newer unrecognized event invalidates the previous precise signal.
-				return undefined;
+				// Bookkeeping event: carry the last conversational signal through
+				// unchanged rather than discarding hard-won evidence.
+				return signal;
 			},
 		);
 		if (!state) return undefined;
@@ -387,6 +508,7 @@ export class ClaudeSessionProvider
 		this.pathCache.delete(sessionId);
 		this.contentPathIndex.delete(sessionId);
 		this.attentionCache.delete(sessionId);
+		this.scanCache = undefined;
 	}
 
 	dispose(): void {
@@ -395,6 +517,7 @@ export class ClaudeSessionProvider
 		this.contentPathIndexBuiltAt = 0;
 		this.indexCache.clear();
 		this.attentionCache.clear();
+		this.scanCache = undefined;
 	}
 
 	private readIndexFallback(
@@ -439,6 +562,66 @@ export function readClaudeAttentionSignal(
 	sessionId: string,
 ): ProviderAttentionSignal | undefined {
 	return new ClaudeSessionProvider().readAttention(sessionId);
+}
+
+interface TranscriptHeader {
+	sessionId: string;
+	projectPath: string;
+	created: string;
+}
+
+/**
+ * Recover a transcript's identity from its own content.
+ *
+ * The enclosing directory name is a lossy encoding of the working directory
+ * (`/`, `.` and `_` all collapse to `-`), so it cannot be decoded back into a
+ * path that would compare equal to a worktree. The events themselves carry an
+ * exact `cwd` and an ISO `timestamp`; only a bounded prefix is read so a large
+ * transcript never costs more than one small read.
+ */
+function readTranscriptHeader(filePath: string): TranscriptHeader | null {
+	let fd: number | undefined;
+	try {
+		fd = fs.openSync(filePath, "r");
+		const size = fs.fstatSync(fd).size;
+		if (size === 0) return null;
+		const length = Math.min(HEADER_SCAN_BYTES, size);
+		const buffer = Buffer.alloc(length);
+		fs.readSync(fd, buffer, 0, length, 0);
+
+		let sessionId = "";
+		let projectPath = "";
+		let created = "";
+		const lines = buffer.toString("utf-8").split("\n");
+		// The final line may be truncated by the bounded read.
+		const complete = length < size ? lines.slice(0, -1) : lines;
+		for (const line of complete) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			let event: Record<string, unknown>;
+			try {
+				event = JSON.parse(trimmed) as Record<string, unknown>;
+			} catch {
+				continue;
+			}
+			if (!sessionId && typeof event.sessionId === "string") {
+				sessionId = event.sessionId;
+			}
+			if (!projectPath && typeof event.cwd === "string") {
+				projectPath = event.cwd;
+			}
+			if (!created && typeof event.timestamp === "string") {
+				created = event.timestamp;
+			}
+			if (sessionId && projectPath && created) break;
+		}
+		if (!sessionId) return null;
+		return { sessionId, projectPath, created };
+	} catch {
+		return null;
+	} finally {
+		if (fd !== undefined) fs.closeSync(fd);
+	}
 }
 
 function normalizeProjectsDir(projectsDir: string): string {

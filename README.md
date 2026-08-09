@@ -124,7 +124,11 @@ Launch package scripts such as dev servers and watch tasks, or open an interacti
 
 Some repositories do not branch off `main`. A `.agentspace/config.json` at the repository root lets a project declare the real **base branch**, the **branch kinds** offered at feature creation, a dedicated **worktrees directory**, and explicit **bootstrap commands** for setting up a new worktree — so Agent Space branches and creates worktrees where the project actually works.
 
-This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It can also curate providers with `agents.enabled` and `agents.default`; when present, the allowlist is the only set shown by Add Agent. Bootstrap commands run only when explicitly invoked through `Agent Space: Bootstrap Feature Worktree`, in the feature worktree, with output visible in a dedicated terminal. They are retryable and are not run silently during feature creation. It is not implicitly gitignored. User-local values — a personal CLI profile, a private sessions directory, machine-specific `env` — do not belong here: declare those via `agentSpace.codingTools` in your user settings, or in workspace settings you keep explicitly untracked (e.g. a gitignored `.vscode/settings.json`).
+This file holds **shareable project conventions** and may be committed, so the whole team branches consistently. It can also curate providers with `agents.enabled` and `agents.default`; when present, the allowlist is the only set shown by Add Agent. Bootstrap commands run only when explicitly invoked through `Agent Space: Bootstrap Feature Worktree`, in the feature worktree, with output visible in a dedicated terminal. They are retryable and are not run silently during feature creation. It is not implicitly gitignored.
+
+Machine-local values go in `.agentspace/config.local.json` instead, which has the same shape and is gitignored. It exists because `agents.enabled` is an allowlist: using a personal CLI profile on a curated project would otherwise mean naming that profile in the committed file, putting a wrapper that only exists on one machine into everyone's checkout. The overlay **adds** to `agents.enabled` rather than replacing it, so a local addition never removes a team convention; every other setting, including `agents.default`, is a plain override. Agent Space never writes to it, and `Agent Space: Doctor` reports which settings it overrides — by name, not by value.
+
+Neither file holds tool commands. A personal CLI profile, a private sessions directory or machine-specific `env` are declared through `agentSpace.codingTools` in your user settings; `config.local.json` only decides which of those tools this project offers.
 
 Example:
 
@@ -185,24 +189,50 @@ Projects can also override branching defaults via a committed `.agentspace/confi
 
 ### Provider Support Matrix
 
-| Provider | Launch | Resume | Session naming | Working | Waiting |
-|---|---:|---:|---:|---:|---:|
-| Claude | yes | yes | yes | yes | yes |
-| Codex | yes | yes | yes | yes | yes |
-| OpenCode | yes | yes | yes | unavailable | unavailable |
-| Hermes | yes | no evidence | no evidence | no evidence | no evidence |
+| Provider | Launch | Session binding | Resume | Session naming | Working | Waiting |
+|---|---:|---:|---:|---:|---:|---:|
+| Claude | yes | yes | yes | yes | yes | only `AskUserQuestion` |
+| Codex | yes | yes | yes | yes | yes | yes |
+| OpenCode | yes | yes | yes | yes | yes | yes |
+| Hermes | yes | no | no evidence | no evidence | no evidence | no evidence |
 
 The matrix only claims behavior covered by structured adapter tests. An
-unsupported attention capability is displayed as `unknown`, never `Idle`.
+unsupported or unreadable attention capability is displayed as `unknown`, never
+`Idle`.
+
+**Session binding** is the prerequisite for the three columns after it. Agent
+Space has to know which provider session belongs to an agent before it can read
+that session's title or activity, or resume it. Providers write their session
+record when the human sends a first prompt, not when the CLI starts, so binding
+is reconciled continuously while an agent is alive rather than captured once at
+launch. An agent's current binding state is visible in `Agent Space: Doctor`.
+
+Binding is only performed when the answer is forced: exactly one unclaimed
+session can belong to the agent, and no other live agent could claim it.
+Session creation order says nothing about ownership — a session is born on the
+first prompt, so two agents launched in one worktree can produce their sessions
+in either order. When the attribution is not unique, Agent Space reports
+`ambiguous` and binds nothing, because a mispaired agent would send your next
+prompt into another conversation while looking perfectly bound. Running one
+agent per worktree keeps the attribution forced.
 
 **Session naming** means reading a provider's persisted session title and using
 it for the Agent Space display name when session-name sync is enabled. It does
-not mean renaming the provider's native terminal prompt. **Working** means a
-structured signal proves that the agent is actively processing. **Waiting**
-means a structured signal proves that the agent has finished its turn and is
-waiting for user input. These two attention signals are structured for Claude
-and Codex. OpenCode and Hermes remain `unknown`; Agent Space does not infer
-their state from terminal output.
+not mean renaming the provider's native terminal prompt.
+
+**Working** means a structured signal proves that the agent is actively
+processing. **Waiting** means a structured signal proves that the agent needs a
+human before it can continue.
+
+Waiting is narrower than it looks for Claude. The only structured evidence in a
+Claude transcript is an `AskUserQuestion` tool call; a pending tool-permission
+prompt — the most common way Claude actually waits for you — leaves no distinct
+event, and is indistinguishable from `working`. Agent Space reports `working` in
+that case rather than guessing. Codex (`request_user_input`, approval requests)
+and OpenCode (`question`, `plan_exit` tools) do expose explicit gates.
+
+Agent Space never infers state from terminal output, and never reports `idle`
+to stand in for "no evidence".
 
 ## GitHub
 
