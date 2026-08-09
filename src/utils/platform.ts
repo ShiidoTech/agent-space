@@ -1,4 +1,9 @@
-import { type ExecSyncOptions, execSync } from "node:child_process";
+import {
+	type ExecFileSyncOptions,
+	type ExecSyncOptions,
+	execFileSync,
+	execSync,
+} from "node:child_process";
 import { existsSync } from "node:fs";
 
 /**
@@ -178,6 +183,17 @@ export function getExecOptions(cwd?: string): ExecSyncOptions {
 
 export function exec(cmd: string, opts?: { cwd?: string }): string {
 	return execSync(cmd, getExecOptions(opts?.cwd)) as string;
+}
+
+export function execFile(
+	file: string,
+	args: readonly string[],
+	opts?: { cwd?: string },
+): string {
+	return execFileSync(file, args, {
+		...getExecOptions(opts?.cwd),
+		shell: false,
+	} as ExecFileSyncOptions) as string;
 }
 
 export function execSilent(cmd: string, opts?: { cwd?: string }): boolean {

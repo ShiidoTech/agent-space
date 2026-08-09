@@ -8,6 +8,7 @@ import { TmuxIntegration } from "./agents/tmux";
 import {
 	classifyLiveTmuxSession,
 	findCleanupCandidates,
+	shouldCleanupSession,
 } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
 import { validateFeatureNameInput } from "./features/featureName";
@@ -1128,9 +1129,15 @@ export async function activate(
 				);
 				if (confirmation !== "Remove") return;
 
-				const latestTracked = readTracked();
 				for (const session of names) {
-					if (tmux.isSessionAlive(session) && !latestTracked.has(session)) {
+					const currentTracked = readTracked();
+					if (
+						shouldCleanupSession(
+							session,
+							currentTracked.get(session),
+							tmux.isSessionAlive(session),
+						)
+					) {
 						tmux.killSession(session);
 					}
 				}

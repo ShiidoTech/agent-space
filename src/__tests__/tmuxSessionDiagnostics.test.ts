@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	classifyLiveTmuxSession,
 	findCleanupCandidates,
+	shouldCleanupSession,
 } from "../diagnostics/tmuxSessionDiagnostics";
 
 describe("tmux session diagnostics", () => {
@@ -37,5 +38,17 @@ describe("tmux session diagnostics", () => {
 				tracked,
 			),
 		).toEqual(["agent-space-f2-a2"]);
+	});
+
+	it("requires a live session that is still untracked at cleanup time", () => {
+		expect(shouldCleanupSession("agent-space-f1-a1", ["owner"], true)).toBe(
+			false,
+		);
+		expect(shouldCleanupSession("agent-space-f1-a1", undefined, false)).toBe(
+			false,
+		);
+		expect(shouldCleanupSession("agent-space-f1-a1", undefined, true)).toBe(
+			true,
+		);
 	});
 });

@@ -35,3 +35,14 @@ export function findCleanupCandidates(
 			"untracked_agent_space",
 	);
 }
+
+export function shouldCleanupSession(
+	session: string,
+	trackedOwners: string[] | undefined,
+	isAlive: boolean,
+): boolean {
+	return (
+		isAlive &&
+		classifyLiveTmuxSession(session, trackedOwners) === "untracked_agent_space"
+	);
+}

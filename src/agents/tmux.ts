@@ -1,4 +1,4 @@
-import { commandExists, exec, execSilent } from "../utils/platform";
+import { commandExists, exec, execFile } from "../utils/platform";
 
 export const TMUX_SESSION_PREFIX = "agent-space";
 export const LEGACY_TMUX_SESSION_PREFIX = "companion";
@@ -44,7 +44,12 @@ export class TmuxIntegration {
 	}
 
 	isSessionAlive(sessionName: string): boolean {
-		return execSilent(`tmux has-session -t "${sessionName}"`);
+		try {
+			execFile("tmux", ["has-session", "-t", sessionName]);
+			return true;
+		} catch {
+			return false;
+		}
 	}
 
 	configureSession(sessionName: string): void {
@@ -133,7 +138,7 @@ export class TmuxIntegration {
 
 	killSession(sessionName: string): void {
 		try {
-			exec(`tmux kill-session -t "${sessionName}"`);
+			execFile("tmux", ["kill-session", "-t", sessionName]);
 		} catch {
 			// Session may already be gone
 		}

@@ -4,15 +4,15 @@ import { TmuxIntegration } from "../agents/tmux";
 vi.mock("../utils/platform", () => ({
 	commandExists: vi.fn(),
 	exec: vi.fn(),
+	execFile: vi.fn(),
 	execSilent: vi.fn(),
 }));
 
-import { commandExists, exec, execSilent } from "../utils/platform";
+import { commandExists, exec, execFile } from "../utils/platform";
 
 const mockCommandExists = vi.mocked(commandExists);
 const mockExec = vi.mocked(exec);
-const mockExecSilent = vi.mocked(execSilent);
-
+const mockExecFile = vi.mocked(execFile);
 describe("TmuxIntegration", () => {
 	const tmux = new TmuxIntegration();
 
@@ -99,19 +99,36 @@ describe("TmuxIntegration", () => {
 	// -------------------------------------------------------------------
 	describe("isSessionAlive", () => {
 		it("returns true for existing session", () => {
-			mockExecSilent.mockReturnValue(true);
+			mockExecFile.mockReturnValue("");
 			expect(tmux.isSessionAlive("agent-space-f1-a1")).toBe(true);
-			expect(mockExecSilent).toHaveBeenCalledWith(
-				'tmux has-session -t "agent-space-f1-a1"',
-			);
+			expect(mockExecFile).toHaveBeenCalledWith("tmux", [
+				"has-session",
+				"-t",
+				"agent-space-f1-a1",
+			]);
 		});
 
 		it("returns false for missing session", () => {
-			mockExecSilent.mockReturnValue(false);
+			mockExecFile.mockImplementation(() => {
+				throw new Error("missing");
+			});
 			expect(tmux.isSessionAlive("agent-space-f1-a1")).toBe(false);
-			expect(mockExecSilent).toHaveBeenCalledWith(
-				'tmux has-session -t "agent-space-f1-a1"',
-			);
+			expect(mockExecFile).toHaveBeenCalledWith("tmux", [
+				"has-session",
+				"-t",
+				"agent-space-f1-a1",
+			]);
+		});
+	});
+
+	describe("killSession", () => {
+		it("passes the session name as an argument, never through a shell", () => {
+			tmux.killSession("agent-space-safe; touch /tmp/pwned");
+			expect(mockExecFile).toHaveBeenCalledWith("tmux", [
+				"kill-session",
+				"-t",
+				"agent-space-safe; touch /tmp/pwned",
+			]);
 		});
 	});
 
@@ -249,16 +266,18 @@ describe("TmuxIntegration", () => {
 	// killSession
 	// -------------------------------------------------------------------
 	describe("killSession", () => {
-		it("calls exec with tmux kill-session", () => {
-			mockExec.mockReturnValue("");
+		it("calls execFile with tmux kill-session arguments", () => {
+			mockExecFile.mockReturnValue("");
 			tmux.killSession("my-session");
-			expect(mockExec).toHaveBeenCalledWith(
-				'tmux kill-session -t "my-session"',
-			);
+			expect(mockExecFile).toHaveBeenCalledWith("tmux", [
+				"kill-session",
+				"-t",
+				"my-session",
+			]);
 		});
 
 		it("swallows errors when session is already gone", () => {
-			mockExec.mockImplementation(() => {
+			mockExecFile.mockImplementation(() => {
 				throw new Error("no session");
 			});
 			expect(() => tmux.killSession("gone")).not.toThrow();
@@ -296,7 +315,9 @@ describe("TmuxIntegration", () => {
 
 	describe("adoptSession", () => {
 		it("returns true when the preferred session already exists", () => {
-			mockExecSilent.mockReturnValueOnce(true).mockReturnValueOnce(false);
+			mockExecFile.mockReturnValueOnce("").mockImplementationOnce(() => {
+				throw new Error("missing");
+			});
 			expect(tmux.adoptSession("agent-space-f1-a1", "companion-f1-a1")).toBe(
 				true,
 			);
@@ -304,7 +325,7 @@ describe("TmuxIntegration", () => {
 		});
 
 		it("reports ambiguity without killing either session when both exist", () => {
-			mockExecSilent.mockReturnValue(true);
+			mockExecFile.mockReturnValue("");
 			expect(tmux.adoptSession("agent-space-f1-a1", "companion-f1-a1")).toBe(
 				false,
 			);
@@ -312,7 +333,11 @@ describe("TmuxIntegration", () => {
 		});
 
 		it("renames the current session when only the legacy session exists", () => {
-			mockExecSilent.mockReturnValueOnce(false).mockReturnValueOnce(true);
+			mockExecFile
+				.mockImplementationOnce(() => {
+					throw new Error("missing");
+				})
+				.mockReturnValueOnce("");
 			mockExec.mockReturnValue("");
 			expect(tmux.adoptSession("agent-space-f1-a1", "companion-f1-a1")).toBe(
 				true,
@@ -323,7 +348,9 @@ describe("TmuxIntegration", () => {
 		});
 
 		it("returns false when neither session exists", () => {
-			mockExecSilent.mockReturnValue(false);
+			mockExecFile.mockImplementation(() => {
+				throw new Error("missing");
+			});
 			expect(tmux.adoptSession("agent-space-f1-a1", "companion-f1-a1")).toBe(
 				false,
 			);

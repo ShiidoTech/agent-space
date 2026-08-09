@@ -9,6 +9,7 @@ import type { Feature } from "../types";
 
 vi.mock("node:child_process", () => ({
 	execSync: vi.fn(),
+	execFileSync: vi.fn(() => ""),
 }));
 
 vi.mock("vscode", () => ({
