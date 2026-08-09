@@ -27,6 +27,7 @@ import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
 import { HomeSidebarProvider } from "./home/homeSidebarProvider";
 import { PrerequisiteChecker } from "./prerequisites";
+import { discoverProjectKnowledge } from "./projects/projectKnowledge";
 import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
@@ -396,6 +397,54 @@ export async function activate(
 			sessionNameSyncer.syncAll();
 			projectManager.notifyChange();
 		}),
+	);
+
+	// Command: Open Project Runbook — makes the project's operational runbooks
+	// discoverable from the command palette without a provider-specific memory.
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.openProjectRunbook",
+			async (featureIdArg?: string) => {
+				const featureId = featureIdArg ?? activeFeatureId;
+				const resolved = featureId
+					? projectManager.resolveFeature(featureId)
+					: undefined;
+				const ctx =
+					resolved?.ctx ??
+					(featureId
+						? projectManager.findContextByFeatureId(featureId)
+						: undefined) ??
+					projectManager.getAllContexts()[0];
+				if (!ctx) return;
+
+				const knowledge = discoverProjectKnowledge(
+					ctx.project.repoPath,
+					ctx.config,
+				);
+				const runbooks = knowledge.runbooks.filter((r) => r.exists);
+				if (runbooks.length === 0) {
+					vscode.window.showInformationMessage(
+						`No runbooks found for ${ctx.project.name}. Add .md files under .agentspace/runbooks/.`,
+					);
+					return;
+				}
+
+				const pick = await vscode.window.showQuickPick(
+					runbooks.map((r) => ({
+						label: r.title,
+						description: r.relativePath,
+						runbook: r,
+					})),
+					{ placeHolder: "Select a project runbook to open" },
+				);
+				if (!pick) return;
+
+				const document = await vscode.workspace.openTextDocument(
+					pick.runbook.absolutePath,
+				);
+				await vscode.window.showTextDocument(document, { preview: true });
+			},
+		),
 	);
 
 	projectManager.onChange(() => {

@@ -4,6 +4,16 @@ import {
 	type DoctorInput,
 	runDoctor,
 } from "../diagnostics/doctor";
+import type { ProjectKnowledge } from "../projects/projectKnowledge";
+
+function emptyKnowledge(): ProjectKnowledge {
+	return {
+		instructions: [],
+		runbooks: [],
+		problems: [],
+		hasKnowledge: false,
+	};
+}
 
 function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
 	return {
@@ -16,6 +26,7 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
 			valid: true,
 			config: { baseBranch: "main" },
 		}),
+		readProjectKnowledge: () => emptyKnowledge(),
 		isGitRepo: () => true,
 		currentBranch: () => "main",
 		branchExists: () => true,
@@ -194,5 +205,81 @@ describe("runDoctor", () => {
 		expect(report.markdown).toContain(
 			"0/0 agents requiring binding are bound to a provider session; 1 explicitly unsupported",
 		);
+	});
+
+	it("reports an absent knowledge layer as an informational note", () => {
+		const report = runDoctor(
+			input(),
+			deps({ readProjectKnowledge: () => emptyKnowledge() }),
+		);
+
+		expect(report.errors).toBe(0);
+		expect(report.markdown).toContain("operational knowledge");
+		expect(report.markdown).toContain("no AGENTS.md or .agentspace/runbooks");
+	});
+
+	it("reports available instructions and runbooks", () => {
+		const report = runDoctor(
+			input(),
+			deps({
+				readProjectKnowledge: () => ({
+					instructions: [
+						{
+							id: "AGENTS.md",
+							relativePath: "AGENTS.md",
+							absolutePath: "/home/alice/dev/agent-space/AGENTS.md",
+							exists: true,
+							source: "conventional" as const,
+						},
+					],
+					runbooks: [
+						{
+							id: "local-extension-test",
+							relativePath: ".agentspace/runbooks/local-extension-test.md",
+							absolutePath:
+								"/home/alice/dev/agent-space/.agentspace/runbooks/local-extension-test.md",
+							exists: true,
+							title: "Local extension test",
+							commands: ["npm run package"],
+							canonical: true,
+							source: "discovered" as const,
+						},
+					],
+					problems: [],
+					hasKnowledge: true,
+				}),
+			}),
+		);
+
+		expect(report.errors).toBe(0);
+		expect(report.markdown).toContain("1 instruction, 1 runbook");
+		expect(report.markdown).toContain(
+			"local-extension-test: Local extension test",
+		);
+	});
+
+	it("fails visibly on a declared runbook that is missing", () => {
+		const report = runDoctor(
+			input(),
+			deps({
+				readProjectKnowledge: () => ({
+					instructions: [],
+					runbooks: [],
+					problems: [
+						{
+							kind: "missing-runbook",
+							reference: ".agentspace/runbooks/gone.md",
+							detail:
+								"declared runbook `.agentspace/runbooks/gone.md` is missing in /home/alice/dev/agent-space",
+						},
+					],
+					hasKnowledge: true,
+				}),
+			}),
+		);
+
+		expect(report.errors).toBe(1);
+		expect(report.markdown).toContain("knowledge reference");
+		expect(report.markdown).toContain(".agentspace/runbooks/gone.md");
 	});
 });
