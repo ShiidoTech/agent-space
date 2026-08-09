@@ -36,14 +36,14 @@ describe("presentSessionBinding", () => {
 		expect(badge?.tooltip).toBe("No provider session has appeared in foo yet");
 	});
 
-	it("badges ambiguous and appends the one-agent-per-worktree recommendation", () => {
+	it("badges ambiguous with the fail-closed attachment remediation", () => {
 		const badge = presentSessionBinding(
 			binding("ambiguous", "2 unclaimed sessions appeared in foo"),
 		);
 		expect(badge?.className).toBe("binding-badge binding-ambiguous");
 		expect(badge?.label).toBe("Ambiguous session");
 		expect(badge?.tooltip).toBe(
-			"2 unclaimed sessions appeared in foo Run one agent per worktree to avoid this.",
+			"2 unclaimed sessions appeared in foo Automatic attachment is refused: explicit attachment or strong provider correlation is required.",
 		);
 	});
 

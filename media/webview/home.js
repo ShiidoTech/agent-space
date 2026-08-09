@@ -250,13 +250,19 @@ const ATTENTION_LABELS = {
 function updateAttention(agent) {
 	const status = agent.status || "unknown";
 	const dot = document.getElementById(`agent-attention-dot-${agent.id}`);
-	if (dot) dot.className = `agent-status-dot attention-${status}`;
+	if (dot) {
+		dot.className = agent.attentionSupported === false
+			? "agent-status-dot attention-unknown"
+			: `agent-status-dot attention-${status}`;
+	}
 
 	const badge = document.getElementById(`agent-attention-badge-${agent.id}`);
-	if (badge) {
+	if (badge && agent.attentionSupported !== false) {
 		badge.className = `agent-tool-badge agent-attention-badge attention-${status}`;
 		badge.textContent = ATTENTION_LABELS[status] || status;
 		badge.title = agent.reason || "No current attention evidence";
+	} else if (badge) {
+		badge.remove();
 	}
 	const lifecycleBadge = document.getElementById(`agent-lifecycle-badge-${agent.id}`);
 	if (lifecycleBadge) {
@@ -297,7 +303,7 @@ function updateBindingBadge(agent) {
 
 	let tooltip = agent.bindingDetail || "";
 	if (state === "ambiguous" && tooltip) {
-		tooltip += " Run one agent per worktree to avoid this.";
+		tooltip += " Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
 	}
 
 	badge.className = `agent-tool-badge binding-badge binding-${state}`;

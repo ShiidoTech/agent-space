@@ -94,6 +94,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		this.terminalController = controller;
 	}
 
+	private providerSupportsAttention(toolId?: string): boolean {
+		const tool = this.toolRegistry.resolveAgentTool(toolId);
+		return Object.values(this.toolRegistry.getProvider(tool).capabilities.attention).some(
+			Boolean,
+		);
+	}
+
 	onVisibilityChange(callback: (visible: boolean) => void): void {
 		this._onVisibilityChange = callback;
 	}
@@ -261,6 +268,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				status: string;
 				attentionStatus?: AgentAttentionStatus;
 				attentionReason?: string;
+				attentionSupported: boolean;
 				toolId?: string;
 				lastError?: string;
 				bindingState?: string;
@@ -302,6 +310,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 							status: a.status,
 							attentionStatus: a.attentionStatus,
 							attentionReason: a.attentionReason,
+							attentionSupported: this.providerSupportsAttention(a.toolId),
 							toolId: a.toolId,
 							lastError: a.lastError,
 							bindingState: a.sessionBinding?.state,
@@ -330,6 +339,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 							status: a.status,
 							attentionStatus: a.attentionStatus,
 							attentionReason: a.attentionReason,
+							attentionSupported: this.providerSupportsAttention(a.toolId),
 							toolId: a.toolId,
 							lastError: a.lastError,
 							bindingState: a.sessionBinding?.state,
@@ -674,7 +684,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const activeAgents = agents.filter((a) => a.status !== "done");
 		const doneAgents = agents.filter((a) => a.status === "done");
 
-		const renderAttentionBadge = (a: Agent) => {
+		const renderAttentionBadge = (a: Agent, attentionSupported: boolean) => {
+			if (!attentionSupported) return "";
 			const attention = a.attentionStatus ?? "unknown";
 			const reason = a.attentionReason ?? "No current attention evidence";
 			return `<span class="attention-badge attention-${attention}" data-attention-badge="${a.id}" title="${this.escapeHtml(reason)}">${attentionStatusLabel(attention)}</span>`;
@@ -706,7 +717,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					<span class="agent-name" title="${this.escapeHtml(a.name)}">${this.escapeHtml(a.name)}<span class="agent-tool">${toolLabel}</span></span>
 					<span class="agent-status">
 						<span class="lifecycle-badge" data-lifecycle-badge="${a.id}">${lifecycleStatusLabel(a.status)}</span>
-						${renderAttentionBadge(a)}${renderBindingBadge(a)}
+							${renderAttentionBadge(a, this.providerSupportsAttention(a.toolId))}${renderBindingBadge(a)}
 					</span>
 				</div>
 				${errorNote}
@@ -733,7 +744,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					<span class="agent-name">${this.escapeHtml(a.name)}</span>
 					<span class="agent-status">
 						<span class="lifecycle-badge" data-lifecycle-badge="${a.id}">${lifecycleStatusLabel(a.status)}</span>
-						${renderAttentionBadge(a)}
+						${renderAttentionBadge(a, this.providerSupportsAttention(a.toolId))}
 					</span>
 				</div>
 			</div>

@@ -56,7 +56,7 @@ export function presentSessionBinding(
 
 function bindingTooltip(binding: AgentSessionBinding): string {
 	if (binding.state === "ambiguous") {
-		return `${binding.detail} Run one agent per worktree to avoid this.`;
+		return `${binding.detail} Automatic attachment is refused: explicit attachment or strong provider correlation is required.`;
 	}
 	return binding.detail;
 }

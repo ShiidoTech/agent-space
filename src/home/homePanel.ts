@@ -103,6 +103,13 @@ export class HomePanel {
 		return HomePanel.instance;
 	}
 
+	private providerSupportsAttention(toolId?: string): boolean {
+		const tool = this.toolRegistry.resolveAgentTool(toolId);
+		return Object.values(this.toolRegistry.getProvider(tool).capabilities.attention).some(
+			Boolean,
+		);
+	}
+
 	private constructor(
 		panel: vscode.WebviewPanel,
 		projectManager: ProjectManager,
@@ -585,6 +592,7 @@ export class HomePanel {
 				id: agent.id,
 				status: agent.attentionStatus ?? "unknown",
 				lifecycleStatus: agent.status,
+				attentionSupported: this.providerSupportsAttention(agent.toolId),
 				reason: agent.attentionReason ?? "No current attention evidence",
 				bindingState: agent.sessionBinding?.state,
 				bindingDetail: agent.sessionBinding?.detail,
@@ -1132,7 +1140,10 @@ export class HomePanel {
 		const attention = agent.attentionStatus ?? "unknown";
 		const attentionReason =
 			agent.attentionReason ?? "No current attention evidence";
-		const attentionBadge = `<span id="agent-attention-badge-${agent.id}" class="agent-tool-badge agent-attention-badge attention-${attention}" title="${this.escapeHtml(attentionReason)}">${attentionStatusLabel(attention)}</span>`;
+		const attentionSupported = this.providerSupportsAttention(agent.toolId);
+		const attentionBadge = attentionSupported
+			? `<span id="agent-attention-badge-${agent.id}" class="agent-tool-badge agent-attention-badge attention-${attention}" title="${this.escapeHtml(attentionReason)}">${attentionStatusLabel(attention)}</span>`
+			: "";
 		const isDone = agent.status === "done";
 		const bindingBadgeData = presentSessionBinding(
 			agent.sessionBinding,

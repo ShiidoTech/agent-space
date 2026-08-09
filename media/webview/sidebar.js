@@ -277,7 +277,7 @@ function updateBindingBadge(agentEl, agent) {
 
 	var tooltip = agent.bindingDetail || "";
 	if (state === "ambiguous" && tooltip) {
-		tooltip += " Run one agent per worktree to avoid this.";
+		tooltip += " Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
 	}
 
 	if (!badge) {
@@ -337,11 +337,13 @@ window.addEventListener("message", function (event) {
 				var attentionBadge = agentEl.querySelector(
 					'[data-attention-badge="' + agent.id + '"]',
 				);
-				if (attentionBadge) {
+				if (attentionBadge && agent.attentionSupported !== false) {
 					attentionBadge.className = "attention-badge attention-" + attention;
 					attentionBadge.textContent = ATTENTION_LABELS[attention] || attention;
 					attentionBadge.title =
 						agent.attentionReason || "No current attention evidence";
+				} else if (attentionBadge) {
+					attentionBadge.remove();
 				}
 
 				updateBindingBadge(agentEl, agent);
