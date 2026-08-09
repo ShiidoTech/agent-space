@@ -81,6 +81,22 @@ describe("platform", () => {
 		});
 	});
 
+	describe("runtimeLabel", () => {
+		it("identifies WSL as a Linux extension host", async () => {
+			const originalPlatform = process.platform;
+			const originalEnv = { ...process.env };
+			Object.defineProperty(process, "platform", { value: "linux" });
+			process.env.WSL_DISTRO_NAME = "Ubuntu";
+			try {
+				const { runtimeLabel } = await loadPlatform();
+				expect(runtimeLabel()).toBe("WSL / Linux extension host");
+			} finally {
+				Object.defineProperty(process, "platform", { value: originalPlatform });
+				process.env = originalEnv;
+			}
+		});
+	});
+
 	// -----------------------------------------------------------------------
 	// findGitBash
 	// -----------------------------------------------------------------------
@@ -475,6 +491,74 @@ describe("platform", () => {
 				Object.defineProperty(process, "platform", {
 					value: originalPlatform,
 				});
+			}
+		});
+	});
+
+	describe("tmuxFunctional", () => {
+		it("runs and cleans up a collision-safe smoke-test session", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { value: "linux" });
+			try {
+				mockExecSync.mockReturnValue("");
+				const { tmuxFunctional } = await loadPlatform();
+				expect(tmuxFunctional()).toBe(true);
+				expect(mockExecSync).toHaveBeenCalledWith(
+					expect.stringMatching(/^tmux new-session -d -s agentspace-doctor-/),
+					expect.any(Object),
+				);
+				expect(mockExecSync).toHaveBeenCalledWith(
+					expect.stringMatching(/^tmux has-session -t agentspace-doctor-/),
+					expect.any(Object),
+				);
+				expect(mockExecSync).toHaveBeenCalledWith(
+					expect.stringMatching(/^tmux kill-session -t agentspace-doctor-/),
+					expect.any(Object),
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { value: originalPlatform });
+			}
+		});
+
+		it("returns false when has-session fails and still cleans up", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { value: "linux" });
+			try {
+				mockExecSync.mockImplementation((command: string) => {
+					if (command.startsWith("tmux has-session")) {
+						throw new Error("session is not functional");
+					}
+					return "";
+				});
+				const { tmuxFunctional } = await loadPlatform();
+				expect(tmuxFunctional()).toBe(false);
+				expect(mockExecSync).toHaveBeenCalledWith(
+					expect.stringMatching(/^tmux kill-session -t agentspace-doctor-/),
+					expect.any(Object),
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { value: originalPlatform });
+			}
+		});
+
+		it("returns false and still attempts cleanup when the smoke test fails", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { value: "linux" });
+			try {
+				mockExecSync.mockImplementation((command: string) => {
+					if (command.startsWith("tmux new-session")) {
+						throw new Error("tmux failed");
+					}
+					return "";
+				});
+				const { tmuxFunctional } = await loadPlatform();
+				expect(tmuxFunctional()).toBe(false);
+				expect(mockExecSync).toHaveBeenCalledWith(
+					expect.stringMatching(/^tmux kill-session -t agentspace-doctor-/),
+					expect.any(Object),
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { value: originalPlatform });
 			}
 		});
 	});
