@@ -138,6 +138,17 @@ describe("runDoctor", () => {
 		expect(report.markdown).toContain("wsl");
 	});
 
+	it("reports persistence backend readiness", () => {
+		const report = runDoctor(
+			input({ persistencePath: "/home/alice/.config/agentspace" }),
+			deps({ pathWritable: () => false }),
+		);
+
+		expect(report.errors).toBe(1);
+		expect(report.markdown).toContain("Persistence backend");
+		expect(report.markdown).toContain("not writable");
+	});
+
 	it("flags an explicitly configured base branch that does not exist", () => {
 		const report = runDoctor(input(), deps({ branchExists: () => false }));
 

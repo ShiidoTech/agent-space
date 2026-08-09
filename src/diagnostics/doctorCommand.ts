@@ -27,6 +27,7 @@ export function registerDoctorCommand(context: vscode.ExtensionContext): void {
 						"worktreeBasePath",
 						".worktrees",
 					),
+					persistencePath: context.globalStorageUri.fsPath,
 					perAgentIsolation: config.get<boolean>(
 						"enablePerAgentIsolation",
 						false,
