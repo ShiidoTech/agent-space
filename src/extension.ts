@@ -25,7 +25,6 @@ import {
 } from "./git/gitViewHandoff";
 import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
-import { HomeSidebarProvider } from "./home/homeSidebarProvider";
 import { PrerequisiteChecker } from "./prerequisites";
 import { discoverProjectKnowledge } from "./projects/projectKnowledge";
 import type { ProjectContext } from "./projects/projectManager";
@@ -181,16 +180,6 @@ export async function activate(
 		),
 	);
 	context.subscriptions.push({ dispose: () => sidebarProvider.stopPolling() });
-
-	const homeSidebarProvider = new HomeSidebarProvider(() => {
-		void showAgentSpace();
-	}, context.extensionUri);
-	context.subscriptions.push(
-		vscode.window.registerWebviewViewProvider(
-			HomeSidebarProvider.viewType,
-			homeSidebarProvider,
-		),
-	);
 
 	const ensureHomePanel = () => {
 		const panel = HomePanel.createOrShow(
@@ -447,9 +436,46 @@ export async function activate(
 		),
 	);
 
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.attachProviderSession",
+			async (featureId?: string, agentId?: string) => {
+				if (!featureId || !agentId) return;
+				const sessions = sessionBinder.listAttachableSessions(
+					featureId,
+					agentId,
+				);
+				if (sessions.length === 0) {
+					vscode.window.showInformationMessage(
+						"No provider sessions are available for this agent's worktree yet.",
+					);
+					return;
+				}
+				const choice = await vscode.window.showQuickPick(
+					sessions.map((session) => ({
+						label: session.prompt || session.sessionId,
+						description: `${session.sessionId} · ${session.created || "unknown time"}`,
+						sessionId: session.sessionId,
+					})),
+					{ placeHolder: "Attach this agent to an existing provider session" },
+				);
+				if (
+					!choice ||
+					!sessionBinder.attachExplicitly(featureId, agentId, choice.sessionId)
+				) {
+					if (choice)
+						vscode.window.showErrorMessage(
+							"The selected provider session could not be attached safely.",
+						);
+					return;
+				}
+				projectManager.notifyChange();
+			},
+		),
+	);
+
 	projectManager.onChange(() => {
 		sidebarProvider.refresh();
-		homeSidebarProvider.refresh();
 		const home = HomePanel.getInstance();
 		if (home) home.refresh();
 	});
@@ -480,6 +506,35 @@ export async function activate(
 				await workspaceIsolation.enter();
 			},
 		),
+		vscode.commands.registerCommand(
+			"agentSpace.openProjectConfig",
+			async (projectId?: string) => {
+				if (!projectId) return;
+				const project = projectManager
+					.getProjects()
+					.find((p) => p.id === projectId);
+				if (!project) return;
+				const uri = vscode.Uri.joinPath(
+					vscode.Uri.file(project.repoPath),
+					".agentspace",
+					"config.json",
+				);
+				try {
+					await vscode.workspace.fs.stat(uri);
+					await vscode.commands.executeCommand("vscode.open", uri);
+				} catch {
+					vscode.window.showInformationMessage(
+						"This project has no .agentspace/config.json yet.",
+					);
+				}
+			},
+		),
+		vscode.commands.registerCommand("agentSpace.openConfigDocs", async () => {
+			await vscode.commands.executeCommand(
+				"vscode.open",
+				vscode.Uri.joinPath(context.extensionUri, "README.md"),
+			);
+		}),
 	);
 
 	// Command: New Feature

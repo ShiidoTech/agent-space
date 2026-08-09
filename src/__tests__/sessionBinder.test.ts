@@ -165,6 +165,63 @@ describe("SessionBinder", () => {
 		);
 	});
 
+	it("allows a user-selected session to be attached with worktree and uniqueness checks", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const binder = new SessionBinder(
+			registry(
+				adapter([
+					{
+						sessionId: "ses_selected",
+						prompt: "Implement the selected task",
+						created: "2026-08-09T07:52:53.000Z",
+						projectPath: WORKTREE,
+					},
+				]),
+			),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		expect(binder.listAttachableSessions("f1", "a1")).toHaveLength(1);
+		expect(binder.attachExplicitly("f1", "a1", "ses_selected")).toBe(true);
+		expect(ctx.store.loadAgents("f1")[0]).toMatchObject({
+			sessionId: "ses_selected",
+			sessionBinding: { state: "bound" },
+		});
+	});
+
+	it("refuses attachment when the session is already owned by a base agent", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const base = ctx.featureManager.getBaseFeature(ctx.project.id);
+		ctx.store.saveAgents(base.id, [
+			agentFixture({
+				id: "base-owner",
+				featureId: base.id,
+				sessionId: "ses_selected",
+				tmuxSession: "agent-space-base-owner",
+			}),
+		]);
+		const binder = new SessionBinder(
+			registry(
+				adapter([
+					{
+						sessionId: "ses_selected",
+						prompt: "Already owned by the base agent",
+						created: "2026-08-09T07:52:53.000Z",
+						projectPath: WORKTREE,
+					},
+				]),
+			),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		expect(binder.attachExplicitly("f1", "a1", "ses_selected")).toBe(false);
+		expect(ctx.store.loadAgents("f1")[0].sessionId).toBeNull();
+	});
+
 	it("binds a new session only when a provider supplies strong ownership proof", () => {
 		const { projectManager, ctx } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
