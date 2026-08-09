@@ -111,6 +111,26 @@ describe("runDoctor", () => {
 		expect(report.markdown).toContain("found but functional smoke test failed");
 	});
 
+	it("gives the native Windows remediation when tmux is unavailable", () => {
+		const originalPlatform = process.platform;
+		Object.defineProperty(process, "platform", { value: "win32" });
+		try {
+			const report = runDoctor(
+				input(),
+				deps({ commandExists: (command) => command === "git" }),
+			);
+
+			expect(report.markdown).toContain("tmux");
+			expect(report.markdown).toContain("not found on PATH");
+			expect(report.markdown).toContain("Remote WSL");
+			expect(report.markdown).toContain(
+				"Native Windows support is experimental",
+			);
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform });
+		}
+	});
+
 	it("reports the VS Code remote extension host context", () => {
 		const report = runDoctor(input({ remoteName: "wsl" }), deps());
 
