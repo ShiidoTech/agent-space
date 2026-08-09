@@ -116,6 +116,104 @@ export class SessionBinder {
 	}
 
 	/**
+	 * Attach a provider session only after the user has selected it explicitly.
+	 * This is the escape hatch for providers (notably Codex/OpenCode) that do
+	 * not expose ownership proof. The selected id is still checked against the
+	 * provider store and the agent worktree; no automatic guess is introduced.
+	 */
+	attachExplicitly(
+		featureId: string,
+		agentId: string,
+		sessionId: string,
+	): boolean {
+		if (!this.projectManager) return false;
+		const resolved = this.resolveFeatureForAttachment(featureId);
+		if (!resolved) return false;
+		const { ctx, feature } = resolved;
+		const agent = ctx.agentManager
+			.getAgents(featureId)
+			.find((a) => a.id === agentId);
+		if (!agent) return false;
+		const adapter = this.adapterFor(agent);
+		if (!adapter?.scanSessions || !adapter.hasSession?.(sessionId))
+			return false;
+		const cwd = agent.worktreePath ?? feature.worktreePath;
+		const session = safeScan(adapter).find(
+			(candidate) => candidate.sessionId === sessionId,
+		);
+		if (!session || !samePath(session.projectPath, cwd)) return false;
+		const alreadyOwned = this.projectManager
+			.getAllContexts()
+			.some((otherCtx) =>
+				otherCtx.store
+					.loadFeatures()
+					.some((otherFeature) =>
+						otherCtx.agentManager
+							.getAgents(otherFeature.id)
+							.some(
+								(other) =>
+									other.id !== agentId && other.sessionId === sessionId,
+							),
+					),
+			);
+		if (alreadyOwned) return false;
+		ctx.agentManager.updateAgentSessionId(agentId, featureId, sessionId);
+		ctx.agentManager.updateSessionBinding(agentId, featureId, {
+			state: "bound",
+			checkedAt: new Date().toISOString(),
+			attempts: agent.sessionBinding?.attempts ?? 0,
+			detail:
+				"Attached explicitly by the user to the selected provider session",
+		});
+		this.onBoundCallback?.({
+			agentId,
+			featureId,
+			binding: ctx.agentManager.getAgent(featureId, agentId)
+				?.sessionBinding ?? {
+				state: "bound",
+				checkedAt: new Date().toISOString(),
+				attempts: 0,
+				detail:
+					"Attached explicitly by the user to the selected provider session",
+			},
+			boundSessionId: sessionId,
+		});
+		return true;
+	}
+
+	listAttachableSessions(featureId: string, agentId: string): SessionInfo[] {
+		if (!this.projectManager) return [];
+		const resolved = this.resolveFeatureForAttachment(featureId);
+		if (!resolved) return [];
+		const agent = resolved.ctx.agentManager
+			.getAgents(featureId)
+			.find((a) => a.id === agentId);
+		if (!agent) return [];
+		const adapter = this.adapterFor(agent);
+		if (!adapter?.scanSessions) return [];
+		const cwd = agent.worktreePath ?? resolved.feature.worktreePath;
+		return safeScan(adapter).filter((session) =>
+			samePath(session.projectPath, cwd),
+		);
+	}
+
+	private resolveFeatureForAttachment(
+		featureId: string,
+	): { ctx: ProjectContext; feature: Feature } | undefined {
+		const resolved = this.projectManager?.resolveFeature(featureId);
+		if (resolved) return resolved;
+		for (const ctx of this.projectManager?.getAllContexts() ?? []) {
+			const feature = featureId.startsWith("base:")
+				? ctx.featureManager.getBaseFeature(ctx.project.id)
+				: ctx.store
+						.loadFeatures()
+						.find((candidate) => candidate.id === featureId);
+			if (feature) return { ctx, feature };
+		}
+		return undefined;
+	}
+
+	/**
 	 * Snapshot the sessions that already exist in `cwd` and mark the agent as
 	 * awaiting a session of its own. Called immediately before the CLI starts,
 	 * so anything recorded here provably predates this agent.

@@ -1,37 +1,15 @@
 import * as vscode from "vscode";
-import type { AgentManager } from "../agents/agentManager";
-import { presentSessionBinding } from "../agents/attention/sessionBindingPresentation";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { presentAgentState } from "../agents/observation/presentAgentState";
 import type { TerminalController } from "../agents/terminalController";
-import { TERMINAL_COLOR_HEX } from "../constants/colors";
-import {
-	ICON_ADD_AGENT,
-	ICON_ADD_SERVICE,
-	ICON_CHEVRON_DOWN,
-	ICON_CHEVRON_RIGHT,
-	ICON_DELETE,
-	ICON_GIT,
-	ICON_REMOVE,
-	ICON_RESTART,
-	ICON_STOP,
-	ICON_SYNC,
-} from "../constants/icons";
+import { ICON_CHEVRON_DOWN } from "../constants/icons";
 import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
-import type { ServiceManager } from "../services/serviceManager";
-import type {
-	Agent,
-	AgentAttentionStatus,
-	Feature,
-	GitAwareStatus,
-	Service,
-} from "../types";
-import type { FeatureManager } from "./featureManager";
+import type { GitAwareStatus } from "../types";
 
-function gitStatusLabel(status: GitAwareStatus): string {
+function _gitStatusLabel(status: GitAwareStatus): string {
 	switch (status) {
 		case "new":
 			return "New";
@@ -54,7 +32,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	constructor(
 		private readonly projectManager: ProjectManager,
-		private readonly toolRegistry: CodingToolRegistry,
+		readonly _toolRegistry: CodingToolRegistry,
 		_prerequisites: unknown,
 		private readonly extensionUri: vscode.Uri,
 	) {}
@@ -137,6 +115,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				case "syncNames":
 					run("agentSpace.syncSessionNames");
 					break;
+				case "attachProviderSession":
+					run(
+						"agentSpace.attachProviderSession",
+						message.featureId,
+						message.agentId,
+					);
+					break;
 				case "stopService":
 					this.handleStopService(message.featureId, message.serviceId);
 					break;
@@ -203,149 +188,11 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		}
 	}
 
-	/** Lightweight incremental update — sends JSON data via postMessage so the webview
-	 *  can update DOM in-place without rebuilding the entire HTML tree. */
-	private async sendUpdate(): Promise<void> {
-		try {
-			if (!this._view?.webview) return;
-
-			const contexts = this.projectManager.getAllContexts();
-			const statusMap = new Map<string, import("../types").GitAwareStatus>();
-
-			const asyncTasks: Promise<void>[] = [];
-			for (const ctx of contexts) {
-				for (const feature of ctx.featureManager.getFeatures()) {
-					asyncTasks.push(
-						ctx.featureManager.getFeatureGitStatusAsync(feature).then((s) => {
-							statusMap.set(feature.id, s);
-						}),
-					);
-				}
-			}
-			await Promise.all(asyncTasks);
-
-			interface SidebarAgent {
-				id: string;
-				name: string;
-				sessionTitle?: string;
-				presentedState: { label: string; tone: string; detail?: string };
-				status: string;
-				attentionStatus?: AgentAttentionStatus;
-				attentionReason?: string;
-				toolId?: string;
-				lastError?: string;
-				bindingState?: string;
-				bindingDetail?: string;
-			}
-			interface SidebarService {
-				id: string;
-				name: string;
-				command: string;
-				status: string;
-			}
-			interface SidebarFeature {
-				id: string;
-				branch: string;
-				gitStatus?: string;
-				isBase: boolean;
-				agents: SidebarAgent[];
-				services: SidebarService[];
-			}
-			interface SidebarProject {
-				id: string;
-				name: string;
-				features: SidebarFeature[];
-			}
-
-			const projects: SidebarProject[] = contexts.map((ctx) => {
-				const baseFeature = ctx.featureManager.getBaseFeature(ctx.project.id);
-				const baseAgents = ctx.agentManager.getAgents(baseFeature.id);
-				const baseServices = ctx.serviceManager.getServices(baseFeature.id);
-
-				const features: SidebarFeature[] = [
-					{
-						id: baseFeature.id,
-						branch: baseFeature.branch,
-						isBase: true,
-						agents: baseAgents.map((a) => ({
-							...(() => {
-								const presented = presentAgentState(
-									ctx.agentManager.observe(a),
-								);
-								return { presentedState: presented };
-							})(),
-							id: a.id,
-							name: a.name,
-							sessionTitle: a.sessionTitle,
-							status: a.status,
-							attentionStatus: a.attentionStatus,
-							attentionReason: a.attentionReason,
-							toolId: a.toolId,
-							lastError: a.lastError,
-							bindingState: a.sessionBinding?.state,
-							bindingDetail: a.sessionBinding?.detail,
-						})),
-						services: baseServices.map((s) => ({
-							id: s.id,
-							name: s.name,
-							command: s.command,
-							status: s.status,
-						})),
-					},
-				];
-
-				for (const feature of ctx.featureManager.getFeatures()) {
-					const agents = ctx.agentManager.getAgents(feature.id);
-					const services = ctx.serviceManager.getServices(feature.id);
-					features.push({
-						id: feature.id,
-						branch: feature.branch,
-						gitStatus: statusMap.get(feature.id),
-						isBase: false,
-						agents: agents.map((a) => ({
-							...(() => {
-								const presented = presentAgentState(
-									ctx.agentManager.observe(a),
-								);
-								return { presentedState: presented };
-							})(),
-							id: a.id,
-							name: a.name,
-							sessionTitle: a.sessionTitle,
-							status: a.status,
-							attentionStatus: a.attentionStatus,
-							attentionReason: a.attentionReason,
-							toolId: a.toolId,
-							lastError: a.lastError,
-							bindingState: a.sessionBinding?.state,
-							bindingDetail: a.sessionBinding?.detail,
-						})),
-						services: services.map((s) => ({
-							id: s.id,
-							name: s.name,
-							command: s.command,
-							status: s.status,
-						})),
-					});
-				}
-
-				return { id: ctx.project.id, name: ctx.project.name, features };
-			});
-
-			this._view.webview.postMessage({
-				type: "sidebarUpdate",
-				data: { projects },
-			});
-		} catch {
-			// Webview may have been disposed
-		}
-	}
-
 	startPolling(): void {
 		this.stopPolling();
-		this.sendUpdate().catch(() => {});
+		this.refresh();
 		this._pollingTimer = setInterval(() => {
-			this.sendUpdate().catch(() => {});
+			this.refresh();
 		}, 15_000);
 	}
 
@@ -475,23 +322,14 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 		const contexts = this.projectManager.getAllContexts();
 
-		let body: string;
-		if (contexts.length === 0) {
-			body = `
-				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
-				<div class="empty-state">
-					<div style="font-size: 24px; opacity: 0.3; margin-bottom: 8px;">Waiting for projects...</div>
-					<p>No projects registered</p>
-					<button class="btn-primary" onclick="send('addProject')">Add Project</button>
-				</div>`;
-		} else {
-			const sections = contexts
-				.map((ctx) => this.renderProjectSection(ctx, statusMap))
-				.join("");
-			body = `
-				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
-				${sections}`;
-		}
+		const sections = contexts
+			.map((ctx) => this.renderProjectSection(ctx, statusMap))
+			.join("");
+		const body = `
+			<button class="agent-space-home" onclick="send('openHome')">Agent Space</button>
+			<div class="sidebar-section-label">Projects</div>
+			${sections || '<div class="empty-state"><p>No projects registered</p></div>'}
+			<button class="sidebar-add-project" onclick="send('addProject')">+ Add project</button>`;
 
 		return `<!DOCTYPE html>
 <html>
@@ -526,40 +364,49 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 	${body}
-	<div id="agentContextMenu" class="context-menu">
-		<button class="context-menu-item" id="menuRename">Rename Agent</button>
-        <div class="context-separator"></div>
-		<button class="context-menu-item" id="menuMarkDone">Mark as Done</button>
-		<button class="context-menu-item menu-danger" id="menuDeleteAgent">Delete Agent</button>
-	</div>
-	<script src="${jsUri}"></script>
+		<script src="${jsUri}"></script>
 </body>
 </html>`;
 	}
 
 	private renderProjectSection(
 		ctx: ProjectContext,
-		statusMap?: Map<string, import("../types").GitAwareStatus>,
+		_statusMap?: Map<string, import("../types").GitAwareStatus>,
 	): string {
 		const { project } = ctx;
 		const baseFeature = ctx.featureManager.getBaseFeature(project.id);
-		const baseCard = this.renderBaseCard(
-			baseFeature,
-			ctx.agentManager,
-			ctx.serviceManager,
-		);
-
-		const features = ctx.featureManager.getFeatures();
-		const featureCards = features
-			.map((f) =>
-				this.renderFeatureCard(
-					f,
-					ctx.agentManager,
-					ctx.serviceManager,
-					ctx.featureManager,
-					statusMap,
-				),
-			)
+		const features = [baseFeature, ...ctx.featureManager.getFeatures()];
+		const featureRows = features
+			.map((feature) => {
+				const agents = ctx.agentManager.getAgents(feature.id);
+				const presented = agents.map((agent) =>
+					presentAgentState(ctx.agentManager.observe(agent)),
+				);
+				const waiting = presented.some((state) => state.label === "Needs you");
+				const active = presented.some((state) =>
+					["Working", "Running", "Idle", "Starting"].includes(state.label),
+				);
+				const degraded = presented.some((state) =>
+					["Error", "Failed", "Unknown"].includes(state.label),
+				);
+				const state =
+					feature.id === baseFeature.id
+						? "BASE"
+						: waiting
+							? "WAITING"
+							: active
+								? "ACTIVE"
+								: degraded
+									? "DEGRADED"
+									: feature.status === "done"
+										? "DONE"
+										: "IDLE";
+				const stateClass = state.toLowerCase();
+				return `<button class="sidebar-feature-row" onclick="selectFeature('${feature.id}')">
+				<span class="sidebar-feature-name" title="${this.escapeHtml(feature.branch)}">${this.escapeHtml(feature.branch)}</span>
+				<span class="sidebar-feature-state ${stateClass}">${state}</span>
+			</button>`;
+			})
 			.join("");
 
 		return `
@@ -567,257 +414,11 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="project-header" onclick="toggleProject('${project.id}')">
 				<span class="project-toggle" id="project-toggle-${project.id}">${ICON_CHEVRON_DOWN}</span>
 				<button class="project-name project-nav-btn" onclick="openProject(event, '${project.id}')">${this.escapeHtml(project.name)}</button>
-				<span class="project-path" title="${this.escapeHtml(project.repoPath)}">${this.escapeHtml(project.repoPath)}</span>
-				<button class="project-settings-btn" onclick="openProjectSettings(event, '${project.id}')">Settings</button>
-				<button class="project-remove-btn" onclick="removeProject(event)" title="Remove Project">${ICON_REMOVE}</button>
+				<button class="project-settings-btn" onclick="openProjectSettings(event, '${project.id}')" title="Project settings">⚙</button>
 			</div>
 			<div class="project-body" id="project-body-${project.id}">
-				<button class="btn-primary" onclick="newFeature(event, '${project.id}')">
-                    <span>+</span> New Feature
-                </button>
-				${baseCard}
-				${featureCards || '<div class="empty-placeholder">No features yet</div>'}
+				${featureRows || '<div class="empty-placeholder">No features yet</div>'}
 			</div>
-		</div>`;
-	}
-
-	private renderBaseCard(
-		feature: Feature,
-		agentManager: AgentManager,
-		serviceManager: ServiceManager,
-	): string {
-		const agents = agentManager.getAgents(feature.id);
-		const services = serviceManager.getServices(feature.id);
-		const totalCount =
-			agents.filter((a) => a.status !== "done").length +
-			services.filter((s) => s.status === "running").length;
-
-		const bodyHtml = this.renderCardBody(feature, agents, services);
-
-		return `
-		<div class="feature-card base-card" data-feature-id="${feature.id}" onclick="selectFeature('${feature.id}')">
-			<div class="card-header" onclick="toggleFeatureCard(event, '${feature.id}')">
-				<span class="card-chevron" id="card-chevron-${feature.id}">${ICON_CHEVRON_DOWN}</span>
-				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
-				<span class="base-label">base</span>
-				<span class="collapse-count" id="collapse-count-${feature.id}">${totalCount > 0 ? totalCount : ""}</span>
-			</div>
-			<div class="feature-card-body" id="card-body-${feature.id}">
-				${bodyHtml}
-				<div class="feature-quick-actions">
-					<button class="action-btn" onclick="addAgent(event, '${feature.id}')" title="Add Agent">${ICON_ADD_AGENT}</button>
-					<button class="action-btn" onclick="addService(event, '${feature.id}')" title="Add Service">${ICON_ADD_SERVICE}</button>
-					<button class="action-btn" onclick="openGitView(event, '${feature.id}')" title="Open Workspace">${ICON_GIT}</button>
-				</div>
-			</div>
-		</div>`;
-	}
-
-	private renderFeatureCard(
-		feature: Feature,
-		agentManager: AgentManager,
-		serviceManager: ServiceManager,
-		featureManager: FeatureManager,
-		statusMap?: Map<string, import("../types").GitAwareStatus>,
-	): string {
-		const agents = agentManager.getAgents(feature.id);
-		const services = serviceManager.getServices(feature.id);
-		const totalCount =
-			agents.filter((a) => a.status !== "done").length +
-			services.filter((s) => s.status === "running").length;
-
-		const gitStatus =
-			statusMap?.get(feature.id) ?? featureManager.getFeatureGitStatus(feature);
-		const bodyHtml = this.renderCardBody(feature, agents, services);
-
-		return `
-		<div class="feature-card" data-feature-id="${feature.id}" onclick="selectFeature('${feature.id}')">
-			<div class="card-header" onclick="toggleFeatureCard(event, '${feature.id}')">
-				<span class="card-chevron" id="card-chevron-${feature.id}">${ICON_CHEVRON_DOWN}</span>
-				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
-				<span class="status-badge status-${gitStatus}" data-status-badge="${feature.id}">${gitStatusLabel(gitStatus)}</span>
-				<span class="collapse-count" id="collapse-count-${feature.id}">${totalCount > 0 ? totalCount : ""}</span>
-				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Delete Feature">${ICON_DELETE}</button>
-			</div>
-			<div class="feature-card-body" id="card-body-${feature.id}">
-				${bodyHtml}
-				<div class="feature-quick-actions">
-					<button class="action-btn" onclick="addAgent(event, '${feature.id}')" title="Add Agent">${ICON_ADD_AGENT}</button>
-					<button class="action-btn" onclick="addService(event, '${feature.id}')" title="Add Service">${ICON_ADD_SERVICE}</button>
-					<button class="action-btn" onclick="openGitView(event, '${feature.id}')" title="Open Workspace">${ICON_GIT}</button>
-				</div>
-			</div>
-		</div>`;
-	}
-
-	private renderCardBody(
-		feature: Feature,
-		agents: Agent[],
-		services: Service[],
-	): string {
-		const agentsHtml = this.renderAgentsSection(feature, agents);
-		const servicesHtml = this.renderServicesSection(feature, services);
-		return `${agentsHtml}${servicesHtml}`;
-	}
-
-	private renderAgentsSection(feature: Feature, agents: Agent[]): string {
-		const activeAgents = agents.filter((a) => a.status !== "done");
-		const doneAgents = agents.filter((a) => a.status === "done");
-
-		const renderBindingBadge = (a: Agent) => {
-			const badge = presentSessionBinding(a.sessionBinding, a.status);
-			if (!badge) return "";
-			return `<span class="${badge.className}" data-binding-badge="${a.id}" title="${this.escapeHtml(badge.tooltip)}">${badge.label}</span>`;
-		};
-
-		const renderAgentCard = (a: Agent, i: number) => {
-			const tool = this.toolRegistry.resolveAgentTool(a.toolId);
-			const toolLabel = ` &middot; ${this.escapeHtml(tool.name)}`;
-			const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
-			const presented = presentAgentState(
-				this.projectManager
-					.findContextByFeatureId(feature.id)
-					?.agentManager.observe(a) ?? {
-					identity: { agentName: a.name },
-					lifecycle: { state: a.status, source: "agentspace" },
-					attention: {
-						state:
-							a.attentionStatus === "done"
-								? "unknown"
-								: (a.attentionStatus ?? "unknown"),
-						reason: a.attentionReason,
-					},
-					session: {
-						state: a.sessionBinding?.state ?? "pending",
-						detail: a.sessionBinding?.detail,
-					},
-				},
-			);
-			const errorNote = a.lastError
-				? `<div class="agent-error-note" title="${this.escapeHtml(a.lastError)}">${this.escapeHtml(a.lastError)}</div>`
-				: "";
-
-			return `
-		<div class="agent-card ${a.status}" data-agent-id="${a.id}"
-			onclick="focusAgent(event, '${feature.id}', '${a.id}')"
-			oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">
-            <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
-			<div class="status-dot primary-state-${presented.tone}" data-attention-dot="${a.id}"></div>
-			<div class="agent-copy">
-				<div class="agent-main-row">
-					<span class="agent-name" title="${this.escapeHtml(a.name)}">${this.escapeHtml(a.name)}<span class="agent-tool">${toolLabel}</span></span>
-					${a.sessionTitle ? `<span class="agent-session-title" title="${this.escapeHtml(a.sessionTitle)}">${this.escapeHtml(a.sessionTitle)}</span>` : ""}
-					<span class="agent-status">
-						<span class="lifecycle-badge primary-state-${presented.tone}" data-lifecycle-badge="${a.id}" title="${this.escapeHtml(presented.detail ?? "")}">${presented.label}</span>
-							${renderBindingBadge(a)}
-					</span>
-				</div>
-				${errorNote}
-			</div>
-		</div>`;
-		};
-
-		const activeCards = activeAgents
-			.map((a) => renderAgentCard(a, agents.indexOf(a)))
-			.join("");
-
-		let disabledHtml = "";
-		if (doneAgents.length > 0) {
-			const doneCards = doneAgents
-				.map((a) => {
-					const i = agents.indexOf(a);
-					const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
-					const presented = presentAgentState(
-						this.projectManager
-							.findContextByFeatureId(feature.id)
-							?.agentManager.observe(a) ?? {
-							identity: { agentName: a.name },
-							lifecycle: { state: a.status, source: "agentspace" },
-							attention: { state: "unknown" },
-							session: { state: "pending" },
-						},
-					);
-					return `
-		<div class="agent-card done" data-agent-id="${a.id}" oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">
-            <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
-            <div class="status-dot done" data-attention-dot="${a.id}"></div>
-			<div class="agent-copy">
-				<div class="agent-main-row">
-					<span class="agent-name">${this.escapeHtml(a.name)}</span>
-					<span class="agent-status">
-						<span class="lifecycle-badge primary-state-${presented.tone}" data-lifecycle-badge="${a.id}">${presented.label}</span>
-					</span>
-				</div>
-			</div>
-			<button class="action-btn" onclick="reopenAgent(event, '${feature.id}', '${a.id}')" title="Re-enable agent">${ICON_RESTART}</button>
-			<button class="action-btn agent-delete-btn" onclick="deleteAgent(event, '${feature.id}', '${a.id}')" title="Delete agent">${ICON_DELETE}</button>
-		</div>`;
-				})
-				.join("");
-
-			disabledHtml = `
-		<div class="disabled-header collapsed" onclick="toggleDisabled(event, '${feature.id}')">
-			<span class="disabled-icon" id="disabled-toggle-${feature.id}">${ICON_CHEVRON_RIGHT}</span>
-			<span>${doneAgents.length} finished</span>
-		</div>
-		<div class="disabled-list collapsed" id="disabled-list-${feature.id}">
-			${doneCards}
-		</div>`;
-		}
-
-		return `
-    <div class="section-header">
-        <span class="section-label">Agents</span>
-        ${activeAgents.length > 0 ? `<span class="agent-count">${activeAgents.length}</span>` : ""}
-        <button class="action-btn sync-btn" onclick="syncNames(event)" title="Sync Names">${ICON_SYNC}</button>
-    </div>
-	<div class="agent-list">
-        ${activeCards || '<div class="empty-placeholder">Click + to add an agent</div>'}
-    </div>
-	${disabledHtml}`;
-	}
-
-	private renderServicesSection(feature: Feature, services: Service[]): string {
-		if (services.length === 0) return "";
-
-		const activeServices = services.filter((s) => s.status === "running");
-		const stoppedServices = services.filter((s) => s.status !== "running");
-
-		const renderServiceCard = (s: Service) => `
-			<div class="service-card ${s.status}" data-service-id="${s.id}" onclick="focusService(event, '${feature.id}', '${s.id}')">
-				<div class="service-header">
-					<span class="service-name" title="${this.escapeHtml(s.command)}">${this.escapeHtml(s.name)}</span>
-                    <div class="service-actions">
-                        ${
-													s.status === "running"
-														? `<button class="action-btn" onclick="stopService(event, '${feature.id}', '${s.id}')" title="Stop">${ICON_STOP}</button>`
-														: `<button class="action-btn" onclick="restartService(event, '${feature.id}', '${s.id}')" title="Start">${ICON_RESTART}</button>`
-												}
-                    </div>
-				</div>
-				<div class="service-command">${this.escapeHtml(s.command)}</div>
-			</div>`;
-
-		const activeServiceCards = activeServices.map(renderServiceCard).join("");
-
-		let stoppedServicesHtml = "";
-		if (stoppedServices.length > 0) {
-			const stoppedCards = stoppedServices.map(renderServiceCard).join("");
-			stoppedServicesHtml = `
-		<div class="disabled-header collapsed" onclick="toggleStoppedServices(event, '${feature.id}')">
-			<span class="disabled-icon" id="stopped-svc-toggle-${feature.id}">${ICON_CHEVRON_RIGHT}</span>
-			<span>${stoppedServices.length} stopped</span>
-		</div>
-		<div class="disabled-list collapsed" id="stopped-svc-list-${feature.id}">
-			${stoppedCards}
-		</div>`;
-		}
-
-		return `
-		<div class="services-section">
-			<div class="section-header"><span class="section-label">Services</span></div>
-			<div class="service-list">${activeServiceCards || '<div class="empty-placeholder">No running services</div>'}</div>
-			${stoppedServicesHtml}
 		</div>`;
 	}
 

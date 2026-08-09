@@ -165,6 +165,32 @@ describe("SessionBinder", () => {
 		);
 	});
 
+	it("allows a user-selected session to be attached with worktree and uniqueness checks", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const binder = new SessionBinder(
+			registry(
+				adapter([
+					{
+						sessionId: "ses_selected",
+						prompt: "Implement the selected task",
+						created: "2026-08-09T07:52:53.000Z",
+						projectPath: WORKTREE,
+					},
+				]),
+			),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		expect(binder.listAttachableSessions("f1", "a1")).toHaveLength(1);
+		expect(binder.attachExplicitly("f1", "a1", "ses_selected")).toBe(true);
+		expect(ctx.store.loadAgents("f1")[0]).toMatchObject({
+			sessionId: "ses_selected",
+			sessionBinding: { state: "bound" },
+		});
+	});
+
 	it("binds a new session only when a provider supplies strong ownership proof", () => {
 		const { projectManager, ctx } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
