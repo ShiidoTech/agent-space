@@ -40,6 +40,23 @@ function showProjectSettings(projectId) {
 	send("showProjectSettings", { projectId });
 }
 
+function openProjectConfig(projectId) {
+	send("openProjectConfig", { projectId });
+}
+
+function openConfigDocs() {
+	send("openConfigDocs");
+}
+
+function openDiagnostics() {
+	send("openDiagnostics");
+}
+
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function attachProviderSession(featureId, agentId) {
+	send("attachProviderSession", { featureId, agentId });
+}
+
 // -- Feature Home Actions ------------------------------------
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function goHome() {
