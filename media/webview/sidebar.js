@@ -341,7 +341,7 @@ window.addEventListener("message", function (event) {
 					'[data-attention-dot="' + agent.id + '"]',
 				);
 				if (dot) {
-					dot.className = "status-dot " + presented.tone;
+					dot.className = "status-dot primary-state-" + presented.tone;
 				}
 
 				updateBindingBadge(agentEl, agent);

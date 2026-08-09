@@ -62,4 +62,20 @@ describe("Agent observation contract", () => {
 			),
 		).toMatchObject({ label: "Unknown", detail: "Read failed" });
 	});
+
+	it("exposes tones consumed by the Sidebar primary-state dot classes", () => {
+		const cases = [
+			["working", "working"],
+			["waiting_for_user", "warning"],
+			["failed", "error"],
+			["unsupported", "normal"],
+			["unknown", "muted"],
+		] as const;
+
+		for (const [attention, tone] of cases) {
+			expect(
+				presentAgentState(observation({ attention: { state: attention } })),
+			).toMatchObject({ tone });
+		}
+	});
 });

@@ -702,7 +702,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			onclick="focusAgent(event, '${feature.id}', '${a.id}')"
 			oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">
             <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
-			<div class="status-dot ${presented.tone}" data-attention-dot="${a.id}"></div>
+			<div class="status-dot primary-state-${presented.tone}" data-attention-dot="${a.id}"></div>
 			<div class="agent-copy">
 				<div class="agent-main-row">
 					<span class="agent-name" title="${this.escapeHtml(a.name)}">${this.escapeHtml(a.name)}<span class="agent-tool">${toolLabel}</span></span>
