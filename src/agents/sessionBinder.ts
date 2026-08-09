@@ -62,9 +62,10 @@ interface PendingAgent {
  * - a session that already existed in the worktree before the agent launched is
  *   never adopted (the baseline is persisted, so a restart cannot lose it);
  * - an attribution is made only when the provider supplies a correlation that
- *   proves ownership (currently an already assigned session id resolving in
- *   the provider store). A single new session is not proof: a human can start
- *   a CLI in the same cwd after Agent Space launched;
+ *   proves ownership: either an already assigned session id resolves in the
+ *   provider store, or the provider's own `discoverSessionId` hook returns and
+ *   reserves the session. A single new session is not proof: a human can
+ *   start a CLI in the same cwd after Agent Space launched;
  * - ordering
  *   agents by launch time and sessions by creation time looks like it resolves
  *   siblings sharing a worktree, but the two orders are unrelated: a session is
@@ -72,10 +73,10 @@ interface PendingAgent {
  *   A produces the sessions in the opposite order and pairs everyone wrong.
  *   There is no tiebreak here that is merely likely to be right — a mispaired
  *   agent sends the user's next prompt, and this agent's name, into somebody
- *   else's conversation, while looking perfectly bound. So when several
- *   sessions could belong to one agent, or several agents could claim one
- *   session, nothing is bound: the state is reported `ambiguous` until the
- *   choice becomes forced.
+ *   else's conversation, while looking perfectly bound. So when the provider
+ *   cannot correlate a session, nothing is bound: the state is reported
+ *   `ambiguous` until provider-owned discovery or explicit attachment supplies
+ *   the missing proof.
  */
 export class SessionBinder {
 	private projectManager: ProjectManager | undefined;
@@ -202,7 +203,9 @@ export class SessionBinder {
 					scans.set(entry.adapter.toolId, scanned);
 					return scanned;
 				})();
-			return { entry, candidates: candidatesFor(entry, sessions, taken) };
+			const candidates = candidatesFor(entry, sessions, taken);
+			const providerSessionId = safeDiscover(entry, taken);
+			return { entry, candidates, providerSessionId };
 		});
 
 		const claimantCount = new Map<string, number>();
@@ -215,8 +218,13 @@ export class SessionBinder {
 			}
 		}
 
-		for (const { entry, candidates } of claims) {
-			const outcome = this.resolveClaim(entry, candidates, claimantCount);
+		for (const { entry, candidates, providerSessionId } of claims) {
+			const outcome = this.resolveClaim(
+				entry,
+				candidates,
+				claimantCount,
+				providerSessionId,
+			);
 			outcomes.push(outcome);
 			if (outcome.boundSessionId) {
 				taken.add(outcome.boundSessionId);
@@ -275,7 +283,7 @@ export class SessionBinder {
 			}
 			// Fall through: the store no longer knows this id. Never rewrite the
 			// id silently — the agent goes back through the normal path, which
-			// reports `unverified` unless a single unambiguous session appears.
+			// reports `unverified` unless provider-owned discovery supplies proof.
 		}
 
 		if (agent.sessionId && adapter.hasSession?.(agent.sessionId) === true) {
@@ -338,6 +346,7 @@ export class SessionBinder {
 		entry: PendingAgent,
 		candidates: Candidate[],
 		claimantCount: ReadonlyMap<string, number>,
+		providerSessionId?: string,
 	): SessionBindingOutcome {
 		const { ctx, featureId, agent } = entry;
 		// Attempts are diagnostic metadata, not a heartbeat. Keeping the last
@@ -360,7 +369,12 @@ export class SessionBinder {
 			};
 		}
 
-		if (candidates.length > 0) {
+		const chosen = providerSessionId
+			? candidates.find(
+					(candidate) => candidate.sessionId === providerSessionId,
+				)
+			: undefined;
+		if (!chosen) {
 			return {
 				agentId: agent.id,
 				featureId,
@@ -368,14 +382,15 @@ export class SessionBinder {
 					state: "ambiguous",
 					attempts,
 					detail:
-						candidates.length === 1
+						candidates.length === 1 && !providerSessionId
 							? `One unclaimed session appeared in ${where} after this agent started, but provider data cannot prove it belongs to Agent Space rather than a manually launched CLI; refusing to guess`
-							: `${candidates.length} unclaimed sessions appeared in ${where} after this agent started; none can be attributed with certainty`,
+							: providerSessionId && candidates.length > 0
+								? `The provider discovery hook did not return a session that passes the launch baseline and worktree checks in ${where}; refusing to guess`
+								: `${candidates.length} unclaimed sessions appeared in ${where} after this agent started; none can be attributed with certainty`,
 				}),
 			};
 		}
 
-		const chosen = candidates[0];
 		const claimants = claimantCount.get(chosen.sessionId) ?? 1;
 		if (claimants > 1) {
 			// Providers create a session on the first prompt, so creation order
@@ -499,6 +514,25 @@ function safeScan(
 		// A provider CLI that is not installed, or a store that cannot be read,
 		// simply yields no candidates.
 		return [];
+	}
+}
+
+/**
+ * Provider-owned discovery is the only acceptable correlation for a new
+ * Codex/OpenCode session. A Promise is ignored because reconciliation is
+ * synchronous; providers used by the runtime expose the synchronous form.
+ */
+function safeDiscover(
+	entry: PendingAgent,
+	taken: ReadonlySet<string>,
+): string | undefined {
+	if (!entry.adapter.discoverSessionId) return undefined;
+	try {
+		const known = new Set([...(entry.agent.sessionBaseline ?? []), ...taken]);
+		const discovered = entry.adapter.discoverSessionId(entry.cwd, known);
+		return typeof discovered === "string" ? discovered : undefined;
+	} catch {
+		return undefined;
 	}
 }
 

@@ -207,14 +207,14 @@ record when the human sends a first prompt, not when the CLI starts, so binding
 is reconciled continuously while an agent is alive rather than captured once at
 launch. An agent's current binding state is visible in `Agent Space: Doctor`.
 
-Binding is only performed when the answer is forced: exactly one unclaimed
-session can belong to the agent, and no other live agent could claim it.
-Session creation order says nothing about ownership — a session is born on the
-first prompt, so two agents launched in one worktree can produce their sessions
-in either order. When the attribution is not unique, Agent Space reports
-`ambiguous` and binds nothing, because a mispaired agent would send your next
-prompt into another conversation while looking perfectly bound. Running one
-agent per worktree keeps the attribution forced.
+Binding is only performed when the provider supplies an ownership correlation:
+an already assigned session id resolves in the provider store, or the provider
+discovery hook returns and reserves the new session. A single unclaimed session
+is not enough: session creation order says nothing about ownership, and a human
+can launch another CLI in the same worktree. When provider data cannot prove
+the attribution, Agent Space reports `ambiguous` and binds nothing. Running one
+agent per worktree may reduce ambiguity, but does not turn an unproven pairing
+into a binding.
 
 **Session naming** means reading a provider's persisted session title and using
 it for the Agent Space display name when session-name sync is enabled. It does

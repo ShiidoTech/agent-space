@@ -202,7 +202,8 @@ export class AgentManager {
 			current &&
 			current.state === binding.state &&
 			current.detail === binding.detail &&
-			current.attempts === binding.attempts
+			current.attempts === binding.attempts &&
+			current.checkedAt === binding.checkedAt
 		) {
 			// Nothing changed; skip the write so a 15s reconciliation loop does not
 			// rewrite agents.json forever.

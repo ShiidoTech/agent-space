@@ -51,12 +51,16 @@ function feature(overrides: Partial<Feature> = {}): Feature {
 }
 
 /** A stub adapter over a fixed session list, so timing is fully controlled. */
-function adapter(sessions: SessionInfo[]): ProviderSessionAdapter {
+function adapter(
+	sessions: SessionInfo[],
+	discoverSessionId?: ProviderSessionAdapter["discoverSessionId"],
+): ProviderSessionAdapter {
 	return {
 		toolId: "stub",
 		readName: () => null,
 		scanSessions: () => sessions,
 		hasSession: (id) => sessions.some((s) => s.sessionId === id),
+		discoverSessionId,
 	};
 }
 
@@ -157,6 +161,35 @@ describe("SessionBinder", () => {
 		expect(stored.sessionId).toBeNull();
 		expect(stored.sessionBinding?.state).toBe("ambiguous");
 		expect(stored.sessionBinding?.detail).toContain("manually launched CLI");
+	});
+
+	it("binds a new session only when the provider-owned hook correlates it", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const discoverSessionId = vi.fn(() => "ses_provider_owned");
+		const binder = new SessionBinder(
+			registry(
+				adapter(
+					[
+						{
+							sessionId: "ses_provider_owned",
+							prompt: "",
+							created: "2026-08-09T07:52:53.000Z",
+							projectPath: WORKTREE,
+						},
+					],
+					discoverSessionId,
+				),
+			),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		const outcomes = binder.reconcileAll();
+
+		expect(discoverSessionId).toHaveBeenCalledWith(WORKTREE, new Set());
+		expect(outcomes[0]?.boundSessionId).toBe("ses_provider_owned");
+		expect(ctx.store.loadAgents("f1")[0].sessionId).toBe("ses_provider_owned");
 	});
 
 	it("never adopts a session that existed before the agent launched", () => {
@@ -550,10 +583,12 @@ describe("SessionBinder", () => {
 		binder.reconcileAll();
 		vi.setSystemTime(new Date("2026-08-09T08:01:00.000Z"));
 		binder.reconcileAll();
+		vi.setSystemTime(new Date("2026-08-09T13:01:00.000Z"));
+		binder.reconcileAll();
 
-		expect(hasSession).toHaveBeenCalledTimes(1);
+		expect(hasSession).toHaveBeenCalledTimes(2);
 		expect(ctx.store.loadAgents("f1")[0].sessionBinding?.checkedAt).toBe(
-			"2026-08-09T08:00:00.000Z",
+			"2026-08-09T13:01:00.000Z",
 		);
 	});
 

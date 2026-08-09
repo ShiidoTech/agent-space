@@ -350,11 +350,11 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 		} else if (probe.bindingState === "unverified") {
 			level = "error";
 			remediation =
-				"The stored session id does not exist in the provider store. Agent Space will adopt the session this agent actually started on the next reconciliation; check sessionsDir if it never does.";
+				"The stored session id does not exist in the provider store. Agent Space will not replace it without provider-owned discovery; check sessionsDir or explicitly attach the intended session.";
 		} else if (probe.bindingState === "ambiguous") {
 			level = "warn";
 			remediation =
-				"Several sessions or several agents compete for the same binding in this worktree, and provider session order does not say which is which. Agent Space will not guess. Close the agents you no longer need, or run one agent per worktree, and the attribution becomes forced.";
+				"Provider data does not prove which session belongs to this agent. Agent Space will not guess; verify the provider store or use explicit session attachment.";
 		} else {
 			level = "warn";
 			remediation =
