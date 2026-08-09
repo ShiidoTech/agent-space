@@ -258,6 +258,11 @@ function updateAttention(agent) {
 		badge.textContent = ATTENTION_LABELS[status] || status;
 		badge.title = agent.reason || "No current attention evidence";
 	}
+	const lifecycleBadge = document.getElementById(`agent-lifecycle-badge-${agent.id}`);
+	if (lifecycleBadge) {
+		const lifecycle = agent.lifecycleStatus || "idle";
+		lifecycleBadge.textContent = lifecycle[0].toUpperCase() + lifecycle.slice(1);
+	}
 
 	updateBindingBadge(agent);
 }
@@ -265,7 +270,7 @@ function updateAttention(agent) {
 // Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
 // binding at all) renders nothing — it is the quiet, expected state.
 const BINDING_LABELS = {
-	pending: "Starting…",
+	pending: "Session pending",
 	ambiguous: "Ambiguous session",
 	unverified: "Session lost",
 	unsupported: "No session tracking",
@@ -274,6 +279,12 @@ const BINDING_LABELS = {
 function updateBindingBadge(agent) {
 	const badge = document.getElementById(`agent-binding-badge-${agent.id}`);
 	if (!badge) return;
+	if (agent.lifecycleStatus === "done") {
+		badge.style.display = "none";
+		badge.textContent = "";
+		badge.title = "";
+		return;
+	}
 
 	const state = agent.bindingState;
 	const label = state && state !== "bound" ? BINDING_LABELS[state] : null;

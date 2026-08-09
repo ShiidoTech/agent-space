@@ -246,13 +246,26 @@ const ATTENTION_LABELS = {
 // Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
 // binding at all) renders nothing — it is the quiet, expected state.
 const BINDING_LABELS = {
-	pending: "Starting…",
+	pending: "Session pending",
 	ambiguous: "Ambiguous session",
 	unverified: "Session lost",
 	unsupported: "No session tracking",
 };
 
+const LIFECYCLE_LABELS = {
+	running: "Running",
+	stopped: "Stopped",
+	done: "Done",
+	errored: "Errored",
+	idle: "Idle",
+};
+
 function updateBindingBadge(agentEl, agent) {
+	if (agent.status === "done") {
+		var doneBadge = agentEl.querySelector('[data-binding-badge="' + agent.id + '"]');
+		if (doneBadge) doneBadge.remove();
+		return;
+	}
 	var badge = agentEl.querySelector('[data-binding-badge="' + agent.id + '"]');
 	var state = agent.bindingState;
 	var label = state && state !== "bound" ? BINDING_LABELS[state] : null;
@@ -270,8 +283,8 @@ function updateBindingBadge(agentEl, agent) {
 	if (!badge) {
 		badge = document.createElement("span");
 		badge.setAttribute("data-binding-badge", agent.id);
-		var nameEl = agentEl.querySelector(".agent-name");
-		if (nameEl) nameEl.appendChild(badge);
+		var statusEl = agentEl.querySelector(".agent-status");
+		if (statusEl) statusEl.appendChild(badge);
 	}
 	badge.className = "binding-badge binding-" + state;
 	badge.textContent = label;
@@ -332,6 +345,12 @@ window.addEventListener("message", function (event) {
 				}
 
 				updateBindingBadge(agentEl, agent);
+				var lifecycleBadge = agentEl.querySelector(
+					'[data-lifecycle-badge="' + agent.id + '"]',
+				);
+				if (lifecycleBadge) {
+					lifecycleBadge.textContent = LIFECYCLE_LABELS[agent.status] || "Idle";
+				}
 
 				// Keep card-level classes tied to persisted lifecycle state.
 				var statusClass = "idle";

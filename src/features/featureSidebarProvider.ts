@@ -60,6 +60,21 @@ function attentionStatusLabel(status: AgentAttentionStatus): string {
 	}
 }
 
+function lifecycleStatusLabel(status: string): string {
+	switch (status) {
+		case "running":
+			return "Running";
+		case "stopped":
+			return "Stopped";
+		case "done":
+			return "Done";
+		case "errored":
+			return "Errored";
+		default:
+			return "Idle";
+	}
+}
+
 export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "agentSpace.features";
 	private _view?: vscode.WebviewView;
@@ -514,6 +529,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 .binding-badge.binding-ambiguous { color: var(--vscode-notificationsWarningIcon-foreground); background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent); }
 .binding-badge.binding-unverified { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); }
 .binding-badge.binding-unsupported { opacity: .6; }
+.agent-main-row { display: flex; align-items: center; min-width: 0; gap: 6px; }
+.agent-status { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.lifecycle-badge { color: var(--vscode-descriptionForeground); font-size: 9px; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -663,7 +681,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		};
 
 		const renderBindingBadge = (a: Agent) => {
-			const badge = presentSessionBinding(a.sessionBinding);
+			const badge = presentSessionBinding(a.sessionBinding, a.status);
 			if (!badge) return "";
 			return `<span class="${badge.className}" data-binding-badge="${a.id}" title="${this.escapeHtml(badge.tooltip)}">${badge.label}</span>`;
 		};
@@ -684,7 +702,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
             <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
             <div class="status-dot ${attention}" data-attention-dot="${a.id}"></div>
 			<div class="agent-copy">
-				<span class="agent-name" title="${this.escapeHtml(a.name)}">${this.escapeHtml(a.name)}<span class="agent-tool">${toolLabel}</span>${renderAttentionBadge(a)}${renderBindingBadge(a)}</span>
+				<div class="agent-main-row">
+					<span class="agent-name" title="${this.escapeHtml(a.name)}">${this.escapeHtml(a.name)}<span class="agent-tool">${toolLabel}</span></span>
+					<span class="agent-status">
+						<span class="lifecycle-badge" data-lifecycle-badge="${a.id}">${lifecycleStatusLabel(a.status)}</span>
+						${renderAttentionBadge(a)}${renderBindingBadge(a)}
+					</span>
+				</div>
 				${errorNote}
 			</div>
 		</div>`;
@@ -704,7 +728,15 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		<div class="agent-card done" data-agent-id="${a.id}" oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">
             <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
             <div class="status-dot done" data-attention-dot="${a.id}"></div>
-			<span class="agent-name">${this.escapeHtml(a.name)}${renderAttentionBadge(a)}</span>
+			<div class="agent-copy">
+				<div class="agent-main-row">
+					<span class="agent-name">${this.escapeHtml(a.name)}</span>
+					<span class="agent-status">
+						<span class="lifecycle-badge" data-lifecycle-badge="${a.id}">${lifecycleStatusLabel(a.status)}</span>
+						${renderAttentionBadge(a)}
+					</span>
+				</div>
+			</div>
 			<button class="action-btn" onclick="reopenAgent(event, '${feature.id}', '${a.id}')" title="Re-enable agent">${ICON_RESTART}</button>
 			<button class="action-btn agent-delete-btn" onclick="deleteAgent(event, '${feature.id}', '${a.id}')" title="Delete agent">${ICON_DELETE}</button>
 		</div>`;

@@ -20,13 +20,19 @@ describe("presentSessionBinding", () => {
 		).toBeNull();
 	});
 
+	it("shows no binding badge for a done agent, even if its old binding is persisted", () => {
+		expect(
+			presentSessionBinding(binding("unverified", "Session disappeared"), "done"),
+		).toBeNull();
+	});
+
 	it("badges pending without alarm styling classes", () => {
 		const badge = presentSessionBinding(
 			binding("pending", "No provider session has appeared in foo yet"),
 		);
 		expect(badge).not.toBeNull();
 		expect(badge?.className).toBe("binding-badge binding-pending");
-		expect(badge?.label).toBe("Starting…");
+		expect(badge?.label).toBe("Session pending");
 		expect(badge?.tooltip).toBe("No provider session has appeared in foo yet");
 	});
 

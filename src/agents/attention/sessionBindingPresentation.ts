@@ -1,6 +1,7 @@
 import type {
 	AgentSessionBinding,
 	AgentSessionBindingState,
+	AgentStatus,
 } from "../../types";
 
 /**
@@ -22,7 +23,7 @@ export interface SessionBindingBadge {
 }
 
 const LABELS: Record<Exclude<AgentSessionBindingState, "bound">, string> = {
-	pending: "Starting…",
+	pending: "Session pending",
 	ambiguous: "Ambiguous session",
 	unverified: "Session lost",
 	unsupported: "No session tracking",
@@ -41,8 +42,11 @@ const LABELS: Record<Exclude<AgentSessionBindingState, "bound">, string> = {
  */
 export function presentSessionBinding(
 	binding: AgentSessionBinding | undefined,
+	lifecycleStatus?: AgentStatus,
 ): SessionBindingBadge | null {
-	if (!binding || binding.state === "bound") return null;
+	if (!binding || binding.state === "bound" || lifecycleStatus === "done") {
+		return null;
+	}
 	return {
 		label: LABELS[binding.state],
 		className: `binding-badge binding-${binding.state}`,

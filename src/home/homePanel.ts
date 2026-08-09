@@ -26,6 +26,21 @@ function attentionStatusLabel(status: AgentAttentionStatus): string {
 	}
 }
 
+function lifecycleStatusLabel(status: string): string {
+	switch (status) {
+		case "running":
+			return "Running";
+		case "stopped":
+			return "Stopped";
+		case "done":
+			return "Done";
+		case "errored":
+			return "Errored";
+		default:
+			return "Idle";
+	}
+}
+
 export class HomePanel {
 	public static readonly viewType = "agentSpace.home";
 	private static instance: HomePanel | undefined;
@@ -569,6 +584,7 @@ export class HomePanel {
 			agents: agents.map((agent) => ({
 				id: agent.id,
 				status: agent.attentionStatus ?? "unknown",
+				lifecycleStatus: agent.status,
 				reason: agent.attentionReason ?? "No current attention evidence",
 				bindingState: agent.sessionBinding?.state,
 				bindingDetail: agent.sessionBinding?.detail,
@@ -932,6 +948,7 @@ export class HomePanel {
 .binding-badge.binding-ambiguous { color: var(--vscode-notificationsWarningIcon-foreground); background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent); }
 .binding-badge.binding-unverified { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); }
 .binding-badge.binding-unsupported { opacity: .6; }
+.agent-lifecycle-badge { color: var(--vscode-descriptionForeground); white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -1116,11 +1133,14 @@ export class HomePanel {
 		const attentionReason =
 			agent.attentionReason ?? "No current attention evidence";
 		const attentionBadge = `<span id="agent-attention-badge-${agent.id}" class="agent-tool-badge agent-attention-badge attention-${attention}" title="${this.escapeHtml(attentionReason)}">${attentionStatusLabel(attention)}</span>`;
-		const bindingBadgeData = presentSessionBinding(agent.sessionBinding);
+		const isDone = agent.status === "done";
+		const bindingBadgeData = presentSessionBinding(
+			agent.sessionBinding,
+			agent.status,
+		);
 		const bindingBadge = bindingBadgeData
 			? `<span id="agent-binding-badge-${agent.id}" class="agent-tool-badge ${bindingBadgeData.className}" title="${this.escapeHtml(bindingBadgeData.tooltip)}">${bindingBadgeData.label}</span>`
 			: `<span id="agent-binding-badge-${agent.id}" class="agent-tool-badge" style="display:none"></span>`;
-		const isDone = agent.status === "done";
 		const isErrored = agent.status === "errored";
 		const nameClass = isDone ? "agent-panel-name done" : "agent-panel-name";
 		const emptyState = isDone
@@ -1147,6 +1167,7 @@ export class HomePanel {
 			<div class="agent-panel-header" id="agent-header-${agent.id}" onclick="toggleAgent('${agent.id}')">
 				<div id="agent-attention-dot-${agent.id}" class="agent-status-dot attention-${attention}"></div>
 				<span class="${nameClass}" title="${this.escapeHtml(agent.name)}">${this.escapeHtml(agent.name)}</span>
+				<span id="agent-lifecycle-badge-${agent.id}" class="agent-tool-badge agent-lifecycle-badge">${lifecycleStatusLabel(agent.status)}</span>
 				${toolBadge}
 				${attentionBadge}
 				${bindingBadge}
