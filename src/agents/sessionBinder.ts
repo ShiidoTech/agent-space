@@ -144,18 +144,24 @@ export class SessionBinder {
 		if (!session || !samePath(session.projectPath, cwd)) return false;
 		const alreadyOwned = this.projectManager
 			.getAllContexts()
-			.some((otherCtx) =>
-				otherCtx.store
-					.loadFeatures()
-					.some((otherFeature) =>
-						otherCtx.agentManager
-							.getAgents(otherFeature.id)
-							.some(
-								(other) =>
-									other.id !== agentId && other.sessionId === sessionId,
-							),
-					),
-			);
+			.some((otherCtx) => {
+				const baseFeature = otherCtx.featureManager.getBaseFeature(
+					otherCtx.project.id,
+				);
+				const featureIds = [
+					baseFeature.id,
+					...otherCtx.store
+						.loadFeatures()
+						.map((otherFeature) => otherFeature.id),
+				];
+				return featureIds.some((otherFeatureId) =>
+					otherCtx.agentManager
+						.getAgents(otherFeatureId)
+						.some(
+							(other) => other.id !== agentId && other.sessionId === sessionId,
+						),
+				);
+			});
 		if (alreadyOwned) return false;
 		ctx.agentManager.updateAgentSessionId(agentId, featureId, sessionId);
 		ctx.agentManager.updateSessionBinding(agentId, featureId, {
