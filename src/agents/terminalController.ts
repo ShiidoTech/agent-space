@@ -66,6 +66,13 @@ export class TerminalController implements vscode.Disposable {
 			? this.tmux.isSessionAlive(sessionName)
 			: this.tmux.adoptSession(sessionName, legacySessionName);
 
+		if (attachExisting && !sessionReady) {
+			void vscode.window.showErrorMessage(
+				`Cannot attach agent "${agent.name}": its persisted tmux session is no longer alive.`,
+			);
+			return undefined;
+		}
+
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
@@ -109,6 +116,12 @@ export class TerminalController implements vscode.Disposable {
 		}
 
 		if (!sessionReady) {
+			if (attachExisting) {
+				void vscode.window.showErrorMessage(
+					`Cannot attach agent "${agent.name}": its persisted tmux session is no longer alive.`,
+				);
+				return undefined;
+			}
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const message = this.buildStartupFailureMessage(
 				agent.name,

@@ -797,13 +797,39 @@ export async function activate(
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
 			"agentSpace.recoverAgentSession",
-			(featureIdArg?: string, agentIdArg?: string) => {
-				if (!featureIdArg || !agentIdArg) return;
-				const resolved = projectManager.resolveFeature(featureIdArg);
+			async (featureIdArg?: string, agentIdArg?: string) => {
+				let selectedFeatureId = featureIdArg;
+				let selectedAgentId = agentIdArg;
+				if (!selectedFeatureId || !selectedAgentId) {
+					const choices = projectManager.getAllContexts().flatMap((context) =>
+						context.store.loadFeatures().flatMap((candidate) =>
+							context.store.loadAgents(candidate.id).map((agent) => ({
+								label: `${context.project.name} / ${candidate.name} / ${agent.name}`,
+								description: agent.tmuxSession ?? "No persisted tmux session",
+								featureId: candidate.id,
+								agentId: agent.id,
+							})),
+						),
+					);
+					const selection = await vscode.window.showQuickPick(
+						choices.filter(
+							(choice) =>
+								!selectedFeatureId || choice.featureId === selectedFeatureId,
+						),
+						{ placeHolder: "Select an existing agent session to attach" },
+					);
+					if (!selection) return;
+					selectedFeatureId = selection.featureId;
+					selectedAgentId = selection.agentId;
+				}
+				if (!selectedFeatureId || !selectedAgentId) return;
+				const resolved = projectManager.resolveFeature(selectedFeatureId);
 				if (!resolved) return;
 				const { ctx, feature } = resolved;
-				const agents = ctx.store.loadAgents(featureIdArg);
-				const agent = agents.find((candidate) => candidate.id === agentIdArg);
+				const agents = ctx.store.loadAgents(selectedFeatureId);
+				const agent = agents.find(
+					(candidate) => candidate.id === selectedAgentId,
+				);
 				if (!agent?.tmuxSession || !tmux.isSessionAlive(agent.tmuxSession)) {
 					vscode.window.showErrorMessage(
 						"The persisted agent tmux session is not currently alive.",
@@ -811,7 +837,7 @@ export async function activate(
 					return;
 				}
 				const agentIndex = agents.findIndex(
-					(candidate) => candidate.id === agentIdArg,
+					(candidate) => candidate.id === selectedAgentId,
 				);
 				terminalController.createTerminal(
 					feature,

@@ -199,6 +199,41 @@ describe("TerminalController", () => {
 		expect(markAgentStarted).toHaveBeenCalledWith("a1", "f1");
 	});
 
+	it("fails closed when an existing session disappears before attach", () => {
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive: vi.fn().mockReturnValue(false),
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+			} as never,
+		);
+
+		const terminal = controller.createTerminal(
+			feature,
+			{ ...agent, tmuxSession: "agent-space-f1-a1" },
+			0,
+			false,
+			true,
+		);
+
+		expect(terminal).toBeUndefined();
+		expect(adoptSession).not.toHaveBeenCalled();
+		expect(createCommand).not.toHaveBeenCalled();
+		expect(buildLaunchCommand).not.toHaveBeenCalled();
+		expect(buildResumeLaunchCommand).not.toHaveBeenCalled();
+		expect(vi.mocked(exec)).not.toHaveBeenCalled();
+	});
+
 	it("does not mark an agent running when tmux session dies immediately", () => {
 		const controller = new TerminalController(
 			{ findContextByFeatureId, notifyChange } as never,
