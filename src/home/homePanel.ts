@@ -128,7 +128,7 @@ export class HomePanel {
 		this.currentProjectId = null;
 		this.panel.title = "Agent Space";
 		this.stopGitPolling();
-		this.panel.webview.html = this.getWelcomeHtml();
+		this.panel.webview.html = this.getInformationArchitectureHomeHtml();
 	}
 
 	public showFeature(featureId: string): void {
@@ -161,7 +161,10 @@ export class HomePanel {
 		this.panel.title = `Agent Space: ${context.project.name}`;
 		this.stopGitPolling();
 		this.panel.reveal(vscode.ViewColumn.One, true);
-		this.panel.webview.html = this.getProjectHtml(projectId, settings);
+		this.panel.webview.html = this.getInformationArchitectureProjectHtml(
+			projectId,
+			settings,
+		);
 	}
 
 	public refresh(): void {
@@ -169,12 +172,12 @@ export class HomePanel {
 			if (this.currentFeatureId) {
 				this.panel.webview.html = this.getFeatureHtml(this.currentFeatureId);
 			} else if (this.currentProjectId) {
-				this.panel.webview.html = this.getProjectHtml(
+				this.panel.webview.html = this.getInformationArchitectureProjectHtml(
 					this.currentProjectId,
 					this.currentProjectSettings,
 				);
 			} else {
-				this.panel.webview.html = this.getWelcomeHtml();
+				this.panel.webview.html = this.getInformationArchitectureHomeHtml();
 			}
 		} catch {
 			// Panel may have been disposed
@@ -243,6 +246,22 @@ export class HomePanel {
 				break;
 			case "showProjectSettings":
 				run("agentSpace.openProjectSettings", message.projectId as string);
+				break;
+			case "openProjectConfig":
+				run("agentSpace.openProjectConfig", message.projectId as string);
+				break;
+			case "openConfigDocs":
+				run("agentSpace.openConfigDocs");
+				break;
+			case "openDiagnostics":
+				run("agentSpace.doctor");
+				break;
+			case "attachProviderSession":
+				run(
+					"agentSpace.attachProviderSession",
+					message.featureId,
+					message.agentId,
+				);
 				break;
 			// Agent actions
 			case "addAgent":
@@ -660,177 +679,161 @@ export class HomePanel {
 			${stats.raw ? `<div class="git-files-list">${this.escapeHtml(stats.raw)}</div>` : ""}`;
 	}
 
-	private getWelcomeHtml(): string {
+	private getInformationArchitectureHomeHtml(): string {
 		const cssUri = this.panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.css"),
 		);
 		const jsUri = this.panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.js"),
 		);
-
 		const contexts = this.projectManager.getAllContexts();
-
-		// Gather all features across all projects
+		const attention: string[] = [];
 		const allFeatures: Array<{
-			feature: Feature;
-			projectName: string;
+			id: string;
+			branch: string;
 			projectId: string;
-			agentCount: number;
-			serviceCount: number;
+			projectName: string;
+			active: number;
+			waiting: number;
+			createdAt: string;
+			status: string;
 		}> = [];
-		for (const ctx of contexts) {
-			// Include synthetic base feature (repo root / base branch)
-			const baseFeature = ctx.featureManager.getBaseFeature(ctx.project.id);
-			const baseAgentCount = ctx.agentManager.getAgents(baseFeature.id).length;
-			const baseServiceCount = ctx.serviceManager.getServices(
-				baseFeature.id,
-			).length;
-			if (baseAgentCount > 0 || baseServiceCount > 0) {
-				allFeatures.push({
-					feature: baseFeature,
-					projectName: ctx.project.name,
-					projectId: ctx.project.id,
-					agentCount: baseAgentCount,
-					serviceCount: baseServiceCount,
-				});
-			}
 
-			const features = ctx.featureManager.getFeatures();
-			for (const f of features) {
-				allFeatures.push({
-					feature: f,
-					projectName: ctx.project.name,
-					projectId: ctx.project.id,
-					agentCount: ctx.agentManager.getAgents(f.id).length,
-					serviceCount: ctx.serviceManager.getServices(f.id).length,
-				});
+		for (const ctx of contexts) {
+			const features = [
+				ctx.featureManager.getBaseFeature(ctx.project.id),
+				...ctx.featureManager.getFeatures(),
+			];
+			for (const feature of features) {
+				const agents = ctx.agentManager.getAgents(feature.id);
+				let active = 0;
+				let waiting = 0;
+				for (const agent of agents) {
+					const observation = ctx.agentManager.observe(agent);
+					const presented = presentAgentState(observation);
+					if (presented.label === "Needs you") {
+						waiting++;
+						attention.push(
+							`<button class="attention-item" onclick="showFeature('${feature.id}')"><span class="attention-agent">${this.escapeHtml(agent.name)} · ${this.escapeHtml(ctx.project.name)}/${this.escapeHtml(feature.branch)}</span><strong>Needs your attention</strong><span>${this.escapeHtml(presented.detail ?? "Waiting for your answer")}</span></button>`,
+						);
+					}
+					if (
+						["Working", "Running", "Idle", "Starting"].includes(presented.label)
+					)
+						active++;
+				}
+				if (feature.id !== `base:${ctx.project.id}` || agents.length > 0) {
+					allFeatures.push({
+						id: feature.id,
+						branch: feature.branch,
+						projectId: ctx.project.id,
+						projectName: ctx.project.name,
+						active,
+						waiting,
+						createdAt: feature.createdAt,
+						status: feature.status,
+					});
+				}
 			}
 		}
-		// Sort: active first, then by creation date desc
-		allFeatures.sort((a, b) => {
-			if (a.feature.status !== b.feature.status) {
-				return a.feature.status === "active" ? -1 : 1;
-			}
-			return b.feature.createdAt.localeCompare(a.feature.createdAt);
-		});
 
-		const projects = this.projectManager.getProjects();
+		const projectCards = contexts
+			.map((ctx) => {
+				const projectFeatures = allFeatures.filter(
+					(f) => f.projectId === ctx.project.id && !f.id.startsWith("base:"),
+				);
+				const active = projectFeatures.filter((f) => f.active > 0).length;
+				const waiting = projectFeatures.filter((f) => f.waiting > 0).length;
+				return `<button class="home-project-card" onclick="showProject('${ctx.project.id}')"><span class="home-project-name">${this.escapeHtml(ctx.project.name)}</span><span class="home-project-meta">${active} active${waiting ? ` · ${waiting} waiting` : ""}</span><span class="home-project-branch">Base: ${this.escapeHtml(ctx.featureManager.getBaseBranchName())}</span></button>`;
+			})
+			.join("");
+		const featureCards = allFeatures
+			.filter((f) => !f.id.startsWith("base:"))
+			.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+			.slice(0, 12)
+			.map(
+				(f) =>
+					`<button class="home-feature-row" onclick="showFeature('${f.id}')"><span><strong>${this.escapeHtml(f.branch)}</strong><small>${this.escapeHtml(f.projectName)}</small></span><span class="home-feature-state ${f.waiting ? "waiting" : f.active ? "active" : "idle"}">${f.waiting ? "Waiting" : f.active ? "Active" : f.status === "done" ? "Done" : "Recent"}</span></button>`,
+			)
+			.join("");
+		const tmuxSessions = this.projectManager.listTmuxSessions();
+		const body =
+			contexts.length === 0
+				? `<main class="ia-home"><h1>Agent Space</h1><div class="ia-empty"><h2>No projects yet</h2><p>Add a Git project to start working with agents.</p><button class="quick-action-btn primary" onclick="addProject()">Add project</button></div></main>`
+				: `<main class="ia-home"><header class="ia-home-header"><div><h1>Agent Space</h1><p>Projects, features, agents, and human attention.</p></div><button class="quick-action-btn" onclick="addProject()">Add project</button></header>
+			${attention.length ? `<section class="ia-section attention-section"><h2>Needs your attention</h2>${attention.join("")}</section>` : ""}
+			<section class="ia-section"><h2>Projects</h2><div class="home-project-grid">${projectCards}</div></section>
+			<section class="ia-section"><h2>Active / recent features</h2><div class="home-feature-list">${featureCards || '<div class="activity-empty">No features yet.</div>'}</div></section>
+			<section class="ia-section diagnostics-section"><h2>Diagnostics</h2><p>${tmuxSessions.length} technical session${tmuxSessions.length === 1 ? "" : "s"} · details available in Doctor</p><button class="quick-action-btn subtle" onclick="openDiagnostics()">Open diagnostics</button></section>
+		</main>`;
+		return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="${cssUri}"></head><body>${body}<script src="${jsUri}"></script></body></html>`;
+	}
 
-		let body: string;
-		if (projects.length === 0) {
-			body = `
-			<div class="welcome-container">
-				<div class="welcome-header">
-					<div class="welcome-title">Agent Space</div>
-					<div class="welcome-subtitle">Your features at a glance</div>
-				</div>
-				<div class="empty-welcome">
-					<div class="empty-welcome-title">No projects yet</div>
-					<div class="empty-welcome-text">Add a Git project to get started with Agent Space.</div>
-					<button class="quick-action-btn primary" onclick="addProject()">
-						${ICON_FOLDER} Add Project
-					</button>
-				</div>
-			</div>`;
-		} else {
-			const featureCards =
-				allFeatures.length > 0
-					? allFeatures
-							.map((entry) => {
-								const f = entry.feature;
-								const dotColor = TERMINAL_COLOR_MAP[f.color] || "#569cd6";
-								const agentLabel =
-									entry.agentCount === 1
-										? "1 agent"
-										: `${entry.agentCount} agents`;
-								const serviceLabel =
-									entry.serviceCount === 1
-										? "1 script"
-										: `${entry.serviceCount} scripts`;
-								return `
-						<div class="feature-resume-card" onclick="resumeFeature('${f.id}')">
-							<div class="feature-card-top">
-								<div class="feature-card-color" style="background: ${dotColor}"></div>
-								<div class="feature-card-name">${this.escapeHtml(f.branch)}</div>
-								<span class="feature-card-status ${f.status}">${f.status === "done" ? "Done" : "Active"}</span>
-							</div>
-							<div class="feature-card-meta">
-								<span class="feature-card-project">${this.escapeHtml(entry.projectName)}</span>
-								<span class="feature-card-counts">${agentLabel} &middot; ${serviceLabel}</span>
-							</div>
-							<button class="feature-card-resume" onclick="event.stopPropagation(); resumeFeature('${f.id}')">Resume &rarr;</button>
-						</div>`;
+	private getInformationArchitectureProjectHtml(
+		projectId: string,
+		settings = false,
+	): string {
+		const context = this.projectManager.getContext(projectId);
+		if (!context) return this.emptyHtml("Project not found");
+		const cssUri = this.panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.css"),
+		);
+		const jsUri = this.panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.js"),
+		);
+		const features = [
+			context.featureManager.getBaseFeature(context.project.id),
+			...context.featureManager.getFeatures(),
+		];
+		const baseBranch = context.featureManager.getBaseBranchName();
+		const activeFeatures: Feature[] = [];
+		const waitingFeatures: Feature[] = [];
+		for (const feature of features) {
+			const agents = context.agentManager.getAgents(feature.id);
+			const observations = agents.map((agent) =>
+				presentAgentState(context.agentManager.observe(agent)),
+			);
+			if (observations.some((state) => state.label === "Needs you"))
+				waitingFeatures.push(feature);
+			if (
+				observations.some((state) =>
+					["Working", "Running", "Idle", "Starting"].includes(state.label),
+				)
+			)
+				activeFeatures.push(feature);
+		}
+		const attentionHtml = waitingFeatures
+			.map(
+				(feature) =>
+					`<button class="attention-item" onclick="showFeature('${feature.id}')"><span class="attention-agent">${this.escapeHtml(feature.branch)}</span><strong>${context.agentManager.getAgents(feature.id).filter((agent) => presentAgentState(context.agentManager.observe(agent)).label === "Needs you").length} agent(s) need you</strong><span>Open feature</span></button>`,
+			)
+			.join("");
+		const featureRows = features
+			.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+			.map((feature) => {
+				const agents = context.agentManager.getAgents(feature.id);
+				const services = context.serviceManager.getServices(feature.id);
+				const agentSummary = agents.length
+					? agents
+							.map((agent) => {
+								const state = presentAgentState(
+									context.agentManager.observe(agent),
+								);
+								return `<span class="project-agent-chip"><strong>${this.escapeHtml(agent.name)}</strong> · ${this.escapeHtml(state.label)}</span>`;
 							})
 							.join("")
-					: '<div class="empty-welcome"><div class="empty-welcome-text">No features yet. Create one to get started.</div></div>';
-
-			const projectRows = contexts
-				.map((ctx) => {
-					const featureCount = ctx.featureManager.getFeatures().length;
-					const explicitBaseBranch = ctx.config.baseBranch?.trim();
-					const effectiveBaseBranch = ctx.featureManager.getBaseBranchName();
-					const branchKinds = ctx.featureManager.getBranchKinds();
-					const defaultBranchKind = ctx.featureManager.getDefaultBranchKind();
-					return `
-					<tr>
-						<td>${this.escapeHtml(ctx.project.name)}</td>
-						<td class="project-path-cell" title="${this.escapeHtml(ctx.project.repoPath)}">${this.escapeHtml(ctx.project.repoPath)}</td>
-						<td>
-							<strong>${this.escapeHtml(effectiveBaseBranch)}</strong>
-							<div class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</div>
-						</td>
-						<td>${this.escapeHtml(branchKinds.join(", ") || "Default")}${defaultBranchKind ? ` <span class="project-setting-source">(default: ${this.escapeHtml(defaultBranchKind)})</span>` : ""}</td>
-						<td class="project-worktree-cell">${this.escapeHtml(ctx.featureManager.getWorktreeBase())}</td>
-						<td>${featureCount}</td>
-						<td><button class="project-settings-btn" onclick="editProjectBaseBranch('${ctx.project.id}')">Edit base</button></td>
-					</tr>`;
-				})
-				.join("");
-
-			// For "New Feature" button, use first project if only one
-			const newFeatureProjectId = projects.length === 1 ? projects[0].id : "";
-
-			body = `
-			<div class="welcome-container">
-				<div class="welcome-header">
-					<div class="welcome-title">Agent Space</div>
-					<div class="welcome-subtitle">Your features at a glance</div>
-				</div>
-				<div class="quick-actions-row">
-					<button class="action-btn" onclick="newFeature('${newFeatureProjectId}')">
-						${ICON_PLUS} New Feature
-					</button>
-					<button class="action-btn secondary" onclick="addProject()">
-						${ICON_FOLDER} Add Project
-					</button>
-				</div>
-				<div class="section-label">Features</div>
-				<div class="feature-grid">
-					${featureCards}
-				</div>
-				<div class="section-label">Projects</div>
-				<table class="projects-table">
-					<thead>
-						<tr><th>Name</th><th>Path</th><th>Base branch</th><th>Branch kinds</th><th>Worktrees</th><th>Features</th><th></th></tr>
-					</thead>
-					<tbody>${projectRows}</tbody>
-				</table>
-				${this.renderWelcomeTmuxSection(contexts)}
-			</div>`;
-		}
-
-		return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="${cssUri}">
-</head>
-<body>
-	${body}
-	<script src="${jsUri}"></script>
-</body>
-</html>`;
+					: '<span class="project-setting-source">No agents</span>';
+				return `<article class="project-feature-block"><button class="home-feature-row" onclick="showFeature('${feature.id}')"><span><strong>${this.escapeHtml(feature.name)}</strong><small>${this.escapeHtml(feature.branch)}${feature.id.startsWith("base:") ? " · repository base" : ""}</small></span><span class="home-feature-state ${waitingFeatures.includes(feature) ? "waiting" : activeFeatures.includes(feature) ? "active" : "idle"}">${waitingFeatures.includes(feature) ? "Waiting" : activeFeatures.includes(feature) ? "Active" : feature.status === "done" ? "Done" : "Idle"}</span></button><div class="project-agent-list">${agentSummary}</div>${services.length ? `<div class="project-services-summary">${services.length} service${services.length === 1 ? "" : "s"}: ${services.map((service) => this.escapeHtml(service.name)).join(", ")}</div>` : ""}</article>`;
+			})
+			.join("");
+		const config = context.config;
+		const configuredAgents =
+			config.agents?.enabled?.join(", ") || "All available providers";
+		const settingsHtml = `<section class="project-settings-card"><h2>Project settings</h2><p class="settings-help">The complete project convention remains in <code>.agentspace/config.json</code>.</p><div class="project-settings-grid"><div><span class="project-setting-label">Base branch</span><strong>${this.escapeHtml(baseBranch)}</strong></div><div><span class="project-setting-label">Branch kinds</span><span>${this.escapeHtml(context.featureManager.getBranchKinds().join(", ") || "feat")}</span></div><div><span class="project-setting-label">Default branch kind</span><span>${this.escapeHtml(context.featureManager.getDefaultBranchKind() || "feat")}</span></div><div><span class="project-setting-label">Worktree directory</span><span class="project-worktree-cell">${this.escapeHtml(context.featureManager.getWorktreeBase())}</span></div><div><span class="project-setting-label">Providers enabled</span><span>${this.escapeHtml(configuredAgents)}</span></div><div><span class="project-setting-label">Default provider</span><span>${this.escapeHtml(config.agents?.default || "Global default")}</span></div></div><div class="project-settings-actions"><button class="quick-action-btn" onclick="openProjectConfig('${projectId}')">Open .agentspace/config.json</button><button class="quick-action-btn subtle" onclick="openConfigDocs()">Configuration documentation / examples</button><button class="quick-action-btn subtle" onclick="editProjectBaseBranch('${projectId}')">Edit base branch</button></div></section>`;
+		const content = settings
+			? `<nav class="project-page-nav"><button class="quick-action-btn" onclick="showProject('${projectId}')">Overview</button><button class="quick-action-btn primary">Settings</button></nav>${settingsHtml}`
+			: `<nav class="project-page-nav"><button class="quick-action-btn primary">Overview</button><button class="quick-action-btn" onclick="showProjectSettings('${projectId}')">Settings</button></nav>${attentionHtml ? `<section class="ia-section attention-section"><h2>Needs attention</h2>${attentionHtml}</section>` : ""}<section class="ia-section"><h2>Repository control center</h2><div class="project-health-card"><p><strong>${this.escapeHtml(context.project.name)}</strong> · base branch <strong>${this.escapeHtml(baseBranch)}</strong></p><p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · ${features.length} tracked area${features.length === 1 ? "" : "s"} · ${activeFeatures.length} active · ${waitingFeatures.length} waiting</p></div></section><section class="ia-section"><h2>Features, agents &amp; services</h2><div class="home-feature-list">${featureRows || '<div class="activity-empty">No features yet.</div>'}</div><button class="quick-action-btn primary project-new-feature" onclick="newFeature('${projectId}')">New feature</button></section>`;
+		return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><link rel="stylesheet" href="${cssUri}"></head><body><main class="ia-home"><header class="workspace-header"><button class="home-back-btn" onclick="goHome()" title="Back to Agent Space">&larr;</button><div class="header-info"><h1 class="header-title">${this.escapeHtml(context.project.name)}</h1><div class="header-branch">${this.escapeHtml(context.project.repoPath)}</div></div></header>${content}</main><script src="${jsUri}"></script></body></html>`;
 	}
 
 	private getFeatureHtml(featureId: string): string {
@@ -864,6 +867,7 @@ export class HomePanel {
 		const body = `
 		<div class="workspace-header">
 			<button class="home-back-btn" onclick="goHome()" title="Back to Agent Space">&larr;</button>
+			<button class="project-context-link" onclick="showProject('${ctx.project.id}')" title="Open project">${this.escapeHtml(ctx.project.name)}</button>
 			<div class="header-color-dot" style="background: ${dotColor}"></div>
 			<div class="header-info">
 				<div class="header-title">${this.escapeHtml(feature.name)}</div>
@@ -927,87 +931,6 @@ export class HomePanel {
 .agent-status-dot.primary-state-error { background: var(--vscode-errorForeground); }
 .agent-status-dot.primary-state-normal, .agent-status-dot.primary-state-muted { background: var(--vscode-disabledForeground); }
 </style>
-</head>
-<body>
-	${body}
-	<script src="${jsUri}"></script>
-</body>
-</html>`;
-	}
-
-	private getProjectHtml(projectId: string, settings = false): string {
-		const context = this.projectManager.getContext(projectId);
-		if (!context) return this.emptyHtml("Project not found");
-
-		const cssUri = this.panel.webview.asWebviewUri(
-			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.css"),
-		);
-		const jsUri = this.panel.webview.asWebviewUri(
-			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.js"),
-		);
-		const explicitBaseBranch = context.config.baseBranch?.trim();
-		const effectiveBaseBranch = context.featureManager.getBaseBranchName();
-		const branchKinds = context.featureManager.getBranchKinds();
-		const defaultBranchKind = context.featureManager.getDefaultBranchKind();
-		const features = context.featureManager.getFeatures();
-		const featureRows = features.length
-			? features
-					.map(
-						(feature) => `
-						<div class="project-feature-row">
-							<div>
-								<strong>${this.escapeHtml(feature.name)}</strong>
-								<div class="project-setting-source">${this.escapeHtml(feature.branch)}</div>
-							</div>
-							<button class="quick-action-btn subtle" onclick="resumeFeature('${feature.id}')">Open</button>
-						</div>`,
-					)
-					.join("")
-			: '<div class="activity-empty">No features yet.</div>';
-
-		const projectSettingsCard = `
-			<div class="project-settings-card">
-				<div class="section-label">Project Settings</div>
-				<div class="project-settings-grid">
-					<div><span class="project-setting-label">Base branch</span><strong>${this.escapeHtml(effectiveBaseBranch)}</strong><span class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</span></div>
-					<div><span class="project-setting-label">Branch kinds</span><span>${this.escapeHtml(branchKinds.join(", ") || "Default")}</span>${defaultBranchKind ? `<span class="project-setting-source">Default: ${this.escapeHtml(defaultBranchKind)}</span>` : ""}</div>
-					<div><span class="project-setting-label">Worktrees</span><span class="project-worktree-cell">${this.escapeHtml(context.featureManager.getWorktreeBase())}</span></div>
-				</div>
-				<button class="quick-action-btn" onclick="editProjectBaseBranch('${projectId}')">Edit base branch</button>
-			</div>`;
-		const projectPageContent = settings
-			? `<div class="project-page-nav">
-				<button class="quick-action-btn" onclick="showProject('${projectId}')">Overview</button>
-				<button class="quick-action-btn primary">Settings</button>
-			</div>${projectSettingsCard}`
-			: `<div class="project-page-nav">
-				<button class="quick-action-btn primary">Overview</button>
-				<button class="quick-action-btn" onclick="showProjectSettings('${projectId}')">Settings</button>
-			</div>
-			<div>
-				<div class="section-label">Features</div>
-				<div class="project-feature-list">${featureRows}</div>
-				<button class="quick-action-btn primary project-new-feature" onclick="newFeature('${projectId}')">New Feature</button>
-			</div>`;
-
-		const body = `
-		<div class="workspace-header">
-			<button class="home-back-btn" onclick="goHome()" title="Back to Agent Space">&larr;</button>
-			<div class="header-info">
-				<div class="header-title">${this.escapeHtml(context.project.name)}</div>
-				<div class="header-branch">${this.escapeHtml(context.project.repoPath)}</div>
-			</div>
-		</div>
-		<div class="workspace-content project-page">
-			${projectPageContent}
-		</div>`;
-
-		return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="${cssUri}">
 </head>
 <body>
 	${body}
@@ -1118,7 +1041,7 @@ export class HomePanel {
 			agent.status,
 		);
 		const bindingBadge = bindingBadgeData
-			? `<span id="agent-binding-badge-${agent.id}" class="agent-tool-badge ${bindingBadgeData.className}" title="${this.escapeHtml(bindingBadgeData.tooltip)}">${bindingBadgeData.label}</span>`
+			? `<button id="agent-binding-badge-${agent.id}" class="agent-tool-badge ${bindingBadgeData.className}" title="${this.escapeHtml(bindingBadgeData.tooltip)}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')">⚠</button>`
 			: `<span id="agent-binding-badge-${agent.id}" class="agent-tool-badge" style="display:none"></span>`;
 		const isErrored = agent.status === "errored";
 		const nameClass = isDone ? "agent-panel-name done" : "agent-panel-name";
@@ -1197,6 +1120,7 @@ export class HomePanel {
 		return `
 		<div>
 			<div class="section-label">Services${activeServices.length > 0 ? ` &middot; ${activeServices.length}` : ""}</div>
+			<p class="section-help">Services are long-lived commands for the feature worktree (dev server, watcher or shell). They do not reason about the task and are separate from Agents.</p>
 			<div class="services-grid">
 				${activePanels}
 				${ghostCard}
@@ -1234,53 +1158,6 @@ export class HomePanel {
 					</div>
 				</div>
 			</div>
-		</div>`;
-	}
-
-	private renderWelcomeTmuxSection(
-		contexts: ReturnType<ProjectManager["getAllContexts"]>,
-	): string {
-		const projectSections = contexts
-			.map((ctx) => {
-				const baseFeature = ctx.featureManager.getBaseFeature(ctx.project.id);
-				const allFeatures = [baseFeature, ...ctx.featureManager.getFeatures()];
-				const featureSections = allFeatures
-					.map((feature) => {
-						return this.renderTmuxFeatureGroup(
-							feature,
-							ctx.agentManager.getAgents(feature.id),
-							ctx.serviceManager.getServices(feature.id),
-							ctx.project.id,
-						);
-					})
-					.filter(Boolean)
-					.join("");
-				if (!featureSections) return "";
-
-				return `
-				<div class="tmux-project-card">
-					<div class="tmux-project-header">
-						<div>
-							<div class="tmux-project-name">${this.escapeHtml(ctx.project.name)}</div>
-							<div class="tmux-project-path">${this.escapeHtml(ctx.project.repoPath)}</div>
-						</div>
-						<button class="quick-action-btn danger subtle" onclick="killProjectSessions('${ctx.project.id}')">Kill Project Sessions</button>
-					</div>
-					<div class="tmux-feature-groups">
-						${featureSections}
-					</div>
-				</div>`;
-			})
-			.filter(Boolean)
-			.join("");
-
-		return `
-		<div>
-			<div class="section-label">Tmux Sessions</div>
-			${
-				projectSections ||
-				'<div class="tmux-empty-state">No managed tmux sessions yet.</div>'
-			}
 		</div>`;
 	}
 
@@ -1474,9 +1351,6 @@ export class HomePanel {
 				<button class="quick-action-btn" onclick="quickAction('openGitView', '${feature.id}')">
 					${ICON_GIT} Open Workspace
 				</button>
-				<button class="quick-action-btn" onclick="quickAction('syncNames', '${feature.id}')">
-					${ICON_SYNC} Sync Names
-				</button>
 			</div>
 		</div>`;
 	}
@@ -1529,7 +1403,7 @@ interface GitStats {
 // -- Inline SVG Icons (small, self-contained) ---------------------
 const ICON_REFRESH = `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13.451 5.609l-.579-.921-1.017.641c-.597-.58-1.345-.99-2.162-1.18a5.03 5.03 0 0 0-2.441.077 4.975 4.975 0 0 0-2.108 1.299A5.007 5.007 0 0 0 3.986 8.1a4.947 4.947 0 0 0 .424 2.32 5.028 5.028 0 0 0 1.541 1.86 5.067 5.067 0 0 0 2.21.996 4.997 4.997 0 0 0 2.44-.079c.729-.224 1.393-.612 1.938-1.137l-.726-.726a3.98 3.98 0 0 1-1.535.892 3.98 3.98 0 0 1-1.935.062 4.037 4.037 0 0 1-1.758-.793A3.996 3.996 0 0 1 5.36 9.974a3.935 3.935 0 0 1-.337-1.842A3.985 3.985 0 0 1 5.723 6.3a3.955 3.955 0 0 1 1.674-1.032 3.998 3.998 0 0 1 1.94-.061c.65.133 1.248.436 1.723.875l-1.06.667.596.921L13.452 5.61z"/></svg>`;
 const ICON_PLUS = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>`;
-const ICON_FOLDER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10L14.5 3zm-.51 8.49V13h-12V7h12v4.49zm0-5.49h-12V3h4.29l.85.85.36.15H14v2z"/></svg>`;
+const _ICON_FOLDER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10L14.5 3zm-.51 8.49V13h-12V7h12v4.49zm0-5.49h-12V3h4.29l.85.85.36.15H14v2z"/></svg>`;
 const ICON_SERVER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v1l-.5.5h-9l-.5-.5v-1l.5-.5zM5 4h1V3H5v1zm0 5h1V8H5v1z"/></svg>`;
 const ICON_PR = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7 3.28V12h1V3.28l2.35 2.36.71-.7L8 1.88l-.35.35L4.59 5.29l.7.71L7 3.28zM13.5 7.72V14H2.5V7.72h-1V14.5l.5.5h12l.5-.5V7.72h-1z"/></svg>`;
-const ICON_SYNC = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.006 8.267L.78 9.5 0 8.73l2.09-2.07.76.01 2.09 2.12-.71.71-1.34-1.34c-.04 1.53.5 2.93 1.53 3.96a5.55 5.55 0 0 0 3.92 1.63l.04 1a6.55 6.55 0 0 1-4.63-1.92 6.48 6.48 0 0 1-1.79-4.53zm12.2-.53l-.76-.01-2.09-2.12.71-.71 1.34 1.34c.04-1.53-.5-2.93-1.53-3.96a5.55 5.55 0 0 0-3.92-1.63l-.04-1a6.55 6.55 0 0 1 4.63 1.92 6.47 6.47 0 0 1 1.78 4.53l1.22-1.23.78.77-2.12 2.1z"/></svg>`;
+const _ICON_SYNC = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.006 8.267L.78 9.5 0 8.73l2.09-2.07.76.01 2.09 2.12-.71.71-1.34-1.34c-.04 1.53.5 2.93 1.53 3.96a5.55 5.55 0 0 0 3.92 1.63l.04 1a6.55 6.55 0 0 1-4.63-1.92 6.48 6.48 0 0 1-1.79-4.53zm12.2-.53l-.76-.01-2.09-2.12.71-.71 1.34 1.34c.04-1.53-.5-2.93-1.53-3.96a5.55 5.55 0 0 0-3.92-1.63l-.04-1a6.55 6.55 0 0 1 4.63 1.92 6.47 6.47 0 0 1 1.78 4.53l1.22-1.23.78.77-2.12 2.1z"/></svg>`;

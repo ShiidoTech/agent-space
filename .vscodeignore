@@ -2,6 +2,7 @@
 .gitignore
 .env
 .vscode/**
+.agentspace/**
 .worktrees/**
 .codegraph/**
 src/**

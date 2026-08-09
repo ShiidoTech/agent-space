@@ -84,6 +84,72 @@ button {
 	border-radius: 2px;
 }
 
+/* Compact Project -> Feature navigator. Technical agent/session controls stay
+   on Feature pages; the sidebar only answers where the user can go. */
+.agent-space-home {
+	font-weight: 600;
+	font-size: 12px;
+	padding: 8px 10px;
+	width: 100%;
+	text-align: left;
+	border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border);
+}
+.agent-space-home:hover,
+.sidebar-feature-row:hover,
+.sidebar-add-project:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+.sidebar-section-label {
+	padding: 10px 10px 5px;
+	font-size: 10px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	color: var(--vscode-descriptionForeground);
+}
+.sidebar-add-project {
+	width: calc(100% - 16px);
+	margin: 8px;
+	padding: 5px 8px;
+	text-align: left;
+	color: var(--vscode-descriptionForeground);
+	border-radius: 3px;
+}
+.sidebar-feature-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	padding: 5px 10px 5px 28px;
+	text-align: left;
+}
+.sidebar-feature-name {
+	min-width: 0;
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+}
+.sidebar-feature-state {
+	font-size: 9px;
+	font-weight: 600;
+	color: var(--vscode-descriptionForeground);
+}
+.sidebar-feature-state.waiting {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+}
+.sidebar-feature-state.active {
+	color: var(--vscode-testing-iconPassed);
+}
+.sidebar-feature-state.base {
+	color: var(--vscode-descriptionForeground);
+}
+.sidebar-feature-state.done,
+.sidebar-feature-state.idle {
+	opacity: 0.7;
+}
+
 .btn-home:hover {
 	background: var(--vscode-list-hoverBackground);
 }
@@ -479,6 +545,13 @@ button {
 	color: var(--vscode-descriptionForeground);
 	font-size: 0.9em;
 	margin-left: 4px;
+}
+
+.binding-action {
+	border: 0;
+	cursor: pointer;
+	font-size: 11px;
+	padding: 1px 4px;
 }
 
 .agent-error-note {
