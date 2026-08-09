@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-	runDoctor,
 	type DoctorDeps,
 	type DoctorInput,
+	runDoctor,
 } from "../diagnostics/doctor";
 
 function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
@@ -101,10 +101,7 @@ describe("runDoctor", () => {
 	});
 
 	it("flags an explicitly configured base branch that does not exist", () => {
-		const report = runDoctor(
-			input(),
-			deps({ branchExists: () => false }),
-		);
+		const report = runDoctor(input(), deps({ branchExists: () => false }));
 
 		expect(report.errors).toBe(1);
 		expect(report.markdown).toContain("configured branch `main` was not found");

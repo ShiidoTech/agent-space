@@ -20,7 +20,12 @@ export class TerminalController implements vscode.Disposable {
 	private terminalMetadata = new Map<vscode.Terminal, TerminalMetadata>();
 	private disposables: vscode.Disposable[] = [];
 	private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
-	private sessionDiscoveredCallback?: () => void;
+	private beforeLaunchCallback?: (
+		feature: Feature,
+		agent: Agent,
+		cwd: string,
+	) => void;
+	private afterLaunchCallback?: (feature: Feature, agent: Agent) => void;
 
 	constructor(
 		private readonly projectManager: ProjectManager,
@@ -44,8 +49,20 @@ export class TerminalController implements vscode.Disposable {
 		);
 	}
 
-	onSessionDiscovered(callback: () => void): void {
-		this.sessionDiscoveredCallback = callback;
+	/**
+	 * Called immediately before an agent's CLI starts, while the provider's
+	 * session store still shows only pre-existing sessions. That snapshot is what
+	 * later guarantees Agent Space never adopts a neighbouring agent's session.
+	 */
+	onBeforeAgentLaunch(
+		callback: (feature: Feature, agent: Agent, cwd: string) => void,
+	): void {
+		this.beforeLaunchCallback = callback;
+	}
+
+	/** Called once the CLI has been started in a live tmux session. */
+	onAgentLaunched(callback: (feature: Feature, agent: Agent) => void): void {
+		this.afterLaunchCallback = callback;
 	}
 
 	createTerminal(
@@ -66,39 +83,18 @@ export class TerminalController implements vscode.Disposable {
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
-			// Snapshot the opencode sessions that already exist in this
-			// directory BEFORE launching, so a session created by THIS launch
-			// is the only one that can be attributed to the agent. A
-			// pre-existing session (e.g. another agent in the same worktree)
-			// must never become this agent's id just because it is the most
-			// recent in the same cwd.
-			const sessionAdapter =
-				this.toolRegistry.getProvider?.(tool)?.sessionAdapter;
-			const sessionBaseline =
-				sessionAdapter?.scanSessions && !agent.sessionId
-					? new Set(
-							sessionAdapter
-								.scanSessions()
-								.filter((session) => session.projectPath === cwd)
-								.map((session) => session.sessionId),
-						)
-					: undefined;
 			try {
 				const launchCommand = shouldResume
 					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
 					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
+				// Snapshot the provider's existing sessions for this directory
+				// before the CLI starts, so a session created by THIS launch is the
+				// only one that can later be attributed to the agent.
+				this.beforeLaunchCallback?.(feature, agent, cwd);
 				exec(this.tmux.createCommand(sessionName, launchCommand), { cwd });
 				this.tmux.configureSession(sessionName);
 				sessionReady = this.tmux.isSessionAlive(sessionName);
-				if (sessionBaseline && sessionAdapter?.discoverSessionId) {
-					void this.captureSessionId(
-						feature,
-						agent,
-						cwd,
-						sessionAdapter.discoverSessionId.bind(sessionAdapter),
-						sessionBaseline,
-					);
-				}
+				if (sessionReady) this.afterLaunchCallback?.(feature, agent);
 			} catch (err) {
 				console.warn(`[TerminalController] tmux session create failed: ${err}`);
 				sessionReady = false;
@@ -399,44 +395,6 @@ export class TerminalController implements vscode.Disposable {
 		const ctx = this.projectManager.findContextByFeatureId(featureId);
 		const agent = ctx?.agentManager.getAgent(featureId, agentId);
 		return agent?.tmuxSession ?? this.tmux.sessionName(featureId, agentId);
-	}
-
-	/**
-	 * Best-effort: poll the opencode session store until a session created
-	 * after `baseline` appears for `cwd`, then persist its id on the agent.
-	 * Sessions that already existed before the launch (in `baseline`) are
-	 * never attributed to this agent. The claim is atomic: if two captures
-	 * for the same cwd poll concurrently, each new session is reserved for
-	 * exactly one of them and the other keeps waiting for a newer one. Never
-	 * blocks the UI and swallows failures (e.g. opencode not installed).
-	 */
-	private async captureSessionId(
-		feature: Feature,
-		agent: Agent,
-		cwd: string,
-		discover: (
-			cwd: string,
-			knownSessionIds: ReadonlySet<string>,
-		) => string | undefined | Promise<string | undefined>,
-		baseline: ReadonlySet<string>,
-	): Promise<void> {
-		for (let attempt = 0; attempt < 10; attempt += 1) {
-			let sessionId: string | undefined;
-			try {
-				sessionId = await discover(cwd, baseline);
-			} catch {
-				// opencode CLI unavailable — nothing to discover
-				return;
-			}
-			if (sessionId) {
-				const ctx = this.projectManager.findContextByFeatureId(feature.id);
-				ctx?.agentManager.updateAgentSessionId(agent.id, feature.id, sessionId);
-				this.projectManager.notifyChange();
-				this.sessionDiscoveredCallback?.();
-				return;
-			}
-			await new Promise((resolve) => setTimeout(resolve, 750));
-		}
 	}
 
 	private disposeTrackedTerminal(entityId: string): void {

@@ -68,8 +68,10 @@ describe("agent attention persistence", () => {
 		);
 
 		const read = manager.getAgents("feature-1")[0];
-		expect(read.attentionStatus).toBe("idle");
-		expect(read.attentionReason).toBeTruthy();
+		// A live terminal with no structured signal is unknown, not idle: the
+		// agent has no bound session, so there is nothing to read.
+		expect(read.attentionStatus).toBe("unknown");
+		expect(read.attentionReason).toContain("No provider session");
 
 		const persisted = store.loadAgents("feature-1")[0] as Agent;
 		expect(persisted.attentionStatus).toBeUndefined();

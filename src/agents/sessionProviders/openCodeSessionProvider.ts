@@ -24,6 +24,17 @@ export function resetClaimedOpenCodeSessionIds(): void {
 	claimedSessionIds.clear();
 }
 
+/**
+ * Release a reservation so the session can be claimed again.
+ *
+ * Called when the agent holding it is deleted or closed. Without this a
+ * reservation taken by a capture that never persisted its result would keep the
+ * session unreachable for the rest of the process.
+ */
+export function releaseClaimedOpenCodeSessionId(sessionId: string): void {
+	claimedSessionIds.delete(sessionId);
+}
+
 export class OpenCodeSessionProvider
 	implements SessionProvider, SessionRenameAdapter
 {
@@ -31,8 +42,12 @@ export class OpenCodeSessionProvider
 
 	scanSessions(): SessionInfo[] {
 		try {
+			// The window covers every project on the machine, so it has to be wide
+			// enough that a session started in one worktree is still visible after
+			// work happens elsewhere. Binding can take minutes: opencode writes the
+			// session row on the first prompt, not at launch.
 			const raw = execSync(
-				'opencode db "SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 20" --format json',
+				'opencode db "SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200" --format json',
 				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
 			);
 			const rows = JSON.parse(raw);
@@ -67,6 +82,21 @@ export class OpenCodeSessionProvider
 			return title.trim();
 		} catch {
 			return null;
+		}
+	}
+
+	/** True when opencode still has a session row with this id. */
+	hasSession(sessionId: string): boolean {
+		if (!isSafeSessionId(sessionId)) return false;
+		try {
+			const raw = execSync(
+				`opencode db "SELECT id FROM session WHERE id = '${sessionId}'" --format json`,
+				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
+			);
+			const rows = JSON.parse(raw);
+			return Array.isArray(rows) && rows.length > 0;
+		} catch {
+			return false;
 		}
 	}
 

@@ -10,6 +10,39 @@ export type AgentAttentionStatus =
 	| "unknown";
 export type IsolationMode = "shared" | "per-agent";
 
+/**
+ * How confident Agent Space is that an agent is linked to a real provider
+ * session.
+ *
+ * The link is the key every session-derived feature reads through: display
+ * name, attention evidence and resume all fail closed without it. It is
+ * therefore an explicit, persisted, observable state rather than the implicit
+ * "sessionId is set" it used to be.
+ *
+ * - `unsupported` — the provider exposes no session store to bind against.
+ * - `pending` — the agent is running and no provider session has appeared yet.
+ *   Providers write their session record when the human sends a first prompt,
+ *   not when the binary starts, so this state is normal and can last minutes.
+ * - `bound` — `sessionId` resolves to a session that actually exists.
+ * - `unverified` — `sessionId` is set but the provider store does not contain
+ *   it. Never silently rewritten: the value is kept and reported as-is.
+ */
+export type AgentSessionBindingState =
+	| "unsupported"
+	| "pending"
+	| "bound"
+	| "unverified";
+
+export interface AgentSessionBinding {
+	state: AgentSessionBindingState;
+	/** ISO timestamp of the last reconciliation attempt. */
+	checkedAt: string;
+	/** Number of reconciliation attempts made since the agent was launched. */
+	attempts: number;
+	/** Short, non-sensitive explanation shown in Doctor and tooltips. */
+	detail: string;
+}
+
 export interface Feature {
 	id: string;
 	name: string;
@@ -75,6 +108,21 @@ export interface Agent {
 	lastError?: string;
 	lastExitCode?: number | null;
 	createdAt: string;
+	/**
+	 * Observable outcome of session binding. Persisted so a failed bind is a
+	 * reportable state instead of a silent no-op, and so Doctor can explain why
+	 * an agent has no name and no attention evidence.
+	 */
+	sessionBinding?: AgentSessionBinding;
+	/**
+	 * Provider session ids that already existed in this agent's working
+	 * directory when it was launched. Persisted (not just held in memory) so a
+	 * VS Code restart cannot make Agent Space adopt a neighbouring agent's
+	 * session as its own.
+	 */
+	sessionBaseline?: string[];
+	/** ISO timestamp of the launch this binding relates to. */
+	launchedAt?: string;
 }
 
 export interface CompanionState {

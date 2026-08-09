@@ -111,7 +111,7 @@ describe("OpenCodeSessionProvider", () => {
 		provider.scanSessions();
 
 		expect(mockExecSync).toHaveBeenCalledWith(
-			'opencode db "SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 20" --format json',
+			'opencode db "SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200" --format json',
 			expect.objectContaining({
 				encoding: "utf-8",
 				timeout: 5000,

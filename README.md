@@ -158,24 +158,41 @@ Projects can also override branching defaults via a committed `.agentspace/confi
 
 ### Provider Support Matrix
 
-| Provider | Launch | Resume | Session naming | Working | Waiting |
-|---|---:|---:|---:|---:|---:|
-| Claude | yes | yes | yes | yes | yes |
-| Codex | yes | yes | yes | yes | yes |
-| OpenCode | yes | yes | yes | unavailable | unavailable |
-| Hermes | yes | no evidence | no evidence | no evidence | no evidence |
+| Provider | Launch | Session binding | Resume | Session naming | Working | Waiting |
+|---|---:|---:|---:|---:|---:|---:|
+| Claude | yes | yes | yes | yes | yes | only `AskUserQuestion` |
+| Codex | yes | yes | yes | yes | yes | yes |
+| OpenCode | yes | yes | yes | yes | yes | yes |
+| Hermes | yes | no | no evidence | no evidence | no evidence | no evidence |
 
 The matrix only claims behavior covered by structured adapter tests. An
-unsupported attention capability is displayed as `unknown`, never `Idle`.
+unsupported or unreadable attention capability is displayed as `unknown`, never
+`Idle`.
+
+**Session binding** is the prerequisite for the three columns after it. Agent
+Space has to know which provider session belongs to an agent before it can read
+that session's title or activity, or resume it. Providers write their session
+record when the human sends a first prompt, not when the CLI starts, so binding
+is reconciled continuously while an agent is alive rather than captured once at
+launch. An agent's current binding state is visible in `Agent Space: Doctor`.
 
 **Session naming** means reading a provider's persisted session title and using
 it for the Agent Space display name when session-name sync is enabled. It does
-not mean renaming the provider's native terminal prompt. **Working** means a
-structured signal proves that the agent is actively processing. **Waiting**
-means a structured signal proves that the agent has finished its turn and is
-waiting for user input. These two attention signals are structured for Claude
-and Codex. OpenCode and Hermes remain `unknown`; Agent Space does not infer
-their state from terminal output.
+not mean renaming the provider's native terminal prompt.
+
+**Working** means a structured signal proves that the agent is actively
+processing. **Waiting** means a structured signal proves that the agent needs a
+human before it can continue.
+
+Waiting is narrower than it looks for Claude. The only structured evidence in a
+Claude transcript is an `AskUserQuestion` tool call; a pending tool-permission
+prompt — the most common way Claude actually waits for you — leaves no distinct
+event, and is indistinguishable from `working`. Agent Space reports `working` in
+that case rather than guessing. Codex (`request_user_input`, approval requests)
+and OpenCode (`question`, `plan_exit` tools) do expose explicit gates.
+
+Agent Space never infers state from terminal output, and never reports `idle`
+to stand in for "no evidence".
 
 ## GitHub
 

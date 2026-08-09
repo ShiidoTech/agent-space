@@ -20,6 +20,38 @@ export interface DoctorReport {
 	warnings: number;
 }
 
+/**
+ * What Doctor needs to explain, for one persisted agent, why it does or does
+ * not have a name and an attention signal.
+ *
+ * Everything here is resolved through the same code paths the running extension
+ * uses, so a green Doctor means the runtime really can read that agent's
+ * session — not that the checks were re-implemented optimistically.
+ */
+export interface DoctorAgentProbe {
+	projectName: string;
+	featureLabel: string;
+	agentName: string;
+	toolId: string;
+	/** False when the agent's tool id resolves only through the unknown-tool fallback. */
+	toolDeclared: boolean;
+	/** Session store the provider will actually read, when it is file-backed. */
+	sessionsDir?: string;
+	sessionId: string | null;
+	bindingState: string;
+	bindingDetail?: string;
+	bindingAttempts?: number;
+	/** null when the provider exposes no session store to look in. */
+	sessionResolved: boolean | null;
+	attentionEvidence?: string;
+}
+
+/** A project agent id that is enabled in config but resolves to no known tool. */
+export interface DoctorUnknownAgentIds {
+	projectName: string;
+	ids: string[];
+}
+
 export interface DoctorInput {
 	extensionId: string;
 	extensionVersion: string;
@@ -30,6 +62,8 @@ export interface DoctorInput {
 	perAgentIsolation: boolean;
 	syncSessionNames: boolean;
 	homeDir?: string;
+	agents?: DoctorAgentProbe[];
+	unknownProjectAgentIds?: DoctorUnknownAgentIds[];
 }
 
 export interface ProjectConfigProbe {
@@ -84,10 +118,12 @@ function defaultReadProjectConfig(repoPath: string): ProjectConfigProbe {
 		}
 		const config = parsed as Record<string, unknown>;
 		if (
-			(config.baseBranch !== undefined && typeof config.baseBranch !== "string") ||
+			(config.baseBranch !== undefined &&
+				typeof config.baseBranch !== "string") ||
 			(config.defaultBranchKind !== undefined &&
 				typeof config.defaultBranchKind !== "string") ||
-			(config.worktreesDir !== undefined && typeof config.worktreesDir !== "string") ||
+			(config.worktreesDir !== undefined &&
+				typeof config.worktreesDir !== "string") ||
 			(config.branchKinds !== undefined &&
 				(!Array.isArray(config.branchKinds) ||
 					config.branchKinds.some((kind) => typeof kind !== "string")))
@@ -131,7 +167,10 @@ export const defaultDoctorDeps: DoctorDeps = {
 	},
 	currentBranch(repoPath) {
 		try {
-			return exec("git rev-parse --abbrev-ref HEAD", { cwd: repoPath }).trim() || null;
+			return (
+				exec("git rev-parse --abbrev-ref HEAD", { cwd: repoPath }).trim() ||
+				null
+			);
 		} catch {
 			return null;
 		}
@@ -151,9 +190,8 @@ export const defaultDoctorDeps: DoctorDeps = {
 	worktreeCount(repoPath) {
 		try {
 			const output = exec("git worktree list --porcelain", { cwd: repoPath });
-			return output
-				.split("\n")
-				.filter((line) => line.startsWith("worktree ")).length;
+			return output.split("\n").filter((line) => line.startsWith("worktree "))
+				.length;
 		} catch {
 			return null;
 		}
@@ -193,6 +231,95 @@ function renderSection(title: string, checks: DoctorCheck[]): string[] {
 	return lines;
 }
 
+/**
+ * Report, agent by agent, whether Agent Space can actually reach the provider
+ * session behind it.
+ *
+ * This is the section that would have caught the whole class of failure it was
+ * written for: a tool id enabled in project config but declared nowhere, a
+ * session store resolved to the wrong home directory, and a session id that
+ * exists in Agent Space's own storage and nowhere else. All three used to
+ * render as a quiet agent with no name.
+ */
+function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
+	const checks: DoctorCheck[] = [];
+
+	for (const unknown of input.unknownProjectAgentIds ?? []) {
+		if (unknown.ids.length === 0) continue;
+		add(
+			checks,
+			"error",
+			`${unknown.projectName} agent curation`,
+			`.agentspace/config.json enables ${unknown.ids.map((id) => `\`${id}\``).join(", ")}, which resolve to no configured tool`,
+			"Declare the tool in agentSpace.codingTools (id, command, family, sessionsDir) or remove the id from agents.enabled.",
+		);
+	}
+
+	const agents = input.agents ?? [];
+	if (agents.length === 0) {
+		add(checks, "info", "Agents", "no agents are persisted yet");
+		return checks;
+	}
+
+	let bound = 0;
+	for (const probe of agents) {
+		const label = `${probe.projectName} / ${probe.featureLabel} / ${probe.agentName}`;
+		const facts = [`tool \`${probe.toolId}\``];
+		if (!probe.toolDeclared)
+			facts.push("not declared in agentSpace.codingTools");
+		if (probe.sessionsDir) {
+			facts.push(`sessions ${redactHome(probe.sessionsDir, homeDir)}`);
+		}
+		facts.push(
+			`session ${probe.sessionId ? `\`${probe.sessionId}\`` : "none"}`,
+		);
+		if (probe.sessionResolved !== null) {
+			facts.push(
+				probe.sessionResolved ? "found in store" : "not found in store",
+			);
+		}
+		facts.push(`binding ${probe.bindingState}`);
+		if (probe.attentionEvidence)
+			facts.push(`evidence ${probe.attentionEvidence}`);
+		if (probe.bindingDetail) facts.push(probe.bindingDetail.toLowerCase());
+
+		let level: DoctorLevel;
+		let remediation: string | undefined;
+		if (probe.bindingState === "unsupported") {
+			level = "info";
+		} else if (probe.sessionResolved === true) {
+			level = "ok";
+			bound += 1;
+		} else if (!probe.toolDeclared) {
+			level = "error";
+			remediation =
+				"Declare this tool in agentSpace.codingTools with its own command and sessionsDir; the fallback reads the default session store, which is the wrong one for a wrapped CLI profile.";
+		} else if (probe.bindingState === "unverified") {
+			level = "error";
+			remediation =
+				"The stored session id does not exist in the provider store. Agent Space will adopt the session this agent actually started on the next reconciliation; check sessionsDir if it never does.";
+		} else {
+			level = "warn";
+			remediation =
+				"Providers record a session on the first prompt, not at launch. Send a prompt to this agent, then rerun Doctor.";
+		}
+
+		add(checks, level, label, facts.join("; "), remediation);
+	}
+
+	add(
+		checks,
+		bound === agents.length ? "ok" : bound === 0 ? "error" : "warn",
+		"Session binding",
+		`${bound}/${agents.length} agent${agents.length === 1 ? "" : "s"} bound to a provider session`,
+		bound === agents.length
+			? undefined
+			: "Naming, attention and resume all read through this binding; unbound agents have none of them.",
+	);
+
+	return checks;
+}
+
 export function runDoctor(
 	input: DoctorInput,
 	deps: DoctorDeps = defaultDoctorDeps,
@@ -212,7 +339,13 @@ export function runDoctor(
 			deps.commandVersion("git") ?? "available (version unavailable)",
 		);
 	} else {
-		add(systemChecks, "error", "Git", "not found on PATH", "Install Git and reload VS Code.");
+		add(
+			systemChecks,
+			"error",
+			"Git",
+			"not found on PATH",
+			"Install Git and reload VS Code.",
+		);
 	}
 
 	const tmuxAvailable = deps.commandExists("tmux");
@@ -235,13 +368,13 @@ export function runDoctor(
 		);
 	}
 
-	add(configChecks, "info", "Extension", `${input.extensionId} v${input.extensionVersion}`);
 	add(
 		configChecks,
 		"info",
-		"Worktree base",
-		input.worktreeBasePath,
+		"Extension",
+		`${input.extensionId} v${input.extensionVersion}`,
 	);
+	add(configChecks, "info", "Worktree base", input.worktreeBasePath);
 	add(
 		configChecks,
 		"info",
@@ -300,7 +433,10 @@ export function runDoctor(
 		);
 	}
 
-	if (input.defaultToolId && !input.tools.some((tool) => tool.id === input.defaultToolId)) {
+	if (
+		input.defaultToolId &&
+		!input.tools.some((tool) => tool.id === input.defaultToolId)
+	) {
 		add(
 			toolChecks,
 			"error",
@@ -373,7 +509,8 @@ export function runDoctor(
 			typeof config.config?.baseBranch === "string"
 				? config.config.baseBranch.trim()
 				: undefined;
-		const effectiveBase = configuredBase || deps.currentBranch(project.repoPath);
+		const effectiveBase =
+			configuredBase || deps.currentBranch(project.repoPath);
 		if (!effectiveBase) {
 			add(
 				projectChecks,
@@ -382,7 +519,10 @@ export function runDoctor(
 				"could not determine an effective base branch",
 				"Set baseBranch explicitly in .agentspace/config.json.",
 			);
-		} else if (configuredBase && !deps.branchExists(project.repoPath, configuredBase)) {
+		} else if (
+			configuredBase &&
+			!deps.branchExists(project.repoPath, configuredBase)
+		) {
 			add(
 				projectChecks,
 				"error",
@@ -402,11 +542,14 @@ export function runDoctor(
 		}
 	}
 
+	const agentChecks = buildAgentChecks(input, homeDir);
+
 	const checks = [
 		...systemChecks,
 		...configChecks,
 		...toolChecks,
 		...projectChecks,
+		...agentChecks,
 	];
 	const errors = checks.filter((check) => check.level === "error").length;
 	const warnings = checks.filter((check) => check.level === "warn").length;
@@ -426,6 +569,7 @@ export function runDoctor(
 		...renderSection("Agent Space", configChecks),
 		...renderSection("Coding tools", toolChecks),
 		...renderSection("Projects", projectChecks),
+		...renderSection("Agent sessions", agentChecks),
 	].join("\n");
 
 	return { markdown, checks, errors, warnings };

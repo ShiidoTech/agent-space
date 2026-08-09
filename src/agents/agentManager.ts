@@ -5,10 +5,16 @@ import * as path from "node:path";
 import { normalizeFeatureName } from "../features/featureName";
 import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
-import type { Agent, AgentStatus, Feature } from "../types";
+import type {
+	Agent,
+	AgentSessionBinding,
+	AgentStatus,
+	Feature,
+} from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
 import { CodingToolRegistry } from "./codingToolRegistry";
+import { releaseClaimedOpenCodeSessionId } from "./sessionProviders/openCodeSessionProvider";
 import type { TmuxIntegration } from "./tmux";
 
 export class AgentManager {
@@ -178,6 +184,58 @@ export class AgentManager {
 		this.saveAgents(featureId, agents);
 	}
 
+	/**
+	 * Persist the observable outcome of session binding. A failed bind is a
+	 * reportable state, not a silent no-op: Doctor and the agent tooltip read
+	 * this to explain why an agent has no name and no attention evidence.
+	 */
+	updateSessionBinding(
+		agentId: string,
+		featureId: string,
+		binding: AgentSessionBinding,
+	): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((a) => a.id === agentId);
+		if (!agent) return;
+		const current = agent.sessionBinding;
+		if (
+			current &&
+			current.state === binding.state &&
+			current.detail === binding.detail &&
+			current.attempts === binding.attempts
+		) {
+			// Nothing changed; skip the write so a 15s reconciliation loop does not
+			// rewrite agents.json forever.
+			return;
+		}
+		agent.sessionBinding = binding;
+		this.saveAgents(featureId, agents);
+	}
+
+	/**
+	 * Record what the provider's session store looked like immediately before
+	 * this agent's CLI started. Persisted rather than held in memory so a VS Code
+	 * restart cannot make Agent Space adopt a neighbouring agent's session.
+	 */
+	recordAgentLaunch(
+		agentId: string,
+		featureId: string,
+		launch: { baseline: string[]; launchedAt: string },
+	): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((a) => a.id === agentId);
+		if (!agent) return;
+		agent.sessionBaseline = launch.baseline;
+		agent.launchedAt = launch.launchedAt;
+		agent.sessionBinding = {
+			state: "pending",
+			checkedAt: launch.launchedAt,
+			attempts: 0,
+			detail: "Waiting for the provider to record a session for this agent",
+		};
+		this.saveAgents(featureId, agents);
+	}
+
 	closeAgent(agentId: string, featureId: string): void {
 		const agents = this.loadAgents(featureId);
 		const agent = agents.find((a) => a.id === agentId);
@@ -254,6 +312,7 @@ export class AgentManager {
 		if (agent?.worktreePath) {
 			this.removeWorktree(agent.worktreePath);
 		}
+		if (agent?.sessionId) releaseClaimedOpenCodeSessionId(agent.sessionId);
 		this.saveAgents(
 			featureId,
 			agents.filter((a) => a.id !== agentId),
@@ -265,6 +324,7 @@ export class AgentManager {
 			if (agent.worktreePath) {
 				this.removeWorktree(agent.worktreePath);
 			}
+			if (agent.sessionId) releaseClaimedOpenCodeSessionId(agent.sessionId);
 		}
 		this.saveAgents(featureId, []);
 		this.store.deleteFeatureData(featureId);
