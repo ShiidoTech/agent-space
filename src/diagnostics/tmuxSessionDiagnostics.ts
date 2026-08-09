@@ -24,3 +24,14 @@ export function classifyLiveTmuxSession(
 	if (!owners || owners.length === 0) return "untracked_agent_space";
 	return owners.length > 1 ? "conflict" : "tracked";
 }
+
+export function findCleanupCandidates(
+	sessions: string[],
+	tracked: ReadonlyMap<string, string[]>,
+): string[] {
+	return sessions.filter(
+		(session) =>
+			classifyLiveTmuxSession(session, tracked.get(session)) ===
+			"untracked_agent_space",
+	);
+}

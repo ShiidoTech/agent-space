@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { classifyLiveTmuxSession } from "../diagnostics/tmuxSessionDiagnostics";
+import {
+	classifyLiveTmuxSession,
+	findCleanupCandidates,
+} from "../diagnostics/tmuxSessionDiagnostics";
 
 describe("tmux session diagnostics", () => {
 	it("classifies a tracked Agent Space session", () => {
@@ -24,5 +27,15 @@ describe("tmux session diagnostics", () => {
 		expect(classifyLiveTmuxSession("personal-shell", undefined)).toBe(
 			"foreign",
 		);
+	});
+
+	it("only returns untracked Agent Space sessions as cleanup candidates", () => {
+		const tracked = new Map([["agent-space-f1-a1", ["owner"]]]);
+		expect(
+			findCleanupCandidates(
+				["agent-space-f1-a1", "agent-space-f2-a2", "personal-shell"],
+				tracked,
+			),
+		).toEqual(["agent-space-f2-a2"]);
 	});
 });

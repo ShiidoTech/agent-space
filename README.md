@@ -161,6 +161,7 @@ All commands are available from the Command Palette.
 | `Agent Space: Bootstrap Feature Worktree` | Run the project-declared setup commands visibly in the selected feature worktree |
 | `Agent Space: Inspect Feature Worktrees` | Report missing, detached, divergent, or valid persisted feature worktrees without mutating Git |
 | `Agent Space: Inspect tmux Sessions` | Report tracked and untracked Agent Space tmux sessions without stopping or renaming them |
+| `Agent Space: Clean Untracked Agent Space Sessions` | Select and explicitly confirm removal of untracked Agent Space tmux sessions; foreign sessions are excluded |
 | `Agent Space: Attach Existing Agent Session` | Explicitly attach a persisted live tmux session without adopting, renaming, killing, or starting a process |
 | `Agent Space: Open Feature Home` | Open the feature home view in the current window |
 | `Agent Space: Delete Feature` | Remove the feature, worktree, and agent data |

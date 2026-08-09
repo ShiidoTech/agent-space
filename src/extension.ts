@@ -5,7 +5,10 @@ import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
-import { classifyLiveTmuxSession } from "./diagnostics/tmuxSessionDiagnostics";
+import {
+	classifyLiveTmuxSession,
+	findCleanupCandidates,
+} from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
@@ -1069,6 +1072,70 @@ export async function activate(
 			);
 			output.show(true);
 		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.cleanUntrackedTmuxSessions",
+			async () => {
+				const readTracked = () => {
+					const tracked = new Map<string, string[]>();
+					for (const ctx of projectManager.getAllContexts()) {
+						for (const feature of ctx.store.loadFeatures()) {
+							for (const agent of ctx.store.loadAgents(feature.id)) {
+								if (!agent.tmuxSession) continue;
+								const owners = tracked.get(agent.tmuxSession) ?? [];
+								owners.push(
+									`${ctx.project.name}/${feature.name}/${agent.name}`,
+								);
+								tracked.set(agent.tmuxSession, owners);
+							}
+							for (const service of ctx.store.loadServices(feature.id)) {
+								const owners = tracked.get(service.tmuxSession) ?? [];
+								owners.push(
+									`${ctx.project.name}/${feature.name}/service:${service.name}`,
+								);
+								tracked.set(service.tmuxSession, owners);
+							}
+						}
+					}
+					return tracked;
+				};
+
+				const candidates = findCleanupCandidates(
+					projectManager.listTmuxSessions(),
+					readTracked(),
+				);
+				if (candidates.length === 0) {
+					vscode.window.showInformationMessage(
+						"No untracked Agent Space tmux sessions were found.",
+					);
+					return;
+				}
+				const selected = await vscode.window.showQuickPick(
+					candidates.map((session) => ({ label: session })),
+					{
+						canPickMany: true,
+						placeHolder: "Select untracked Agent Space sessions to remove",
+					},
+				);
+				if (!selected || selected.length === 0) return;
+				const names = selected.map((item) => item.label);
+				const confirmation = await vscode.window.showWarningMessage(
+					`Remove ${names.length} untracked Agent Space tmux session(s)?\n\n${names.join("\n")}`,
+					{ modal: true },
+					"Remove",
+				);
+				if (confirmation !== "Remove") return;
+
+				const latestTracked = readTracked();
+				for (const session of names) {
+					if (tmux.isSessionAlive(session) && !latestTracked.has(session)) {
+						tmux.killSession(session);
+					}
+				}
+			},
+		),
 	);
 
 	context.subscriptions.push(
