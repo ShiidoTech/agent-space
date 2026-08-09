@@ -243,6 +243,54 @@ const ATTENTION_LABELS = {
 	unknown: "Unknown",
 };
 
+// Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
+// binding at all) renders nothing — it is the quiet, expected state.
+const BINDING_LABELS = {
+	pending: "Session pending",
+	ambiguous: "Ambiguous session",
+	unverified: "Session lost",
+	unsupported: "No session tracking",
+};
+
+const LIFECYCLE_LABELS = {
+	running: "Running",
+	stopped: "Stopped",
+	done: "Done",
+	errored: "Errored",
+	idle: "Idle",
+};
+
+function updateBindingBadge(agentEl, agent) {
+	if (agent.status === "done") {
+		var doneBadge = agentEl.querySelector('[data-binding-badge="' + agent.id + '"]');
+		if (doneBadge) doneBadge.remove();
+		return;
+	}
+	var badge = agentEl.querySelector('[data-binding-badge="' + agent.id + '"]');
+	var state = agent.bindingState;
+	var label = state && state !== "bound" ? BINDING_LABELS[state] : null;
+
+	if (!label) {
+		if (badge) badge.remove();
+		return;
+	}
+
+	var tooltip = agent.bindingDetail || "";
+	if (state === "ambiguous" && tooltip) {
+		tooltip += " Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
+	}
+
+	if (!badge) {
+		badge = document.createElement("span");
+		badge.setAttribute("data-binding-badge", agent.id);
+		var statusEl = agentEl.querySelector(".agent-status");
+		if (statusEl) statusEl.appendChild(badge);
+	}
+	badge.className = "binding-badge binding-" + state;
+	badge.textContent = label;
+	badge.title = tooltip;
+}
+
 window.addEventListener("message", function (event) {
 	var msg = event.data;
 	if (msg.type !== "sidebarUpdate" || !msg.data) return;
@@ -289,11 +337,21 @@ window.addEventListener("message", function (event) {
 				var attentionBadge = agentEl.querySelector(
 					'[data-attention-badge="' + agent.id + '"]',
 				);
-				if (attentionBadge) {
+				if (attentionBadge && agent.attentionSupported !== false) {
 					attentionBadge.className = "attention-badge attention-" + attention;
 					attentionBadge.textContent = ATTENTION_LABELS[attention] || attention;
 					attentionBadge.title =
 						agent.attentionReason || "No current attention evidence";
+				} else if (attentionBadge) {
+					attentionBadge.remove();
+				}
+
+				updateBindingBadge(agentEl, agent);
+				var lifecycleBadge = agentEl.querySelector(
+					'[data-lifecycle-badge="' + agent.id + '"]',
+				);
+				if (lifecycleBadge) {
+					lifecycleBadge.textContent = LIFECYCLE_LABELS[agent.status] || "Idle";
 				}
 
 				// Keep card-level classes tied to persisted lifecycle state.

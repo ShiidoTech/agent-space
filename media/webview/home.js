@@ -250,14 +250,66 @@ const ATTENTION_LABELS = {
 function updateAttention(agent) {
 	const status = agent.status || "unknown";
 	const dot = document.getElementById(`agent-attention-dot-${agent.id}`);
-	if (dot) dot.className = `agent-status-dot attention-${status}`;
+	if (dot) {
+		dot.className = agent.attentionSupported === false
+			? "agent-status-dot attention-unknown"
+			: `agent-status-dot attention-${status}`;
+	}
 
 	const badge = document.getElementById(`agent-attention-badge-${agent.id}`);
-	if (badge) {
+	if (badge && agent.attentionSupported !== false) {
 		badge.className = `agent-tool-badge agent-attention-badge attention-${status}`;
 		badge.textContent = ATTENTION_LABELS[status] || status;
 		badge.title = agent.reason || "No current attention evidence";
+	} else if (badge) {
+		badge.remove();
 	}
+	const lifecycleBadge = document.getElementById(`agent-lifecycle-badge-${agent.id}`);
+	if (lifecycleBadge) {
+		const lifecycle = agent.lifecycleStatus || "idle";
+		lifecycleBadge.textContent = lifecycle[0].toUpperCase() + lifecycle.slice(1);
+	}
+
+	updateBindingBadge(agent);
+}
+
+// Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
+// binding at all) renders nothing — it is the quiet, expected state.
+const BINDING_LABELS = {
+	pending: "Session pending",
+	ambiguous: "Ambiguous session",
+	unverified: "Session lost",
+	unsupported: "No session tracking",
+};
+
+function updateBindingBadge(agent) {
+	const badge = document.getElementById(`agent-binding-badge-${agent.id}`);
+	if (!badge) return;
+	if (agent.lifecycleStatus === "done") {
+		badge.style.display = "none";
+		badge.textContent = "";
+		badge.title = "";
+		return;
+	}
+
+	const state = agent.bindingState;
+	const label = state && state !== "bound" ? BINDING_LABELS[state] : null;
+	if (!label) {
+		badge.style.display = "none";
+		badge.textContent = "";
+		badge.title = "";
+		return;
+	}
+
+	let tooltip = agent.bindingDetail || "";
+	if (state === "ambiguous" && tooltip) {
+		tooltip += " Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
+	}
+
+	badge.className = `agent-tool-badge binding-badge binding-${state}`;
+	badge.textContent = label;
+	badge.title = tooltip;
+	badge.style.display = "";
 }
 
 window.addEventListener("message", (event) => {
