@@ -170,4 +170,29 @@ describe("runDoctor", () => {
 
 		expect(report.markdown).toContain("no explicit baseBranch");
 	});
+
+	it("does not count explicitly unsupported providers against binding health", () => {
+		const report = runDoctor(
+			input({
+				agents: [
+					{
+						projectName: "agent-space",
+						featureLabel: "main",
+						agentName: "Hermes",
+						toolId: "hermes",
+						toolDeclared: true,
+						sessionId: null,
+						bindingState: "unsupported",
+						sessionResolved: null,
+					},
+				],
+			}),
+			deps(),
+		);
+
+		expect(report.errors).toBe(0);
+		expect(report.markdown).toContain(
+			"0/0 agents requiring binding are bound to a provider session; 1 explicitly unsupported",
+		);
+	});
 });

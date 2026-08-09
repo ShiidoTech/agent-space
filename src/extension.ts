@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
+import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
@@ -300,7 +301,56 @@ export async function activate(
 	const sessionNameSyncer = new SessionNameSyncer(
 		toolRegistry.getSessionRenameAdapters(),
 	);
-	terminalController.onSessionDiscovered(() => sessionNameSyncer.syncAll());
+
+	// Providers record their session when the human sends a first prompt, not
+	// when the CLI starts, so binding an agent to its session is a state that has
+	// to be reconciled for as long as the agent lives — not a one-shot capture at
+	// launch. Everything session-derived (name, attention, resume) reads through
+	// this binding.
+	const sessionBinder = new SessionBinder(toolRegistry, tmux);
+	terminalController.onBeforeAgentLaunch((feature, agent, cwd) => {
+		const ctx = projectManager.findContextByFeatureId(feature.id);
+		if (ctx) sessionBinder.recordLaunch(ctx, feature.id, agent, cwd);
+	});
+	terminalController.onAgentLaunched(() => {
+		// Cheap first attempt; the periodic pass covers the usual slower case.
+		if (
+			sessionBinder.reconcileAll().some((outcome) => outcome.boundSessionId)
+		) {
+			projectManager.notifyChange();
+		}
+	});
+	sessionBinder.onBound(() => {
+		projectManager.notifyChange();
+		sessionNameSyncer.syncAll();
+	});
+	sessionBinder.start(projectManager);
+	context.subscriptions.push({ dispose: () => sessionBinder.dispose() });
+
+	// Surface undeclared project agents once at startup rather than only when
+	// someone happens to add an agent. An id enabled in .agentspace/config.json
+	// but declared in no codingTools entry resolves through a fallback that reads
+	// the default session store — which for a wrapped CLI profile is the wrong
+	// one, and looks exactly like an agent that never says anything.
+	const undeclared = projectManager
+		.getAllContexts()
+		.flatMap((ctx) =>
+			toolRegistry
+				.getUnknownProjectAgentIds(ctx.config)
+				.map((id) => `${ctx.project.name}: ${id}`),
+		);
+	if (undeclared.length > 0) {
+		void vscode.window
+			.showWarningMessage(
+				`Project agents are enabled but not declared in agentSpace.codingTools (${undeclared.join(", ")}). They cannot be named or monitored until they are.`,
+				"Run Doctor",
+			)
+			.then((choice) => {
+				if (choice === "Run Doctor") {
+					void vscode.commands.executeCommand("agentSpace.doctor");
+				}
+			});
+	}
 	sessionNameSyncer.onAgentRenamed((agentId, featureId) => {
 		projectManager.notifyChange();
 		const resolved = projectManager.resolveFeature(featureId);
@@ -340,7 +390,11 @@ export async function activate(
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand("agentSpace.syncSessionNames", () => {
+			// Names come from sessions, so re-check the bindings first: an agent
+			// that just got bound can be named in the same pass.
+			sessionBinder.reconcileAll();
 			sessionNameSyncer.syncAll();
+			projectManager.notifyChange();
 		}),
 	);
 
@@ -578,7 +632,7 @@ export async function activate(
 				}
 				if (unknown.length > 0) {
 					vscode.window.showWarningMessage(
-						`Project agents are not registered in this installation: ${unknown.join(", ")}.`,
+						`Project agents are not registered in this installation: ${unknown.join(", ")}. Declare them in agentSpace.codingTools with their own command and sessionsDir — otherwise they fall back to the default session store and cannot be named or monitored.`,
 					);
 				}
 				if (tools.length === 0) {

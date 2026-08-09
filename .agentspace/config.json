@@ -3,10 +3,8 @@
     "enabled": [
       "codex",
       "opencode",
-      "claude-perso",
       "hermes"
-    ],
-    "default": "claude-perso"
+    ]
   },
   "baseBranch": "main"
 }

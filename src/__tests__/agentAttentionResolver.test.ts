@@ -117,15 +117,18 @@ describe("AgentAttentionResolver", () => {
 		expect(snapshot.source).toBe("tmux");
 	});
 
-	it("uses unknown rather than inventing idle for an unsupported live CLI", () => {
+	it("reports unknown, not idle, for a live CLI with no structured signal", () => {
 		const resolver = new AgentAttentionResolver(
 			tmux(),
 			registry({ id: "generic", name: "Generic", command: "generic" }),
 		);
 
-		expect(resolver.resolve(agent({ toolId: "generic" })).status).toBe(
-			"unknown",
-		);
+		const snapshot = resolver.resolve(agent({ toolId: "generic" }));
+		// Reporting idle here made a misconfigured provider, an unbound session
+		// and a genuinely quiet agent indistinguishable.
+		expect(snapshot.status).toBe("unknown");
+		expect(snapshot.source).toBe("fallback");
+		expect(snapshot.reason).toBeTruthy();
 	});
 
 	it("maps Claude end_turn to idle, not waiting_for_user", () => {
@@ -250,7 +253,45 @@ describe("AgentAttentionResolver", () => {
 		expect(resolver.resolve(agent()).status).toBe("idle");
 	});
 
-	it("does not reuse an older Claude signal after a newer unknown event", () => {
+	it("keeps the last Claude conversational signal across bookkeeping events", () => {
+		const root = tempDir();
+		const projectsDir = path.join(root, "projects");
+		const sessionFile = path.join(projectsDir, "project", "session-1.jsonl");
+		// A real interactive transcript wraps every turn in non-conversational
+		// events. Treating them as "forget what we knew" erased the signal within
+		// seconds of it being produced and left live agents with no evidence.
+		writeJsonl(sessionFile, [
+			{
+				type: "assistant",
+				sessionId: "session-1",
+				message: { content: [], stop_reason: "tool_use" },
+			},
+			{ type: "attachment", sessionId: "session-1" },
+			{ type: "pr-link", sessionId: "session-1" },
+			{ type: "system", sessionId: "session-1" },
+		]);
+		const provider = new ClaudeSessionProvider(projectsDir);
+
+		const resolver = new AgentAttentionResolver(
+			tmux(),
+			registry(
+				{
+					id: "claude",
+					name: "Claude Code",
+					command: "claude",
+					family: "claude",
+				},
+				provider,
+			),
+			{
+				claudeProviderFactory: () => new ClaudeSessionProvider(projectsDir),
+			},
+		);
+
+		expect(resolver.resolve(agent()).status).toBe("working");
+	});
+
+	it("ignores Claude sub-agent turns when deriving attention", () => {
 		const root = tempDir();
 		const projectsDir = path.join(root, "projects");
 		const sessionFile = path.join(projectsDir, "project", "session-1.jsonl");
@@ -260,10 +301,12 @@ describe("AgentAttentionResolver", () => {
 				sessionId: "session-1",
 				message: { content: [], stop_reason: "tool_use" },
 			},
+			// A sidechain finishing its turn says nothing about the main agent.
 			{
-				type: "progress",
+				type: "assistant",
 				sessionId: "session-1",
-				data: { status: "compacting" },
+				isSidechain: true,
+				message: { content: [], stop_reason: "end_turn" },
 			},
 		]);
 		const provider = new ClaudeSessionProvider(projectsDir);
@@ -284,7 +327,7 @@ describe("AgentAttentionResolver", () => {
 			},
 		);
 
-		expect(resolver.resolve(agent()).status).toBe("unknown");
+		expect(resolver.resolve(agent()).status).toBe("working");
 	});
 
 	it("maps Codex structured turn lifecycle and user-attention events", () => {

@@ -24,9 +24,6 @@ const DEFAULT_CODEX_SESSION_INDEX_PATH = path.join(
 	"session_index.jsonl",
 );
 
-const CHUNK_SIZE = 4096;
-const claimedCodexSessionIds = new Set<string>();
-
 export class CodexSessionProvider
 	implements SessionProvider, SessionRenameAdapter, SessionTitleProvider
 {
@@ -60,22 +57,23 @@ export class CodexSessionProvider
 		return results;
 	}
 
-	discoverSessionId(
+	discoverSessionCandidates(
 		cwd: string,
 		knownSessionIds: ReadonlySet<string>,
-	): string | undefined {
+	): SessionInfo[] {
 		const normalizedCwd = path.resolve(cwd);
-		const candidate = this.scanSessions()
+		return this.scanSessions()
 			.filter(
 				(session) =>
 					path.resolve(session.projectPath) === normalizedCwd &&
-					!knownSessionIds.has(session.sessionId) &&
-					!claimedCodexSessionIds.has(session.sessionId),
+					!knownSessionIds.has(session.sessionId),
 			)
-			.sort((left, right) => right.created.localeCompare(left.created))[0];
-		if (!candidate) return undefined;
-		claimedCodexSessionIds.add(candidate.sessionId);
-		return candidate.sessionId;
+			.sort((left, right) => right.created.localeCompare(left.created));
+	}
+
+	/** True when a rollout file for `sessionId` exists in this Codex home. */
+	hasSession(sessionId: string): boolean {
+		return this.findSessionFile(sessionId) !== null;
 	}
 
 	findSessionFile(sessionId: string): string | null {
@@ -95,19 +93,11 @@ export class CodexSessionProvider
 	}
 
 	readTitle(filePath: string): string | null {
-		let fd: number | undefined;
 		try {
-			fd = fs.openSync(filePath, "r");
-			const buffer = Buffer.alloc(CHUNK_SIZE);
-			const bytesRead = fs.readSync(fd, buffer, 0, CHUNK_SIZE, 0);
-			if (bytesRead === 0) return null;
+			const firstLine = readFirstJsonlLine(filePath);
+			if (!firstLine) return null;
 
-			const content = buffer.toString("utf-8", 0, bytesRead);
-			const firstNewline = content.indexOf("\n");
-			const firstLine =
-				firstNewline >= 0 ? content.slice(0, firstNewline) : content;
-
-			const parsed = JSON.parse(firstLine.trim());
+			const parsed = JSON.parse(firstLine);
 			if (parsed.type !== "session_meta" || !parsed.payload) return null;
 
 			const metadataTitle =
@@ -140,6 +130,27 @@ export class CodexSessionProvider
 										: null;
 						if (message?.trim()) return message.trim();
 					}
+					if (
+						event.type === "response_item" &&
+						payload?.type === "message" &&
+						payload.role === "user"
+					) {
+						const content = Array.isArray(payload.content)
+							? (payload.content as unknown[])
+									.map((part: unknown) =>
+										part && typeof part === "object" && "text" in part
+											? (part as { text?: unknown }).text
+											: undefined,
+									)
+									.filter(
+										(text: unknown): text is string => typeof text === "string",
+									)
+									.join("\n")
+							: "";
+						if (content.trim() && !content.includes("<environment_context>")) {
+							return content.trim();
+						}
+					}
 				} catch {
 					// Ignore malformed trailing events.
 				}
@@ -147,8 +158,6 @@ export class CodexSessionProvider
 			return null;
 		} catch {
 			return null;
-		} finally {
-			if (fd !== undefined) fs.closeSync(fd);
 		}
 	}
 
@@ -179,15 +188,19 @@ export class CodexSessionProvider
 				const payload = event.payload as Record<string, unknown> | undefined;
 				const type = event.type;
 				const eventType = typeof payload?.type === "string" ? payload.type : "";
+				const observedAt =
+					typeof event.timestamp === "string" ? event.timestamp : undefined;
 				if (type === "user_message") {
 					signal = {
 						status: "working",
 						evidence: "codex.user_message",
+						observedAt,
 					};
 				} else if (type === "event_msg" && eventType === "task_started") {
 					signal = {
 						status: "working",
 						evidence: "codex.task_started",
+						observedAt,
 					};
 				} else if (
 					type === "event_msg" &&
@@ -197,16 +210,19 @@ export class CodexSessionProvider
 					signal = {
 						status: "waiting_for_user",
 						evidence: `codex.${String(eventType)}`,
+						observedAt,
 					};
 				} else if (type === "event_msg" && eventType === "task_complete") {
 					signal = {
 						status: "idle",
 						evidence: "codex.task_complete",
+						observedAt,
 					};
 				} else if (type === "event_msg" && eventType === "turn_aborted") {
 					signal = {
 						status: "idle",
 						evidence: "codex.turn_aborted",
+						observedAt,
 					};
 				} else if (
 					type === "event_msg" &&
@@ -215,6 +231,7 @@ export class CodexSessionProvider
 					signal = {
 						status: "failed",
 						evidence: `codex.${String(eventType)}`,
+						observedAt,
 					};
 				} else if (
 					type === "response_item" &&
@@ -223,6 +240,7 @@ export class CodexSessionProvider
 					signal = {
 						status: "working",
 						evidence: `codex.${String(eventType)}`,
+						observedAt,
 					};
 				}
 				return signal;
@@ -261,34 +279,35 @@ export class CodexSessionProvider
 	}
 
 	private parseSessionFile(filePath: string): SessionInfo | null {
-		let fd: number | undefined;
 		try {
-			fd = fs.openSync(filePath, "r");
-			const buffer = Buffer.alloc(CHUNK_SIZE);
-			const bytesRead = fs.readSync(fd, buffer, 0, CHUNK_SIZE, 0);
-			if (bytesRead === 0) return null;
+			// `session_meta` embeds the full base instructions and is far larger
+			// than a fixed 4 KB buffer; read the whole first record.
+			const firstLine = readFirstJsonlLine(filePath);
+			if (!firstLine) return null;
 
-			const content = buffer.toString("utf-8", 0, bytesRead);
-			const firstNewline = content.indexOf("\n");
-			const firstLine =
-				firstNewline >= 0 ? content.slice(0, firstNewline) : content;
-
-			const parsed = JSON.parse(firstLine.trim());
+			const parsed = JSON.parse(firstLine);
 			if (parsed.type !== "session_meta" || !parsed.payload) return null;
 
-			const sessionId = parsed.payload.id || "";
+			const sessionId = parsed.payload.id || parsed.payload.session_id || "";
 			if (!sessionId) return null;
+
+			// `session_meta` records the session start under `timestamp`; there is
+			// no `created` field. Reading the wrong key left every session with an
+			// empty date, which made candidate ordering dependent on directory walk.
+			const created =
+				parsed.payload.timestamp ||
+				parsed.payload.created ||
+				parsed.timestamp ||
+				"";
 
 			return {
 				sessionId,
 				prompt: parsed.payload.title || parsed.payload.first_user_message || "",
-				created: parsed.payload.created || "",
+				created: typeof created === "string" ? created : "",
 				projectPath: parsed.payload.cwd || "",
 			};
 		} catch {
 			return null;
-		} finally {
-			if (fd !== undefined) fs.closeSync(fd);
 		}
 	}
 

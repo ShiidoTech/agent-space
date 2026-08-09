@@ -20,10 +20,14 @@ Implement `CodingAgentProvider` from
 
 Expose session behavior through `sessionAdapter` rather than wiring a watcher
 or parser in `extension.ts`. Its `readName()` method implements naming;
-`scanSessions()` and `discoverSessionId(cwd, knownSessionIds)` implement
-provider-owned discovery. `discoverSessionId()` must not return a session from
-`knownSessionIds`, and must reserve a returned ID so two agents sharing a cwd
-cannot claim the same session.
+`scanSessions()` enumerates provider sessions. An optional
+`discoverSessionCandidates(cwd, knownSessionIds)` may provide best-effort
+candidates, but it is never ownership proof and must not reserve or assign a
+session. An optional `correlateOwnedSession(cwd, knownSessionIds)` may return a
+new session ID only when provider-specific data proves that this exact
+Agent Space launch owns it. CWD, timing, ordering, uniqueness, and an internal
+reservation do not satisfy that contract. If the provider cannot provide this
+correlation, new sessions remain fail-closed until explicit user attachment.
 
 Session naming is the provider session title used by Agent Space for the agent
 display name; it is not a rename of the native terminal prompt. Working means
@@ -92,3 +96,27 @@ declare the local launcher privately:
 
 The built-in Claude adapter is reused with that separate `sessionsDir`; the
 project config does not contain the wrapper command or personal paths.
+`sessionsDir` accepts either the profile root (`~/.claude-perso`) or the
+transcripts directory itself (`~/.claude-perso/projects`) — both resolve to the
+same store.
+
+Enabling that private launcher on a curated project is what
+`.agentspace/config.local.json` is for. Add `.agentspace/config.local.json` to
+that repository's `.gitignore`; Agent Space does not modify repository ignore
+rules. The file is intended to remain untracked, has the same shape as
+`config.json`, and unions into `agents.enabled` rather than replacing it:
+
+```json
+{
+  "agents": {
+    "enabled": ["claude-perso"],
+    "default": "claude-perso"
+  }
+}
+```
+
+With the committed config above, this machine offers `codex`, `opencode` and
+`claude-perso`, and defaults to `claude-perso`; every other checkout is
+unaffected. Agent Space only reads this file — `saveProjectConfig` writes to
+`config.json` alone, so a base branch changed from the UI never bakes a personal
+profile into the committed file.

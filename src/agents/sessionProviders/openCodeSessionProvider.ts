@@ -7,21 +7,7 @@ import type {
 
 export interface OpenCodeAttentionSignal {
 	status: "working" | "waiting_for_user" | "idle" | "failed";
-	reason: string;
-}
-
-/**
- * In-memory reservation of opencode session ids picked by a capture. opencode
- * session ids are globally unique, so a flat set is enough: once a session is
- * claimed by one capture, no concurrent capture for the same cwd can select
- * it again. Reserved ids are never released — a session belongs to exactly one
- * agent for the lifetime of the process.
- */
-const claimedSessionIds = new Set<string>();
-
-/** Reset the in-memory claim registry. Exposed for tests. */
-export function resetClaimedOpenCodeSessionIds(): void {
-	claimedSessionIds.clear();
+	evidence: string;
 }
 
 export class OpenCodeSessionProvider
@@ -31,8 +17,12 @@ export class OpenCodeSessionProvider
 
 	scanSessions(): SessionInfo[] {
 		try {
+			// The window covers every project on the machine, so it has to be wide
+			// enough that a session started in one worktree is still visible after
+			// work happens elsewhere. Binding can take minutes: opencode writes the
+			// session row on the first prompt, not at launch.
 			const raw = execSync(
-				'opencode db "SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 20" --format json',
+				'opencode db "SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200" --format json',
 				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
 			);
 			const rows = JSON.parse(raw);
@@ -70,11 +60,26 @@ export class OpenCodeSessionProvider
 		}
 	}
 
-	discoverSessionId(
+	/** True when opencode still has a session row with this id. */
+	hasSession(sessionId: string): boolean {
+		if (!isSafeSessionId(sessionId)) return false;
+		try {
+			const raw = execSync(
+				`opencode db "SELECT id FROM session WHERE id = '${sessionId}'" --format json`,
+				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
+			);
+			const rows = JSON.parse(raw);
+			return Array.isArray(rows) && rows.length > 0;
+		} catch {
+			return false;
+		}
+	}
+
+	discoverSessionCandidates(
 		cwd: string,
 		knownSessionIds: ReadonlySet<string>,
-	): string | undefined {
-		return claimNewestSessionIdForDirectory(cwd, new Set(knownSessionIds));
+	): SessionInfo[] {
+		return sessionsForDirectory(cwd, knownSessionIds);
 	}
 
 	/**
@@ -103,7 +108,7 @@ export class OpenCodeSessionProvider
 				const tool = typeof gate.tool === "string" ? gate.tool : "question";
 				return {
 					status: "waiting_for_user",
-					reason: `OpenCode is waiting on the ${tool} tool`,
+					evidence: `opencode.${tool}.waiting`,
 				};
 			}
 
@@ -113,7 +118,7 @@ export class OpenCodeSessionProvider
 			if (role === "user") {
 				return {
 					status: "working",
-					reason:
+					evidence:
 						"OpenCode has received user input and has not completed a response",
 				};
 			}
@@ -122,7 +127,7 @@ export class OpenCodeSessionProvider
 			if (message.error) {
 				return {
 					status: "failed",
-					reason: "OpenCode recorded an error on the current assistant turn",
+					evidence: "opencode.assistant.error",
 				};
 			}
 
@@ -130,13 +135,13 @@ export class OpenCodeSessionProvider
 			if (time && time.completed !== undefined && time.completed !== null) {
 				return {
 					status: "idle",
-					reason: "OpenCode completed its current turn",
+					evidence: "opencode.assistant.completed",
 				};
 			}
 
 			return {
 				status: "working",
-				reason: "OpenCode has an assistant turn in progress",
+				evidence: "opencode.assistant.working",
 			};
 		} catch {
 			return null;
@@ -198,28 +203,15 @@ export function sessionIdsForDirectory(cwd: string): Set<string> {
 }
 
 /**
- * Atomically claim the newest opencode session started in `cwd` that is not
- * among `knownIds` (the pre-launch snapshot) and not already claimed by a
- * concurrent capture. The scan and the claim happen in one synchronous step,
- * so two captures polling the same cwd can never both select the same
- * session: the first one reserves it, the others skip it and keep polling
- * until a newer session appears.
+ * Enumerate OpenCode candidates. This is intentionally best-effort and does
+ * not reserve or assign a session to an Agent Space agent.
  */
-export function claimNewestSessionIdForDirectory(
+export function sessionsForDirectory(
 	cwd: string,
-	knownIds: Set<string>,
-): string | undefined {
+	knownIds: ReadonlySet<string> = new Set(),
+): SessionInfo[] {
 	const provider = new OpenCodeSessionProvider();
-	for (const s of provider.scanSessions()) {
-		if (
-			s.projectPath === cwd &&
-			s.sessionId &&
-			!knownIds.has(s.sessionId) &&
-			!claimedSessionIds.has(s.sessionId)
-		) {
-			claimedSessionIds.add(s.sessionId);
-			return s.sessionId;
-		}
-	}
-	return undefined;
+	return provider
+		.scanSessions()
+		.filter((s) => s.projectPath === cwd && !knownIds.has(s.sessionId));
 }

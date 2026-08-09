@@ -2,21 +2,30 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * Per-repository Agent Space configuration, read from `<repo>/.agentspace/config.json`.
+ * Per-repository Agent Space configuration, read from
+ * `<repo>/.agentspace/config.json` with an optional untracked overlay at
+ * `<repo>/.agentspace/config.local.json`.
  *
- * This file holds *shareable project conventions* and may be committed to the
- * repository so the whole team branches where the project actually works:
+ * `config.json` holds *shareable project conventions* and may be committed to
+ * the repository so the whole team branches where the project actually works:
  * - the real base branch (e.g. `v2_ia_first`), independent of whatever branch
  *   happens to be checked out in the main checkout;
  * - the branch kinds offered at feature creation (e.g. `feature`/`fix`);
  * - a dedicated worktrees directory, distinct from the main checkout.
  * - the provider IDs exposed by this project and its preferred provider.
  *
- * Coding tool commands are NOT part of this file: their identity and family are
+ * `config.local.json` holds the same shape but belongs to one machine and is
+ * gitignored. It exists because `agents.enabled` is an allowlist: without an
+ * overlay, using a personal CLI profile on a curated project would mean naming
+ * that profile in the committed file, which puts a machine-local wrapper
+ * (`claude-perso`, a private fork, a corporate build) into everyone's checkout
+ * where it resolves to nothing. The overlay *adds* to the shared allowlist
+ * rather than replacing it, so local additions never remove a team convention.
+ *
+ * Coding tool commands are in neither file: their identity and family are
  * resolved exclusively through `agentSpace.codingTools` (built-ins merged with
  * user/workspace settings). User-local values (a personal CLI profile, a
- * private sessions directory, machine-specific `env`) belong in that setting,
- * in user configuration or workspace settings you keep explicitly untracked.
+ * private sessions directory, machine-specific `env`) belong in that setting.
  */
 export interface ProjectConfig {
 	baseBranch?: string;
@@ -48,11 +57,14 @@ export function getProjectAgentPolicy(
 
 const CONFIG_DIR_NAME = ".agentspace";
 const CONFIG_FILE_NAME = "config.json";
+/** Untracked, machine-local overlay. Never written by Agent Space. */
+export const LOCAL_CONFIG_FILE_NAME = "config.local.json";
 
 let cachedConfig:
 	| {
 			key: string;
 			mtimeMs: number;
+			localMtimeMs: number;
 			config: ProjectConfig;
 	  }
 	| undefined;
@@ -67,45 +79,126 @@ export function expandHome(p: string): string {
 	return p;
 }
 
+function readConfigFile(file: string): ProjectConfig | undefined {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return undefined;
+		}
+		return parsed as ProjectConfig;
+	} catch {
+		return undefined;
+	}
+}
+
+function mtimeOf(file: string): number | undefined {
+	try {
+		return fs.statSync(file).mtimeMs;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
- * Read the project config for a repository. Falls back to an empty config
- * when the file does not exist or is unparseable (fail-open for config,
+ * Overlay a machine-local config on the shared one.
+ *
+ * `agents.enabled` is unioned, shared entries first: the overlay's job is to
+ * add a personal profile to a curated project, not to silently drop the agents
+ * the team agreed on. Everything else, including `agents.default`, is a plain
+ * override — a machine that prefers its own profile says so once.
+ */
+export function mergeProjectConfig(
+	shared: ProjectConfig,
+	local: ProjectConfig,
+): ProjectConfig {
+	const merged: ProjectConfig = { ...shared, ...local };
+	if (shared.agents || local.agents) {
+		const enabled =
+			shared.agents?.enabled || local.agents?.enabled
+				? [
+						...new Set([
+							...(shared.agents?.enabled ?? []),
+							...(local.agents?.enabled ?? []),
+						]),
+					]
+				: undefined;
+		merged.agents = {
+			...shared.agents,
+			...local.agents,
+			...(enabled ? { enabled } : {}),
+		};
+	}
+	return merged;
+}
+
+/**
+ * Read the effective project config: the committed conventions with the
+ * untracked machine-local overlay applied. Falls back to an empty config when
+ * neither file exists or they are unparseable (fail-open for config,
  * fail-closed for deletion).
  */
 export function loadProjectConfig(repoRoot: string): ProjectConfig {
 	const dir = path.join(repoRoot, CONFIG_DIR_NAME);
 	const file = path.join(dir, CONFIG_FILE_NAME);
+	const localFile = path.join(dir, LOCAL_CONFIG_FILE_NAME);
 
-	let mtimeMs = 0;
-	try {
-		mtimeMs = fs.statSync(file).mtimeMs;
-	} catch {
+	const mtimeMs = mtimeOf(file);
+	const localMtimeMs = mtimeOf(localFile);
+	if (mtimeMs === undefined && localMtimeMs === undefined) {
 		cachedConfig = undefined;
 		return {};
 	}
 
-	if (cachedConfig?.key === file && cachedConfig.mtimeMs === mtimeMs) {
+	if (
+		cachedConfig?.key === file &&
+		cachedConfig.mtimeMs === (mtimeMs ?? 0) &&
+		cachedConfig.localMtimeMs === (localMtimeMs ?? 0)
+	) {
 		return cachedConfig.config;
 	}
 
-	try {
-		const raw = fs.readFileSync(file, "utf-8");
-		const parsed = JSON.parse(raw) as ProjectConfig;
-		cachedConfig = { key: file, mtimeMs, config: parsed };
-		return parsed;
-	} catch {
-		return {};
-	}
+	const shared = mtimeMs === undefined ? {} : (readConfigFile(file) ?? {});
+	const local =
+		localMtimeMs === undefined ? {} : (readConfigFile(localFile) ?? {});
+	const config = mergeProjectConfig(shared, local);
+	cachedConfig = {
+		key: file,
+		mtimeMs: mtimeMs ?? 0,
+		localMtimeMs: localMtimeMs ?? 0,
+		config,
+	};
+	return config;
 }
 
-/** Persist shareable project conventions in the repository config file. */
+/** Read only the committed conventions, without the machine-local overlay. */
+export function loadSharedProjectConfig(repoRoot: string): ProjectConfig {
+	return (
+		readConfigFile(path.join(repoRoot, CONFIG_DIR_NAME, CONFIG_FILE_NAME)) ?? {}
+	);
+}
+
+/** True when this repository carries an untracked machine-local overlay. */
+export function hasLocalProjectConfig(repoRoot: string): boolean {
+	return (
+		mtimeOf(path.join(repoRoot, CONFIG_DIR_NAME, LOCAL_CONFIG_FILE_NAME)) !==
+		undefined
+	);
+}
+
+/**
+ * Persist shareable project conventions in the committed config file.
+ *
+ * Deliberately reads the shared file rather than the effective config: writing
+ * a base branch must never bake the machine-local overlay — a personal CLI
+ * profile, a private worktrees path — into the file everyone else checks out.
+ */
 export function saveProjectConfig(
 	repoRoot: string,
 	updates: Partial<ProjectConfig>,
 ): ProjectConfig {
 	const dir = path.join(repoRoot, CONFIG_DIR_NAME);
 	const file = path.join(dir, CONFIG_FILE_NAME);
-	const current = loadProjectConfig(repoRoot);
+	const current = loadSharedProjectConfig(repoRoot);
 	const config = { ...current, ...updates } as ProjectConfig;
 
 	for (const key of Object.keys(config) as Array<keyof ProjectConfig>) {
@@ -118,7 +211,10 @@ export function saveProjectConfig(
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
 	cachedConfig = undefined;
-	return config;
+	// Callers install the result as the running project config, so hand back the
+	// effective view: only the shared half was written, but the overlay is still
+	// in force.
+	return loadProjectConfig(repoRoot);
 }
 
 /** Resolve the effective worktree base for a project. */
