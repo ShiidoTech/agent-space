@@ -25,6 +25,7 @@ import {
 } from "./git/gitViewHandoff";
 import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
+import { HomeSidebarProvider } from "./home/homeSidebarProvider";
 import { PrerequisiteChecker } from "./prerequisites";
 import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
@@ -179,6 +180,16 @@ export async function activate(
 		),
 	);
 	context.subscriptions.push({ dispose: () => sidebarProvider.stopPolling() });
+
+	const homeSidebarProvider = new HomeSidebarProvider(() => {
+		void showAgentSpace();
+	}, context.extensionUri);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(
+			HomeSidebarProvider.viewType,
+			homeSidebarProvider,
+		),
+	);
 
 	const ensureHomePanel = () => {
 		const panel = HomePanel.createOrShow(
@@ -389,6 +400,7 @@ export async function activate(
 
 	projectManager.onChange(() => {
 		sidebarProvider.refresh();
+		homeSidebarProvider.refresh();
 		const home = HomePanel.getInstance();
 		if (home) home.refresh();
 	});
@@ -419,40 +431,6 @@ export async function activate(
 				await workspaceIsolation.enter();
 			},
 		),
-		vscode.commands.registerCommand(
-			"agentSpace.openProjectConfig",
-			async (projectId?: string) => {
-				if (!projectId) return;
-				const project = projectManager
-					.getProjects()
-					.find((candidate) => candidate.id === projectId);
-				if (!project) return;
-				const uri = vscode.Uri.joinPath(
-					vscode.Uri.file(project.repoPath),
-					".agentspace",
-					"config.json",
-				);
-				try {
-					const document = await vscode.workspace.openTextDocument(uri);
-					await vscode.window.showTextDocument(document);
-				} catch {
-					vscode.window.showInformationMessage(
-						`No .agentspace/config.json exists yet for ${project.name}. Add one in the repository to define shared project conventions.`,
-					);
-				}
-			},
-		),
-		vscode.commands.registerCommand("agentSpace.openProviderDocs", async () => {
-			await vscode.commands.executeCommand(
-				"vscode.open",
-				vscode.Uri.joinPath(
-					context.extensionUri,
-					"docs",
-					"providers",
-					"creating-a-provider.md",
-				),
-			);
-		}),
 	);
 
 	// Command: New Feature

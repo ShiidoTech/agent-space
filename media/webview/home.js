@@ -9,7 +9,7 @@ function send(command, data) {
 
 // -- Welcome View Actions ------------------------------------
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
-function openFeature(featureId) {
+function resumeFeature(featureId) {
 	send("showFeature", { featureId });
 }
 
@@ -38,17 +38,6 @@ function showProject(projectId) {
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function showProjectSettings(projectId) {
 	send("showProjectSettings", { projectId });
-}
-
-/** @param {string} projectId */
-// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
-function openProjectConfig(projectId) {
-	send("openProjectConfig", { projectId });
-}
-
-// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
-function openProviderDocs() {
-	send("openProviderDocs");
 }
 
 // -- Feature Home Actions ------------------------------------
