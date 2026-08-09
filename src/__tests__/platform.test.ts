@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Mock node:child_process and node:fs at the top level so every dynamic
 // import() of the platform module picks up these mocks.
 vi.mock("node:child_process", () => ({
+	execFileSync: vi.fn(),
 	execSync: vi.fn(),
 	exec: vi.fn(),
 }));
@@ -11,10 +12,11 @@ vi.mock("node:fs", () => ({
 	existsSync: vi.fn(),
 }));
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
 const mockExecSync = vi.mocked(execSync);
+const mockExecFileSync = vi.mocked(execFileSync);
 const mockExistsSync = vi.mocked(existsSync);
 
 // Helper: dynamically import the platform module so each test gets fresh
@@ -473,6 +475,62 @@ describe("platform", () => {
 				Object.defineProperty(process, "platform", {
 					value: originalPlatform,
 				});
+			}
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// execFile
+	// -----------------------------------------------------------------------
+	describe("execFile", () => {
+		it("uses direct argv execution on Linux", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { value: "linux" });
+			try {
+				mockExecFileSync.mockReturnValue("ok");
+				const { execFile } = await loadPlatform();
+				expect(
+					execFile("tmux", ["kill-session", "-t", "agent-space-x; evil"]),
+				).toBe("ok");
+				expect(mockExecFileSync).toHaveBeenCalledWith(
+					"tmux",
+					["kill-session", "-t", "agent-space-x; evil"],
+					expect.objectContaining({ shell: false }),
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { value: originalPlatform });
+			}
+		});
+
+		it("uses Git Bash without interpolating Windows tmux arguments", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { value: "win32" });
+			const originalEnv = { ...process.env };
+			process.env.PROGRAMFILES = "C:\\Program Files";
+			try {
+				mockExistsSync.mockImplementation(
+					(p) => p === "C:\\Program Files\\Git\\bin\\bash.exe",
+				);
+				mockExecFileSync.mockReturnValue("ok");
+				const { execFile } = await loadPlatform();
+				execFile("tmux", ["kill-session", "-t", "agent-space-x; evil"]);
+				expect(mockExecFileSync).toHaveBeenCalledWith(
+					"C:\\Program Files\\Git\\bin\\bash.exe",
+					[
+						"-lc",
+						String.raw`exec "$1" "\${@:2}"`,
+						"tmux",
+						"kill-session",
+						"-t",
+						"agent-space-x; evil",
+					],
+					expect.objectContaining({
+						shell: "C:\\Program Files\\Git\\bin\\bash.exe",
+					}),
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { value: originalPlatform });
+				process.env = originalEnv;
 			}
 		});
 	});
