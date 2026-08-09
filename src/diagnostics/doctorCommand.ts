@@ -19,6 +19,7 @@ export function registerDoctorCommand(context: vscode.ExtensionContext): void {
 						typeof context.extension.packageJSON?.version === "string"
 							? context.extension.packageJSON.version
 							: "unknown",
+					remoteName: vscode.env.remoteName,
 					projects: globalStore.getProjects(),
 					tools: toolRegistry.getTools(),
 					defaultToolId: toolRegistry.getDefaultToolId(),

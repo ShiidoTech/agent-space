@@ -29,6 +29,7 @@ export interface DoctorReport {
 export interface DoctorInput {
 	extensionId: string;
 	extensionVersion: string;
+	remoteName?: string;
 	projects: Project[];
 	tools: CodingTool[];
 	defaultToolId?: string;
@@ -218,6 +219,12 @@ export function runDoctor(
 	const configChecks: DoctorCheck[] = [];
 
 	add(systemChecks, "info", "Runtime", runtimeLabel());
+	add(
+		systemChecks,
+		"info",
+		"VS Code extension host",
+		input.remoteName ?? "local",
+	);
 
 	const gitAvailable = deps.commandExists("git");
 	if (gitAvailable) {

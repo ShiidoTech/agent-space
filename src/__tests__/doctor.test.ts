@@ -111,6 +111,13 @@ describe("runDoctor", () => {
 		expect(report.markdown).toContain("found but functional smoke test failed");
 	});
 
+	it("reports the VS Code remote extension host context", () => {
+		const report = runDoctor(input({ remoteName: "wsl" }), deps());
+
+		expect(report.markdown).toContain("VS Code extension host");
+		expect(report.markdown).toContain("wsl");
+	});
+
 	it("flags an explicitly configured base branch that does not exist", () => {
 		const report = runDoctor(input(), deps({ branchExists: () => false }));
 
