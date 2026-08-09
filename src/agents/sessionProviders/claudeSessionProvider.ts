@@ -83,9 +83,13 @@ export class ClaudeSessionProvider
 	 * and the first conversational event carries `cwd` and `timestamp`, which is
 	 * what binding needs to attribute a session to a worktree.
 	 */
-	scanSessions(): SessionInfo[] {
+	scanSessions(options?: { fresh?: boolean }): SessionInfo[] {
 		const now = Date.now();
-		if (this.scanCache && now - this.scanCache.builtAt < SCAN_CACHE_MS) {
+		if (
+			!options?.fresh &&
+			this.scanCache &&
+			now - this.scanCache.builtAt < SCAN_CACHE_MS
+		) {
 			return this.scanCache.sessions;
 		}
 		const byId = new Map<string, SessionInfo>();

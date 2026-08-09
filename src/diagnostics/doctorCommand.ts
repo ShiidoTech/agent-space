@@ -1,7 +1,11 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "../agents/codingToolRegistry";
-import { loadProjectConfig } from "../projects/projectConfig";
+import { FeatureManager } from "../features/featureManager";
+import {
+	loadProjectConfig,
+	resolveWorktreeBaseDir,
+} from "../projects/projectConfig";
 import { GlobalStore } from "../storage/globalStore";
 import { Store } from "../storage/store";
 import type { Project } from "../types";
@@ -16,7 +20,7 @@ import { defaultDoctorDeps, runDoctor } from "./doctor";
  * Read-only throughout: sessions are looked up, never created, adopted or
  * repaired. Doctor's job is to make an unbound agent visible, not to fix it.
  */
-function probeAgents(
+export function probeAgents(
 	storagePath: string,
 	projects: Project[],
 	toolRegistry: CodingToolRegistry,
@@ -32,7 +36,16 @@ function probeAgents(
 		}
 
 		const store = new Store(path.join(storagePath, "projects", project.id));
-		const features = store.loadFeatures();
+		const featureManager = new FeatureManager(
+			store,
+			project.repoPath,
+			resolveWorktreeBaseDir(project.repoPath, config, ".worktrees"),
+			config,
+		);
+		const features = [
+			featureManager.getBaseFeature(project.id),
+			...store.loadFeatures(),
+		];
 		for (const feature of features) {
 			for (const agent of store.loadAgents(feature.id)) {
 				const resolution = toolRegistry.describeAgentTool(agent.toolId);

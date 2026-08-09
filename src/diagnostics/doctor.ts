@@ -313,6 +313,7 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 	}
 
 	let bound = 0;
+	let unsupported = 0;
 	for (const probe of agents) {
 		const label = `${probe.projectName} / ${probe.featureLabel} / ${probe.agentName}`;
 		const facts = [`tool \`${probe.toolId}\``];
@@ -338,6 +339,7 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 		let remediation: string | undefined;
 		if (probe.bindingState === "unsupported") {
 			level = "info";
+			unsupported += 1;
 		} else if (probe.sessionResolved === true) {
 			level = "ok";
 			bound += 1;
@@ -362,12 +364,17 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 		add(checks, level, label, facts.join("; "), remediation);
 	}
 
+	const expected = agents.length - unsupported;
 	add(
 		checks,
-		bound === agents.length ? "ok" : bound === 0 ? "error" : "warn",
+		expected === 0 || bound === expected
+			? "ok"
+			: bound === 0
+				? "error"
+				: "warn",
 		"Session binding",
-		`${bound}/${agents.length} agent${agents.length === 1 ? "" : "s"} bound to a provider session`,
-		bound === agents.length
+		`${bound}/${expected} agent${expected === 1 ? "" : "s"} requiring binding are bound to a provider session${unsupported ? `; ${unsupported} explicitly unsupported` : ""}`,
+		expected === 0 || bound === expected
 			? undefined
 			: "Naming, attention and resume all read through this binding; unbound agents have none of them.",
 	);

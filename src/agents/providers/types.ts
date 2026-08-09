@@ -44,7 +44,7 @@ export interface ProviderAttentionSignal {
 }
 
 export interface ProviderSessionAdapter extends SessionRenameAdapter {
-	scanSessions?(): SessionInfo[];
+	scanSessions?(options?: { fresh?: boolean }): SessionInfo[];
 	/**
 	 * True when `sessionId` resolves to a session that actually exists in this
 	 * provider's store. Lets Agent Space tell "not bound yet" apart from "bound

@@ -7,7 +7,7 @@ export interface SessionInfo {
 
 export interface SessionProvider {
 	toolId: string;
-	scanSessions(): SessionInfo[];
+	scanSessions(options?: { fresh?: boolean }): SessionInfo[];
 }
 
 export interface SessionRenameAdapter {

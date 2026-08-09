@@ -56,10 +56,12 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	},
 	{
 		id: "opencode",
-		capabilities: fullSessionCapabilities(),
+		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
 		launchArgs: () => [],
 		resumeArgs: (sessionId) =>
 			sessionId ? ["--session", sessionId] : ["--continue"],
+		getAttentionSignal: (sessionId) =>
+			openCodeSessionAdapter.readAttention(sessionId) ?? undefined,
 		sessionAdapter: openCodeSessionAdapter,
 	},
 	{

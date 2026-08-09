@@ -7,7 +7,7 @@ import type {
 
 export interface OpenCodeAttentionSignal {
 	status: "working" | "waiting_for_user" | "idle" | "failed";
-	reason: string;
+	evidence: string;
 }
 
 /**
@@ -133,7 +133,7 @@ export class OpenCodeSessionProvider
 				const tool = typeof gate.tool === "string" ? gate.tool : "question";
 				return {
 					status: "waiting_for_user",
-					reason: `OpenCode is waiting on the ${tool} tool`,
+					evidence: `opencode.${tool}.waiting`,
 				};
 			}
 
@@ -143,7 +143,7 @@ export class OpenCodeSessionProvider
 			if (role === "user") {
 				return {
 					status: "working",
-					reason:
+					evidence:
 						"OpenCode has received user input and has not completed a response",
 				};
 			}
@@ -152,7 +152,7 @@ export class OpenCodeSessionProvider
 			if (message.error) {
 				return {
 					status: "failed",
-					reason: "OpenCode recorded an error on the current assistant turn",
+					evidence: "opencode.assistant.error",
 				};
 			}
 
@@ -160,13 +160,13 @@ export class OpenCodeSessionProvider
 			if (time && time.completed !== undefined && time.completed !== null) {
 				return {
 					status: "idle",
-					reason: "OpenCode completed its current turn",
+					evidence: "opencode.assistant.completed",
 				};
 			}
 
 			return {
 				status: "working",
-				reason: "OpenCode has an assistant turn in progress",
+				evidence: "opencode.assistant.working",
 			};
 		} catch {
 			return null;

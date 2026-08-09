@@ -1,4 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("vscode", () => ({
+	workspace: {
+		getConfiguration: vi.fn(() => ({
+			get: (_key: string, defaultValue?: unknown) => defaultValue,
+		})),
+	},
+}));
+
+import { BUILTIN_PROVIDERS } from "../agents/codingToolRegistry";
+import { resolveAttention } from "../agents/providers/attentionResolver";
 import {
 	claimNewestSessionIdForDirectory,
 	OpenCodeSessionProvider,
@@ -21,6 +32,43 @@ beforeEach(() => {
 });
 
 describe("OpenCodeSessionProvider", () => {
+	it.each([
+		["question", "waiting_for_user", "opencode.question.waiting"],
+		["plan_exit", "waiting_for_user", "opencode.plan_exit.waiting"],
+		["working", "working", "opencode.assistant.working"],
+		["idle", "idle", "opencode.assistant.completed"],
+		["failed", "failed", "opencode.assistant.error"],
+	])(
+		"exposes structured %s attention through the builtin provider",
+		(tool, status, evidence) => {
+			const message =
+				status === "idle"
+					? { role: "assistant", time: { completed: 123 } }
+					: status === "failed"
+						? { role: "assistant", error: "failed" }
+						: status === "working"
+							? { role: "assistant" }
+							: { role: "assistant" };
+			mockExecSync.mockReturnValue(
+				JSON.stringify([
+					{
+						message_data: JSON.stringify(message),
+						gate_data:
+							status === "waiting_for_user"
+								? JSON.stringify({ tool, state: { status: "pending" } })
+								: null,
+					},
+				]),
+			);
+
+			const provider = BUILTIN_PROVIDERS.find((p) => p.id === "opencode");
+			if (!provider) throw new Error("builtin OpenCode provider missing");
+			expect(resolveAttention(provider, "oc-bound")).toEqual({
+				status,
+				evidence,
+			});
+		},
+	);
 	it("parses opencode db output into SessionInfo[]", () => {
 		mockExecSync.mockReturnValue(
 			JSON.stringify([

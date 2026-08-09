@@ -97,7 +97,9 @@ transcripts directory itself (`~/.claude-perso/projects`) — both resolve to th
 same store.
 
 Enabling that private launcher on a curated project is what
-`.agentspace/config.local.json` is for. It is gitignored, has the same shape as
+`.agentspace/config.local.json` is for. Add `.agentspace/config.local.json` to
+that repository's `.gitignore`; Agent Space does not modify repository ignore
+rules. The file is intended to remain untracked, has the same shape as
 `config.json`, and unions into `agents.enabled` rather than replacing it:
 
 ```json

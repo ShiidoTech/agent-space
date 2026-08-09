@@ -45,4 +45,27 @@ describe("ClaudeSessionProvider attention", () => {
 			evidence: "claude.result",
 		});
 	});
+
+	it("bypasses the scan cache for a launch baseline", () => {
+		const projectDir = path.join(tmpDir, "project");
+		fs.mkdirSync(projectDir, { recursive: true });
+		const makeSession = (id: string) =>
+			JSON.stringify({
+				sessionId: id,
+				cwd: "/tmp/project",
+				timestamp: "2026-08-09T08:00:00.000Z",
+			});
+		fs.writeFileSync(path.join(projectDir, "old.jsonl"), makeSession("old"));
+		const provider = new ClaudeSessionProvider(tmpDir);
+		provider.scanSessions();
+		fs.writeFileSync(path.join(projectDir, "new.jsonl"), makeSession("new"));
+
+		expect(provider.scanSessions()).toHaveLength(1);
+		expect(
+			provider
+				.scanSessions({ fresh: true })
+				.map((s) => s.sessionId)
+				.sort(),
+		).toEqual(["new", "old"]);
+	});
 });

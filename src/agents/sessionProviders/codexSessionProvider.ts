@@ -136,6 +136,27 @@ export class CodexSessionProvider
 										: null;
 						if (message?.trim()) return message.trim();
 					}
+					if (
+						event.type === "response_item" &&
+						payload?.type === "message" &&
+						payload.role === "user"
+					) {
+						const content = Array.isArray(payload.content)
+							? (payload.content as unknown[])
+									.map((part: unknown) =>
+										part && typeof part === "object" && "text" in part
+											? (part as { text?: unknown }).text
+											: undefined,
+									)
+									.filter(
+										(text: unknown): text is string => typeof text === "string",
+									)
+									.join("\n")
+							: "";
+						if (content.trim() && !content.includes("<environment_context>")) {
+							return content.trim();
+						}
+					}
 				} catch {
 					// Ignore malformed trailing events.
 				}

@@ -38,7 +38,7 @@ describe("OpenCode attention evidence", () => {
 
 		expect(signal).toEqual({
 			status: "working",
-			reason: "OpenCode has an assistant turn in progress",
+			evidence: "opencode.assistant.working",
 		});
 	});
 

@@ -129,7 +129,7 @@ describe("SessionBinder", () => {
 		vi.setSystemTime(new Date("2026-08-09T08:00:00.000Z"));
 	});
 
-	it("binds a session that appears long after the launch window closed", () => {
+	it("does not treat a sole late session as proof of ownership", () => {
 		// The capture this replaces gave up after 7.5s. Real providers write the
 		// session record on the first prompt: 105s later in the measured case.
 		const { projectManager, ctx } = setup([feature()]);
@@ -152,10 +152,11 @@ describe("SessionBinder", () => {
 
 		const outcomes = binder.reconcileAll();
 
-		expect(outcomes[0]?.boundSessionId).toBe("ses_late");
+		expect(outcomes[0]?.boundSessionId).toBeUndefined();
 		const stored = ctx.store.loadAgents("f1")[0];
-		expect(stored.sessionId).toBe("ses_late");
-		expect(stored.sessionBinding?.state).toBe("bound");
+		expect(stored.sessionId).toBeNull();
+		expect(stored.sessionBinding?.state).toBe("ambiguous");
+		expect(stored.sessionBinding?.detail).toContain("manually launched CLI");
 	});
 
 	it("never adopts a session that existed before the agent launched", () => {
@@ -240,7 +241,7 @@ describe("SessionBinder", () => {
 		}
 	});
 
-	it("binds in a shared worktree only once the attribution is forced", () => {
+	it("does not use launch timing to adopt a shared-worktree session", () => {
 		// a2 launched after the only session was created, so it cannot own it and
 		// a1 is the single possible claimant.
 		const { projectManager, ctx } = setup([feature()]);
@@ -277,8 +278,11 @@ describe("SessionBinder", () => {
 		binder.reconcileAll();
 
 		const stored = ctx.store.loadAgents("f1");
-		expect(stored.find((a) => a.id === "a1")?.sessionId).toBe("ses_first");
+		expect(stored.find((a) => a.id === "a1")?.sessionId).toBeNull();
 		expect(stored.find((a) => a.id === "a2")?.sessionId).toBeNull();
+		expect(stored.find((a) => a.id === "a1")?.sessionBinding?.state).toBe(
+			"ambiguous",
+		);
 		expect(stored.find((a) => a.id === "a2")?.sessionBinding?.state).toBe(
 			"pending",
 		);
@@ -358,7 +362,7 @@ describe("SessionBinder", () => {
 		expect(ctx.store.loadAgents("f1")[0].sessionId).toBe("pre-assigned-uuid");
 	});
 
-	it("adopts the real session when a pre-assigned id never materialised", () => {
+	it("does not replace an unverified id with an unproven new session", () => {
 		const { projectManager, ctx } = setup([feature()]);
 		ctx.store.saveAgents("f1", [
 			agentFixture({ sessionId: "pre-assigned-uuid" }),
@@ -381,8 +385,9 @@ describe("SessionBinder", () => {
 
 		const outcomes = binder.reconcileAll();
 
-		expect(outcomes[0]?.boundSessionId).toBe("real-session");
-		expect(outcomes[0]?.binding.detail).toContain("pre-assigned");
+		expect(outcomes[0]?.boundSessionId).toBeUndefined();
+		expect(outcomes[0]?.binding.state).toBe("ambiguous");
+		expect(ctx.store.loadAgents("f1")[0].sessionId).toBe("pre-assigned-uuid");
 	});
 
 	it("marks a provider with no session store as unsupported rather than pending forever", () => {
@@ -504,5 +509,92 @@ describe("SessionBinder", () => {
 
 		expect(hasSession).not.toHaveBeenCalled();
 		expect(ctx.store.loadAgents("f1")[0].sessionBinding?.state).toBe("bound");
+	});
+
+	it("does not persist identical pending reconciliations repeatedly", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const saveAgents = vi.spyOn(ctx.store, "saveAgents");
+		const binder = new SessionBinder(registry(adapter([])), tmux());
+		binder.start(projectManager, 0);
+
+		binder.reconcileAll();
+		const writesAfterFirst = saveAgents.mock.calls.length;
+		binder.reconcileAll();
+		binder.reconcileAll();
+
+		expect(writesAfterFirst).toBe(1);
+		expect(saveAgents).toHaveBeenCalledTimes(writesAfterFirst);
+		expect(ctx.store.loadAgents("f1")[0].sessionBinding?.attempts).toBe(0);
+	});
+
+	it("refreshes a stale bound check once and reuses its five-minute window", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [
+			agentFixture({
+				sessionId: "ses_ok",
+				sessionBinding: {
+					state: "bound",
+					checkedAt: "2026-08-09T07:00:00.000Z",
+					attempts: 1,
+					detail: "Adopted the session this agent started",
+				},
+			}),
+		]);
+		const stub = adapter([]);
+		const hasSession = vi.fn(() => true);
+		stub.hasSession = hasSession;
+		const binder = new SessionBinder(registry(stub), tmux());
+		binder.start(projectManager, 0);
+
+		binder.reconcileAll();
+		vi.setSystemTime(new Date("2026-08-09T08:01:00.000Z"));
+		binder.reconcileAll();
+
+		expect(hasSession).toHaveBeenCalledTimes(1);
+		expect(ctx.store.loadAgents("f1")[0].sessionBinding?.checkedAt).toBe(
+			"2026-08-09T08:00:00.000Z",
+		);
+	});
+
+	it("asks the provider for a fresh launch baseline", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		const agent = agentFixture({
+			sessionBaseline: undefined,
+			launchedAt: undefined,
+		});
+		ctx.store.saveAgents("f1", [agent]);
+		const sessions: SessionInfo[] = [
+			{
+				sessionId: "before",
+				prompt: "",
+				created: "2026-08-09T07:00:00.000Z",
+				projectPath: WORKTREE,
+			},
+		];
+		const scanSessions = vi.fn((options?: { fresh?: boolean }) =>
+			options?.fresh
+				? [
+						...sessions,
+						{
+							sessionId: "just-before-launch",
+							prompt: "",
+							created: "2026-08-09T07:59:59.000Z",
+							projectPath: WORKTREE,
+						},
+					]
+				: sessions.slice(0, 1),
+		);
+		const sessionAdapter = adapter(sessions);
+		sessionAdapter.scanSessions = scanSessions;
+		const binder = new SessionBinder(registry(sessionAdapter), tmux());
+		binder.start(projectManager, 0);
+
+		binder.recordLaunch(ctx, "f1", agent, WORKTREE);
+
+		expect(scanSessions).toHaveBeenCalledWith({ fresh: true });
+		expect(ctx.store.loadAgents("f1")[0].sessionBaseline).toContain(
+			"just-before-launch",
+		);
 	});
 });

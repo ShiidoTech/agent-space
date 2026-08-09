@@ -430,6 +430,29 @@ describe("CodexSessionProvider", () => {
 					"Investigate the picker",
 				);
 			});
+
+			it("reads the response_item user message shape emitted by Codex 0.147", () => {
+				writeSessionFile("2026/03/04/rollout-real-shape.jsonl", [
+					sessionMeta("sess-real-shape"),
+					JSON.stringify({
+						type: "response_item",
+						payload: {
+							type: "message",
+							role: "user",
+							content: [
+								{
+									type: "input_text",
+									text: "Diagnose the session title sync",
+								},
+							],
+						},
+					}),
+				]);
+
+				expect(
+					new CodexSessionProvider(tmpDir).readName("sess-real-shape"),
+				).toBe("Diagnose the session title sync");
+			});
 		});
 	});
 });

@@ -136,6 +136,15 @@ describe("SessionNameSyncer", () => {
 		fs.writeFileSync(codexSessionIndexPath, `${lines.join("\n")}\n`);
 	}
 
+	function writeCodexSession(sessionId: string, lines: string[]) {
+		const dir = path.join(codexSessionsDir, "2026", "08", "09");
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(
+			path.join(dir, `rollout-${sessionId}.jsonl`),
+			`${lines.join("\n")}\n`,
+		);
+	}
+
 	describe("handles multiple custom-title events", () => {
 		it("takes the LAST custom-title from the file", () => {
 			const { projectManager, agentManager } = createTestProjectManager(
@@ -254,6 +263,44 @@ describe("SessionNameSyncer", () => {
 			const agents = agentManager.getAgents("f1");
 			expect(agents[0].name).toBe("codex-name");
 
+			syncer.dispose();
+		});
+
+		it("renames Codex agents from the response_item user message shape", () => {
+			const { projectManager, agentManager } = createTestProjectManager(
+				tmpDir,
+				[feature],
+			);
+			const agent = agentManager.createAgent(feature, "codex");
+			agentManager.updateAgentSessionId(agent.id, "f1", "codex-real-shape");
+
+			writeCodexSession("codex-real-shape", [
+				JSON.stringify({
+					type: "session_meta",
+					payload: { id: "codex-real-shape", cwd: "/tmp/project" },
+				}),
+				JSON.stringify({
+					type: "response_item",
+					payload: {
+						type: "message",
+						role: "user",
+						content: [
+							{
+								type: "input_text",
+								text: "Diagnose the session title sync",
+							},
+						],
+					},
+				}),
+			]);
+
+			const syncer = makeSyncer();
+			syncer.start(projectManager);
+			syncer.syncAll();
+
+			expect(agentManager.getAgents("f1")[0].name).toBe(
+				"Diagnose the session title sync",
+			);
 			syncer.dispose();
 		});
 

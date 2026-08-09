@@ -61,7 +61,11 @@ interface PendingAgent {
  *
  * - a session that already existed in the worktree before the agent launched is
  *   never adopted (the baseline is persisted, so a restart cannot lose it);
- * - an attribution is made only when it is the *only* possible one. Ordering
+ * - an attribution is made only when the provider supplies a correlation that
+ *   proves ownership (currently an already assigned session id resolving in
+ *   the provider store). A single new session is not proof: a human can start
+ *   a CLI in the same cwd after Agent Space launched;
+ * - ordering
  *   agents by launch time and sessions by creation time looks like it resolves
  *   siblings sharing a worktree, but the two orders are unrelated: a session is
  *   born on the first prompt, so launching A then B and then talking to B then
@@ -132,7 +136,7 @@ export class SessionBinder {
 		}
 
 		const baseline = adapter.scanSessions
-			? safeScan(adapter)
+			? safeScan(adapter, true)
 					.filter((session) => samePath(session.projectPath, cwd))
 					.map((session) => session.sessionId)
 			: [];
@@ -325,8 +329,10 @@ export class SessionBinder {
 	/**
 	 * Turn one agent's candidate set into a binding, or refuse to.
 	 *
-	 * Exactly one candidate, claimed by exactly one agent, is the only shape
-	 * that gets bound. Anything else is reported for what it is.
+	 * A newly discovered candidate is never enough by itself: provider data does
+	 * not distinguish an Agent Space CLI from a manually launched CLI in the same
+	 * cwd. Only an already assigned id that resolves in the provider store is a
+	 * binding proof. Anything else is reported for what it is.
 	 */
 	private resolveClaim(
 		entry: PendingAgent,
@@ -334,7 +340,10 @@ export class SessionBinder {
 		claimantCount: ReadonlyMap<string, number>,
 	): SessionBindingOutcome {
 		const { ctx, featureId, agent } = entry;
-		const attempts = (agent.sessionBinding?.attempts ?? 0) + 1;
+		// Attempts are diagnostic metadata, not a heartbeat. Keeping the last
+		// value stable prevents an unchanged pending/ambiguous observation from
+		// becoming a persistence mutation on every poll.
+		const attempts = agent.sessionBinding?.attempts ?? 0;
 		const where = path.basename(entry.cwd);
 
 		if (candidates.length === 0) {
@@ -351,14 +360,17 @@ export class SessionBinder {
 			};
 		}
 
-		if (candidates.length > 1) {
+		if (candidates.length > 0) {
 			return {
 				agentId: agent.id,
 				featureId,
 				binding: this.persist(ctx, featureId, agent, {
 					state: "ambiguous",
 					attempts,
-					detail: `${candidates.length} unclaimed sessions appeared in ${where} after this agent started; none can be attributed with certainty`,
+					detail:
+						candidates.length === 1
+							? `One unclaimed session appeared in ${where} after this agent started, but provider data cannot prove it belongs to Agent Space rather than a manually launched CLI; refusing to guess`
+							: `${candidates.length} unclaimed sessions appeared in ${where} after this agent started; none can be attributed with certainty`,
 				}),
 			};
 		}
@@ -407,6 +419,17 @@ export class SessionBinder {
 		agent: Agent,
 		binding: Omit<AgentSessionBinding, "checkedAt">,
 	): AgentSessionBinding {
+		const current = agent.sessionBinding;
+		const sameObservableState =
+			current?.state === binding.state &&
+			current.detail === binding.detail &&
+			current.attempts === binding.attempts;
+		// Pending/ambiguous are deliberately stable observations. Refreshing their
+		// timestamp on every poll would turn a non-event into a disk write. A bound
+		// revalidation is different: its checkedAt is the five-minute lease.
+		if (sameObservableState && binding.state !== "bound" && current) {
+			return current;
+		}
 		const next: AgentSessionBinding = {
 			...binding,
 			checkedAt: new Date().toISOString(),
@@ -465,10 +488,13 @@ function candidatesFor(
 		);
 }
 
-function safeScan(adapter: ProviderSessionAdapter): SessionInfo[] {
+function safeScan(
+	adapter: ProviderSessionAdapter,
+	fresh = false,
+): SessionInfo[] {
 	if (!adapter.scanSessions) return [];
 	try {
-		return adapter.scanSessions();
+		return adapter.scanSessions(fresh ? { fresh: true } : undefined);
 	} catch {
 		// A provider CLI that is not installed, or a store that cannot be read,
 		// simply yields no candidates.
