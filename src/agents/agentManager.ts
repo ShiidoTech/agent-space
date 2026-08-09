@@ -14,6 +14,7 @@ import type {
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
 import { CodingToolRegistry } from "./codingToolRegistry";
+import { AgentObservationResolver } from "./observation/agentObservationResolver";
 import type { TmuxIntegration } from "./tmux";
 
 export class AgentManager {
@@ -21,6 +22,7 @@ export class AgentManager {
 	private cachedDefaultBranch: string | undefined;
 	private invalidateTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly attentionResolver: AgentAttentionResolver;
+	private readonly observationResolver: AgentObservationResolver;
 
 	constructor(
 		private readonly store: Store,
@@ -31,6 +33,7 @@ export class AgentManager {
 		private readonly toolRegistry: CodingToolRegistry = new CodingToolRegistry(),
 	) {
 		this.attentionResolver = new AgentAttentionResolver(tmux, toolRegistry);
+		this.observationResolver = new AgentObservationResolver(tmux, toolRegistry);
 	}
 
 	invalidateFeature(featureId: string): void {
@@ -79,6 +82,15 @@ export class AgentManager {
 		return agent ? this.withAttentionStatus(agent) : undefined;
 	}
 
+	getObservation(featureId: string, agentId: string) {
+		const agent = this.getAgent(featureId, agentId);
+		return agent ? this.observe(agent) : undefined;
+	}
+
+	observe(agent: Agent) {
+		return this.observationResolver.resolve(agent);
+	}
+
 	createAgent(feature: Feature, toolId?: string): Agent {
 		const agents = this.loadAgents(feature.id);
 		const name = this.nextDefaultName(agents);
@@ -111,6 +123,7 @@ export class AgentManager {
 			id,
 			featureId: feature.id,
 			name,
+			nameSource: "default",
 			sessionId,
 			tmuxSession: this.tmux.sessionName(this.sessionLabel(feature.id), id),
 			worktreePath,
@@ -130,6 +143,33 @@ export class AgentManager {
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		agent.name = name;
+		agent.nameSource = /^Agent \d+$/.test(name) ? "default" : "user";
+		this.saveAgents(featureId, agents);
+	}
+
+	/** Legacy compatibility: provider auto-naming may update only generated names. */
+	renameAgentFromProvider(
+		agentId: string,
+		featureId: string,
+		name: string,
+	): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		if (!agent || agent.nameSource === "user") return;
+		agent.name = name;
+		agent.nameSource = "default";
+		this.saveAgents(featureId, agents);
+	}
+
+	updateAgentSessionTitle(
+		agentId: string,
+		featureId: string,
+		sessionTitle: string,
+	): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		if (!agent || agent.sessionTitle === sessionTitle) return;
+		agent.sessionTitle = sessionTitle;
 		this.saveAgents(featureId, agents);
 	}
 

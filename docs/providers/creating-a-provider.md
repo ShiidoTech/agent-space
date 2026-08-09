@@ -29,8 +29,8 @@ Agent Space launch owns it. CWD, timing, ordering, uniqueness, and an internal
 reservation do not satisfy that contract. If the provider cannot provide this
 correlation, new sessions remain fail-closed until explicit user attachment.
 
-Session naming is the provider session title used by Agent Space for the agent
-display name; it is not a rename of the native terminal prompt. Working means
+Session naming exposes a provider session title separately from the stable Agent
+Space agent name; it is not a rename of the native terminal prompt. Working means
 the provider proves that it is processing. Waiting means the provider proves
 that it has completed its turn and needs user input. Neither state may be
 inferred from the absence of terminal output.
@@ -40,8 +40,10 @@ branches to `CodingToolRegistry` or scrape terminal output to infer state.
 
 ## Degradation Rules
 
-Missing capabilities are visible as unsupported/unknown. In particular,
-absence of a structured attention signal must never be rendered as `Idle`.
+Missing capabilities are visible as `unsupported`, not `unknown`. `unknown` is
+reserved for a supported capability whose current observation cannot be read.
+In particular, absence of a structured attention signal must never be rendered
+as `Idle`.
 Unknown project IDs are reported diagnostically and never replaced with a
 different executable. An unavailable configured default does not trigger a
 silent fallback.
@@ -53,7 +55,7 @@ Add unit tests for:
 1. capability declarations and launch/resume commands;
 2. session parsing using realistic files or CLI output;
 3. malformed and incomplete data;
-4. the unsupported-capability path returning `unknown`.
+4. the unsupported-capability path returning `unsupported`.
 
 Document any provider behavior that was observed but not implemented. Hermes,
 for example, currently has launch-only support until its session protocol is

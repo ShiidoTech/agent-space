@@ -249,25 +249,23 @@ const ATTENTION_LABELS = {
 
 function updateAttention(agent) {
 	const status = agent.status || "unknown";
+	const presented = agent.presentedState || {
+		label:
+			status === "unsupported" ? "Running" : ATTENTION_LABELS[status] || status,
+		tone: status,
+	};
 	const dot = document.getElementById(`agent-attention-dot-${agent.id}`);
 	if (dot) {
-		dot.className = agent.attentionSupported === false
-			? "agent-status-dot attention-unknown"
-			: `agent-status-dot attention-${status}`;
+		dot.className = `agent-status-dot primary-state-${presented.tone}`;
 	}
 
-	const badge = document.getElementById(`agent-attention-badge-${agent.id}`);
-	if (badge && agent.attentionSupported !== false) {
-		badge.className = `agent-tool-badge agent-attention-badge attention-${status}`;
-		badge.textContent = ATTENTION_LABELS[status] || status;
-		badge.title = agent.reason || "No current attention evidence";
-	} else if (badge) {
-		badge.remove();
-	}
-	const lifecycleBadge = document.getElementById(`agent-lifecycle-badge-${agent.id}`);
+	const lifecycleBadge = document.getElementById(
+		`agent-lifecycle-badge-${agent.id}`,
+	);
 	if (lifecycleBadge) {
-		const lifecycle = agent.lifecycleStatus || "idle";
-		lifecycleBadge.textContent = lifecycle[0].toUpperCase() + lifecycle.slice(1);
+		lifecycleBadge.textContent = presented.label;
+		lifecycleBadge.className = `agent-tool-badge agent-lifecycle-badge primary-state-${presented.tone}`;
+		lifecycleBadge.title = presented.detail || "";
 	}
 
 	updateBindingBadge(agent);
@@ -303,7 +301,8 @@ function updateBindingBadge(agent) {
 
 	let tooltip = agent.bindingDetail || "";
 	if (state === "ambiguous" && tooltip) {
-		tooltip += " Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
+		tooltip +=
+			" Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
 	}
 
 	badge.className = `agent-tool-badge binding-badge binding-${state}`;
