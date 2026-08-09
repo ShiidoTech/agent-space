@@ -50,6 +50,9 @@ export interface DoctorAgentProbe {
 	bindingAttempts?: number;
 	/** null when the provider exposes no session store to look in. */
 	sessionResolved: boolean | null;
+	lifecycleState?: string;
+	attentionState?: string;
+	attentionSupported?: boolean;
 	attentionEvidence?: string;
 }
 
@@ -331,13 +334,22 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 			);
 		}
 		facts.push(`binding ${probe.bindingState}`);
+		facts.push(`lifecycle ${probe.lifecycleState ?? "unknown"}`);
+		if (probe.attentionSupported) {
+			facts.push(`attention ${probe.attentionState ?? "unknown"}`);
+		} else {
+			facts.push("attention unsupported by provider");
+		}
 		if (probe.attentionEvidence)
 			facts.push(`evidence ${probe.attentionEvidence}`);
 		if (probe.bindingDetail) facts.push(probe.bindingDetail.toLowerCase());
 
 		let level: DoctorLevel;
 		let remediation: string | undefined;
-		if (probe.bindingState === "unsupported") {
+		if (
+			probe.attentionSupported !== true &&
+			probe.bindingState === "unsupported"
+		) {
 			level = "info";
 			unsupported += 1;
 		} else if (probe.sessionResolved === true) {

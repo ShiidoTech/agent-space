@@ -1,45 +1,14 @@
 import * as vscode from "vscode";
 import { presentSessionBinding } from "../agents/attention/sessionBindingPresentation";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
+import { presentAgentState } from "../agents/observation/presentAgentState";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_GIT } from "../constants/icons";
 import type { ProjectManager } from "../projects/projectManager";
 import type { GlobalStore } from "../storage/globalStore";
-import type { Agent, AgentAttentionStatus, Feature, Service } from "../types";
-
-function attentionStatusLabel(status: AgentAttentionStatus): string {
-	switch (status) {
-		case "working":
-			return "Working";
-		case "waiting_for_user":
-			return "Waiting for you";
-		case "idle":
-			return "Idle";
-		case "failed":
-			return "Failed";
-		case "done":
-			return "Done";
-		case "unknown":
-			return "Unknown";
-	}
-}
-
-function lifecycleStatusLabel(status: string): string {
-	switch (status) {
-		case "running":
-			return "Running";
-		case "stopped":
-			return "Stopped";
-		case "done":
-			return "Done";
-		case "errored":
-			return "Errored";
-		default:
-			return "Idle";
-	}
-}
+import type { Agent, Feature, Service } from "../types";
 
 export class HomePanel {
 	public static readonly viewType = "agentSpace.home";
@@ -101,13 +70,6 @@ export class HomePanel {
 
 	public static getInstance(): HomePanel | undefined {
 		return HomePanel.instance;
-	}
-
-	private providerSupportsAttention(toolId?: string): boolean {
-		const tool = this.toolRegistry.resolveAgentTool(toolId);
-		return Object.values(this.toolRegistry.getProvider(tool).capabilities.attention).some(
-			Boolean,
-		);
 	}
 
 	private constructor(
@@ -589,10 +551,12 @@ export class HomePanel {
 		this.panel.webview.postMessage({
 			type: "agentAttentionUpdate",
 			agents: agents.map((agent) => ({
+				presentedState: presentAgentState(
+					resolved.ctx.agentManager.observe(agent),
+				),
 				id: agent.id,
 				status: agent.attentionStatus ?? "unknown",
 				lifecycleStatus: agent.status,
-				attentionSupported: this.providerSupportsAttention(agent.toolId),
 				reason: agent.attentionReason ?? "No current attention evidence",
 				bindingState: agent.sessionBinding?.state,
 				bindingDetail: agent.sessionBinding?.detail,
@@ -957,6 +921,11 @@ export class HomePanel {
 .binding-badge.binding-unverified { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); }
 .binding-badge.binding-unsupported { opacity: .6; }
 .agent-lifecycle-badge { color: var(--vscode-descriptionForeground); white-space: nowrap; }
+.agent-session-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 9px; }
+.agent-status-dot.primary-state-working { background: var(--vscode-testing-iconPassed); animation: pulse-green 2s ease-in-out infinite; }
+.agent-status-dot.primary-state-warning { background: var(--vscode-notificationsWarningIcon-foreground); }
+.agent-status-dot.primary-state-error { background: var(--vscode-errorForeground); }
+.agent-status-dot.primary-state-normal, .agent-status-dot.primary-state-muted { background: var(--vscode-disabledForeground); }
 </style>
 </head>
 <body>
@@ -1137,13 +1106,12 @@ export class HomePanel {
 		const color = TERMINAL_COLOR_HEX[idx % TERMINAL_COLOR_HEX.length];
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 		const toolBadge = `<span class="agent-tool-badge">${this.escapeHtml(tool.name)}</span>`;
-		const attention = agent.attentionStatus ?? "unknown";
-		const attentionReason =
-			agent.attentionReason ?? "No current attention evidence";
-		const attentionSupported = this.providerSupportsAttention(agent.toolId);
-		const attentionBadge = attentionSupported
-			? `<span id="agent-attention-badge-${agent.id}" class="agent-tool-badge agent-attention-badge attention-${attention}" title="${this.escapeHtml(attentionReason)}">${attentionStatusLabel(attention)}</span>`
-			: "";
+		const observation = this.projectManager
+			.resolveFeature(feature.id)
+			?.ctx.agentManager.observe(agent);
+		const presented = observation
+			? presentAgentState(observation)
+			: { label: "Unknown", tone: "muted" as const };
 		const isDone = agent.status === "done";
 		const bindingBadgeData = presentSessionBinding(
 			agent.sessionBinding,
@@ -1176,11 +1144,11 @@ export class HomePanel {
 		return `
 		<div class="agent-panel ${isErrored ? "errored" : ""}" style="border-left: 2px solid ${color}">
 			<div class="agent-panel-header" id="agent-header-${agent.id}" onclick="toggleAgent('${agent.id}')">
-				<div id="agent-attention-dot-${agent.id}" class="agent-status-dot attention-${attention}"></div>
+				<div id="agent-attention-dot-${agent.id}" class="agent-status-dot primary-state-${presented.tone}"></div>
 				<span class="${nameClass}" title="${this.escapeHtml(agent.name)}">${this.escapeHtml(agent.name)}</span>
-				<span id="agent-lifecycle-badge-${agent.id}" class="agent-tool-badge agent-lifecycle-badge">${lifecycleStatusLabel(agent.status)}</span>
+				${agent.sessionTitle ? `<span class="agent-session-title" title="${this.escapeHtml(agent.sessionTitle)}">${this.escapeHtml(agent.sessionTitle)}</span>` : ""}
+				<span id="agent-lifecycle-badge-${agent.id}" class="agent-tool-badge agent-lifecycle-badge primary-state-${presented.tone}" title="${this.escapeHtml(presented.detail ?? "")}">${presented.label}</span>
 				${toolBadge}
-				${attentionBadge}
 				${bindingBadge}
 				<div class="agent-panel-actions">
 					${actionButtons}

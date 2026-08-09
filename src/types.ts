@@ -7,7 +7,9 @@ export type AgentAttentionStatus =
 	| "idle"
 	| "failed"
 	| "done"
-	| "unknown";
+	| "unknown"
+	| "unsupported";
+export type AgentNameSource = "default" | "user";
 export type IsolationMode = "shared" | "per-agent";
 
 /**
@@ -95,6 +97,10 @@ export interface Agent {
 	id: string;
 	featureId: string;
 	name: string;
+	/** Stable Agent Space identity; provider titles are stored separately. */
+	nameSource?: AgentNameSource;
+	/** Last provider title observed for this agent's bound session. */
+	sessionTitle?: string;
 	sessionId: string | null;
 	worktreePath?: string;
 	tmuxSession?: string;

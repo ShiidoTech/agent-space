@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { AgentManager } from "../agents/agentManager";
 import { presentSessionBinding } from "../agents/attention/sessionBindingPresentation";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
+import { presentAgentState } from "../agents/observation/presentAgentState";
 import type { TerminalController } from "../agents/terminalController";
 import { TERMINAL_COLOR_HEX } from "../constants/colors";
 import {
@@ -43,38 +44,6 @@ function gitStatusLabel(status: GitAwareStatus): string {
 	}
 }
 
-function attentionStatusLabel(status: AgentAttentionStatus): string {
-	switch (status) {
-		case "working":
-			return "Working";
-		case "waiting_for_user":
-			return "Waiting for you";
-		case "idle":
-			return "Idle";
-		case "failed":
-			return "Failed";
-		case "done":
-			return "Done";
-		case "unknown":
-			return "Unknown";
-	}
-}
-
-function lifecycleStatusLabel(status: string): string {
-	switch (status) {
-		case "running":
-			return "Running";
-		case "stopped":
-			return "Stopped";
-		case "done":
-			return "Done";
-		case "errored":
-			return "Errored";
-		default:
-			return "Idle";
-	}
-}
-
 export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "agentSpace.features";
 	private _view?: vscode.WebviewView;
@@ -92,13 +61,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	setTerminalController(controller: TerminalController): void {
 		this.terminalController = controller;
-	}
-
-	private providerSupportsAttention(toolId?: string): boolean {
-		const tool = this.toolRegistry.resolveAgentTool(toolId);
-		return Object.values(this.toolRegistry.getProvider(tool).capabilities.attention).some(
-			Boolean,
-		);
 	}
 
 	onVisibilityChange(callback: (visible: boolean) => void): void {
@@ -265,10 +227,11 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			interface SidebarAgent {
 				id: string;
 				name: string;
+				sessionTitle?: string;
+				presentedState: { label: string; tone: string; detail?: string };
 				status: string;
 				attentionStatus?: AgentAttentionStatus;
 				attentionReason?: string;
-				attentionSupported: boolean;
 				toolId?: string;
 				lastError?: string;
 				bindingState?: string;
@@ -305,12 +268,18 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 						branch: baseFeature.branch,
 						isBase: true,
 						agents: baseAgents.map((a) => ({
+							...(() => {
+								const presented = presentAgentState(
+									ctx.agentManager.observe(a),
+								);
+								return { presentedState: presented };
+							})(),
 							id: a.id,
 							name: a.name,
+							sessionTitle: a.sessionTitle,
 							status: a.status,
 							attentionStatus: a.attentionStatus,
 							attentionReason: a.attentionReason,
-							attentionSupported: this.providerSupportsAttention(a.toolId),
 							toolId: a.toolId,
 							lastError: a.lastError,
 							bindingState: a.sessionBinding?.state,
@@ -334,12 +303,18 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 						gitStatus: statusMap.get(feature.id),
 						isBase: false,
 						agents: agents.map((a) => ({
+							...(() => {
+								const presented = presentAgentState(
+									ctx.agentManager.observe(a),
+								);
+								return { presentedState: presented };
+							})(),
 							id: a.id,
 							name: a.name,
+							sessionTitle: a.sessionTitle,
 							status: a.status,
 							attentionStatus: a.attentionStatus,
 							attentionReason: a.attentionReason,
-							attentionSupported: this.providerSupportsAttention(a.toolId),
 							toolId: a.toolId,
 							lastError: a.lastError,
 							bindingState: a.sessionBinding?.state,
@@ -540,8 +515,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 .binding-badge.binding-unverified { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); }
 .binding-badge.binding-unsupported { opacity: .6; }
 .agent-main-row { display: flex; align-items: center; min-width: 0; gap: 6px; }
+.agent-session-title { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 9px; }
 .agent-status { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .lifecycle-badge { color: var(--vscode-descriptionForeground); font-size: 9px; white-space: nowrap; }
+.status-dot.primary-state-working { background-color: var(--vscode-testing-iconPassed); animation: pulse-green 2s ease-in-out infinite; }
+.status-dot.primary-state-warning { background-color: var(--vscode-notificationsWarningIcon-foreground); }
+.status-dot.primary-state-error { background-color: var(--vscode-errorForeground); }
+.status-dot.primary-state-normal, .status-dot.primary-state-muted { background-color: var(--vscode-disabledForeground); }
 </style>
 </head>
 <body>
@@ -684,13 +664,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const activeAgents = agents.filter((a) => a.status !== "done");
 		const doneAgents = agents.filter((a) => a.status === "done");
 
-		const renderAttentionBadge = (a: Agent, attentionSupported: boolean) => {
-			if (!attentionSupported) return "";
-			const attention = a.attentionStatus ?? "unknown";
-			const reason = a.attentionReason ?? "No current attention evidence";
-			return `<span class="attention-badge attention-${attention}" data-attention-badge="${a.id}" title="${this.escapeHtml(reason)}">${attentionStatusLabel(attention)}</span>`;
-		};
-
 		const renderBindingBadge = (a: Agent) => {
 			const badge = presentSessionBinding(a.sessionBinding, a.status);
 			if (!badge) return "";
@@ -701,7 +674,25 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			const tool = this.toolRegistry.resolveAgentTool(a.toolId);
 			const toolLabel = ` &middot; ${this.escapeHtml(tool.name)}`;
 			const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
-			const attention = a.attentionStatus ?? "unknown";
+			const presented = presentAgentState(
+				this.projectManager
+					.findContextByFeatureId(feature.id)
+					?.agentManager.observe(a) ?? {
+					identity: { agentName: a.name },
+					lifecycle: { state: a.status, source: "agentspace" },
+					attention: {
+						state:
+							a.attentionStatus === "done"
+								? "unknown"
+								: (a.attentionStatus ?? "unknown"),
+						reason: a.attentionReason,
+					},
+					session: {
+						state: a.sessionBinding?.state ?? "pending",
+						detail: a.sessionBinding?.detail,
+					},
+				},
+			);
 			const errorNote = a.lastError
 				? `<div class="agent-error-note" title="${this.escapeHtml(a.lastError)}">${this.escapeHtml(a.lastError)}</div>`
 				: "";
@@ -711,13 +702,14 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			onclick="focusAgent(event, '${feature.id}', '${a.id}')"
 			oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">
             <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
-            <div class="status-dot ${attention}" data-attention-dot="${a.id}"></div>
+			<div class="status-dot primary-state-${presented.tone}" data-attention-dot="${a.id}"></div>
 			<div class="agent-copy">
 				<div class="agent-main-row">
 					<span class="agent-name" title="${this.escapeHtml(a.name)}">${this.escapeHtml(a.name)}<span class="agent-tool">${toolLabel}</span></span>
+					${a.sessionTitle ? `<span class="agent-session-title" title="${this.escapeHtml(a.sessionTitle)}">${this.escapeHtml(a.sessionTitle)}</span>` : ""}
 					<span class="agent-status">
-						<span class="lifecycle-badge" data-lifecycle-badge="${a.id}">${lifecycleStatusLabel(a.status)}</span>
-							${renderAttentionBadge(a, this.providerSupportsAttention(a.toolId))}${renderBindingBadge(a)}
+						<span class="lifecycle-badge primary-state-${presented.tone}" data-lifecycle-badge="${a.id}" title="${this.escapeHtml(presented.detail ?? "")}">${presented.label}</span>
+							${renderBindingBadge(a)}
 					</span>
 				</div>
 				${errorNote}
@@ -735,6 +727,16 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				.map((a) => {
 					const i = agents.indexOf(a);
 					const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
+					const presented = presentAgentState(
+						this.projectManager
+							.findContextByFeatureId(feature.id)
+							?.agentManager.observe(a) ?? {
+							identity: { agentName: a.name },
+							lifecycle: { state: a.status, source: "agentspace" },
+							attention: { state: "unknown" },
+							session: { state: "pending" },
+						},
+					);
 					return `
 		<div class="agent-card done" data-agent-id="${a.id}" oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">
             <div class="agent-color-bar" style="background-color: ${agentColor}"></div>
@@ -743,8 +745,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				<div class="agent-main-row">
 					<span class="agent-name">${this.escapeHtml(a.name)}</span>
 					<span class="agent-status">
-						<span class="lifecycle-badge" data-lifecycle-badge="${a.id}">${lifecycleStatusLabel(a.status)}</span>
-						${renderAttentionBadge(a, this.providerSupportsAttention(a.toolId))}
+						<span class="lifecycle-badge primary-state-${presented.tone}" data-lifecycle-badge="${a.id}">${presented.label}</span>
 					</span>
 				</div>
 			</div>

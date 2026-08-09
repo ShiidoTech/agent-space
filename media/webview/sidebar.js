@@ -262,7 +262,9 @@ const LIFECYCLE_LABELS = {
 
 function updateBindingBadge(agentEl, agent) {
 	if (agent.status === "done") {
-		var doneBadge = agentEl.querySelector('[data-binding-badge="' + agent.id + '"]');
+		var doneBadge = agentEl.querySelector(
+			'[data-binding-badge="' + agent.id + '"]',
+		);
 		if (doneBadge) doneBadge.remove();
 		return;
 	}
@@ -277,7 +279,8 @@ function updateBindingBadge(agentEl, agent) {
 
 	var tooltip = agent.bindingDetail || "";
 	if (state === "ambiguous" && tooltip) {
-		tooltip += " Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
+		tooltip +=
+			" Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
 	}
 
 	if (!badge) {
@@ -327,23 +330,18 @@ window.addEventListener("message", function (event) {
 				}
 
 				var attention = agent.attentionStatus || "unknown";
+				var presented = agent.presentedState || {
+					label:
+						attention === "unsupported"
+							? "Running"
+							: ATTENTION_LABELS[attention] || attention,
+					tone: attention,
+				};
 				var dot = agentEl.querySelector(
 					'[data-attention-dot="' + agent.id + '"]',
 				);
 				if (dot) {
-					dot.className = "status-dot " + attention;
-				}
-
-				var attentionBadge = agentEl.querySelector(
-					'[data-attention-badge="' + agent.id + '"]',
-				);
-				if (attentionBadge && agent.attentionSupported !== false) {
-					attentionBadge.className = "attention-badge attention-" + attention;
-					attentionBadge.textContent = ATTENTION_LABELS[attention] || attention;
-					attentionBadge.title =
-						agent.attentionReason || "No current attention evidence";
-				} else if (attentionBadge) {
-					attentionBadge.remove();
+					dot.className = "status-dot primary-state-" + presented.tone;
 				}
 
 				updateBindingBadge(agentEl, agent);
@@ -351,7 +349,10 @@ window.addEventListener("message", function (event) {
 					'[data-lifecycle-badge="' + agent.id + '"]',
 				);
 				if (lifecycleBadge) {
-					lifecycleBadge.textContent = LIFECYCLE_LABELS[agent.status] || "Idle";
+					lifecycleBadge.textContent = presented.label;
+					lifecycleBadge.className =
+						"lifecycle-badge primary-state-" + presented.tone;
+					lifecycleBadge.title = presented.detail || "";
 				}
 
 				// Keep card-level classes tied to persisted lifecycle state.

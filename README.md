@@ -197,8 +197,9 @@ Projects can also override branching defaults via a committed `.agentspace/confi
 | Hermes | yes | no | no evidence | no evidence | no evidence | no evidence |
 
 The matrix only claims behavior covered by structured adapter tests. An
-unsupported or unreadable attention capability is displayed as `unknown`, never
-`Idle`.
+unsupported attention capability is displayed as `Running` with an informational
+"Activity tracking unavailable" detail; `unknown` is reserved for a supported
+capability whose current observation cannot be read.
 
 **Session binding** is the prerequisite for the three columns after it. Agent
 Space has to know which provider session belongs to an agent before it can read

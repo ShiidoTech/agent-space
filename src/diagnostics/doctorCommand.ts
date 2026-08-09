@@ -50,6 +50,12 @@ export function probeAgents(
 			for (const agent of store.loadAgents(feature.id)) {
 				const resolution = toolRegistry.describeAgentTool(agent.toolId);
 				const adapter = resolution.adapter;
+				const provider = toolRegistry.getProvider
+					? toolRegistry.getProvider(resolution.tool)
+					: resolution.tool.provider;
+				const attentionSupported = provider
+					? Object.values(provider.capabilities.attention).some(Boolean)
+					: false;
 
 				let sessionResolved: boolean | null = null;
 				if (adapter && agent.sessionId) {
@@ -59,11 +65,14 @@ export function probeAgents(
 				}
 
 				let attentionEvidence: string | undefined;
+				let attentionState = attentionSupported ? "unknown" : "unsupported";
 				if (agent.sessionId && sessionResolved === true) {
-					attentionEvidence = toolRegistry.getStructuredAttentionSignal(
+					const signal = toolRegistry.getStructuredAttentionSignal(
 						resolution.tool,
 						agent.sessionId,
-					)?.evidence;
+					);
+					attentionEvidence = signal?.evidence;
+					if (signal) attentionState = signal.status;
 				}
 
 				agents.push({
@@ -78,6 +87,9 @@ export function probeAgents(
 					bindingDetail: agent.sessionBinding?.detail,
 					bindingAttempts: agent.sessionBinding?.attempts,
 					sessionResolved,
+					lifecycleState: agent.status,
+					attentionState,
+					attentionSupported,
 					attentionEvidence,
 				});
 			}

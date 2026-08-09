@@ -1,11 +1,12 @@
-import type { Agent, AgentAttentionStatus } from "../../types";
+import type { Agent, AgentAttentionStatus, AgentStatus } from "../../types";
 import type { CodingToolRegistry } from "../codingToolRegistry";
 import type { ProviderAttentionSignal } from "../providers/types";
 import type { TmuxIntegration } from "../tmux";
 
 export interface AgentAttentionSnapshot {
-	status: AgentAttentionStatus;
+	status: AgentAttentionStatus | "unsupported";
 	reason: string;
+	observedAt?: string;
 	source: "lifecycle" | "tmux" | "provider" | "fallback";
 }
 
@@ -29,19 +30,26 @@ export class AgentAttentionResolver {
 		_options: AgentAttentionResolverOptions = {},
 	) {}
 
-	resolve(agent: Agent): AgentAttentionSnapshot {
-		if (agent.status === "done") {
+	resolve(agent: Agent, lifecycleState?: AgentStatus): AgentAttentionSnapshot {
+		if ((lifecycleState ?? agent.status) === "done") {
 			return {
 				status: "done",
 				reason: "Agent was explicitly marked done",
 				source: "lifecycle",
 			};
 		}
-		if (agent.status === "errored" || agent.lastError) {
+		if ((lifecycleState ?? agent.status) === "errored" || agent.lastError) {
 			return {
 				status: "failed",
 				reason: "Agent lifecycle recorded a failure",
 				source: "lifecycle",
+			};
+		}
+		if (lifecycleState === "stopped") {
+			return {
+				status: "unknown",
+				reason: "No live tmux session is available",
+				source: "tmux",
 			};
 		}
 		if (agent.hasStarted !== true) {
@@ -90,6 +98,19 @@ export class AgentAttentionResolver {
 		}
 
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+		const provider = this.toolRegistry.getProvider
+			? this.toolRegistry.getProvider(tool)
+			: tool.provider;
+		if (
+			provider &&
+			!Object.values(provider.capabilities.attention).some(Boolean)
+		) {
+			return {
+				status: "unsupported",
+				reason: "Activity tracking is unsupported by this provider",
+				source: "provider",
+			};
+		}
 		const providerSignal = this.readProviderSignal(tool, agent.sessionId);
 		if (providerSignal) {
 			const age = describeAge(providerSignal.observedAt);
@@ -97,6 +118,7 @@ export class AgentAttentionResolver {
 				status: providerSignal.status,
 				reason: `Provider emitted ${providerSignal.evidence}${age ? ` ${age}` : ""}`,
 				source: "provider",
+				observedAt: providerSignal.observedAt,
 			};
 		}
 
