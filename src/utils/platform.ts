@@ -192,11 +192,10 @@ export function execFile(
 ): string {
 	const bashPath = isWindows() ? findGitBash() : null;
 	if (bashPath) {
-		return execFileSync(
-			bashPath,
-			["-lc", String.raw`exec "$1" "\${@:2}"`, file, ...args],
-			getExecOptions(opts?.cwd) as ExecFileSyncOptions,
-		) as string;
+		return execFileSync(bashPath, ["-lc", 'exec "$0" "$@"', file, ...args], {
+			...getExecOptions(opts?.cwd),
+			shell: false,
+		} as ExecFileSyncOptions) as string;
 	}
 
 	return execFileSync(file, args, {

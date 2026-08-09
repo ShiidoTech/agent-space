@@ -518,15 +518,13 @@ describe("platform", () => {
 					"C:\\Program Files\\Git\\bin\\bash.exe",
 					[
 						"-lc",
-						String.raw`exec "$1" "\${@:2}"`,
+						'exec "$0" "$@"',
 						"tmux",
 						"kill-session",
 						"-t",
 						"agent-space-x; evil",
 					],
-					expect.objectContaining({
-						shell: "C:\\Program Files\\Git\\bin\\bash.exe",
-					}),
+					expect.objectContaining({ shell: false }),
 				);
 			} finally {
 				Object.defineProperty(process, "platform", { value: originalPlatform });
