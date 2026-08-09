@@ -95,6 +95,7 @@ export class TerminalController implements vscode.Disposable {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
 			try {
+				this.updateStartupStep(feature, agent, "create-tmux", "running");
 				const launchCommand = shouldResume
 					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
 					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
@@ -106,6 +107,10 @@ export class TerminalController implements vscode.Disposable {
 				this.tmux.configureSession(sessionName);
 				sessionReady = this.tmux.isSessionAlive(sessionName);
 				justLaunched = sessionReady;
+				if (sessionReady) {
+					this.updateStartupStep(feature, agent, "create-tmux", "completed");
+					this.updateStartupStep(feature, agent, "launch-provider", "running");
+				}
 			} catch (err) {
 				console.warn(`[TerminalController] tmux session create failed: ${err}`);
 				sessionReady = false;
@@ -126,6 +131,19 @@ export class TerminalController implements vscode.Disposable {
 				cwd,
 			);
 			this.recordAgentFailure(feature.id, agent.id, message);
+			const startupManager = this.projectManager.findContextByFeatureId(
+				feature.id,
+			)?.agentManager as
+				| {
+						failAgentStartup?: (
+							agentId: string,
+							featureId: string,
+							message: string,
+						) => void;
+				  }
+				| undefined;
+			if (agent.startup)
+				startupManager?.failAgentStartup?.(agent.id, feature.id, message);
 			void vscode.window.showErrorMessage(message);
 			return undefined;
 		}
@@ -150,6 +168,8 @@ export class TerminalController implements vscode.Disposable {
 			featureId: feature.id,
 			sessionName,
 		});
+		this.updateStartupStep(feature, agent, "launch-provider", "completed");
+		this.updateStartupStep(feature, agent, "attach-terminal", "completed");
 
 		const ctx = this.projectManager.findContextByFeatureId(feature.id);
 		if (ctx) {
@@ -163,6 +183,34 @@ export class TerminalController implements vscode.Disposable {
 		}
 
 		return terminal;
+	}
+
+	private updateStartupStep(
+		feature: Feature,
+		agent: Agent,
+		stepId: string,
+		status: "running" | "completed",
+	): void {
+		if (!agent.startup) return;
+		const startupManager = this.projectManager.findContextByFeatureId(
+			feature.id,
+		)?.agentManager as
+			| {
+					updateAgentStartupStep?: (
+						agentId: string,
+						featureId: string,
+						stepId: string,
+						status: "running" | "completed",
+					) => void;
+			  }
+			| undefined;
+		startupManager?.updateAgentStartupStep?.(
+			agent.id,
+			feature.id,
+			stepId,
+			status,
+		);
+		this.projectManager.notifyChange();
 	}
 
 	focusOrCreateTerminal(

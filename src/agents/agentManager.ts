@@ -10,6 +10,7 @@ import type {
 	AgentSessionBinding,
 	AgentStatus,
 	Feature,
+	LifecycleStep,
 } from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
@@ -138,6 +139,92 @@ export class AgentManager {
 		return agent;
 	}
 
+	beginAgentStartup(agentId: string, featureId: string): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		if (!agent) return;
+		agent.startup = {
+			state: "provisioning",
+			startedAt: new Date().toISOString(),
+			currentStepId: "create-tmux",
+			steps: [
+				{
+					id: "create-tmux",
+					label: "Creating tmux session",
+					status: "running",
+					startedAt: new Date().toISOString(),
+				},
+				{
+					id: "launch-provider",
+					label: "Starting provider",
+					status: "pending",
+				},
+				{
+					id: "attach-terminal",
+					label: "Opening agent terminal",
+					status: "pending",
+				},
+			],
+		};
+		this.saveAgents(featureId, agents);
+	}
+
+	updateAgentStartupStep(
+		agentId: string,
+		featureId: string,
+		stepId: string,
+		status: LifecycleStep["status"],
+		detail?: string,
+	): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		const startup = agent?.startup;
+		const step = startup?.steps.find((candidate) => candidate.id === stepId);
+		if (!agent || !startup || !step) return;
+		step.status = status;
+		if (status === "running") {
+			step.startedAt = new Date().toISOString();
+			startup.currentStepId = stepId;
+			startup.state = stepId === "create-tmux" ? "provisioning" : "starting";
+		}
+		if (status === "completed") step.completedAt = new Date().toISOString();
+		if (detail) step.detail = detail;
+		this.saveAgents(featureId, agents);
+	}
+
+	completeAgentStartup(agentId: string, featureId: string): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		if (!agent?.startup) return;
+		for (const step of agent.startup.steps) {
+			if (step.status === "running" || step.status === "pending") {
+				step.status = "completed";
+				step.completedAt = new Date().toISOString();
+			}
+		}
+		agent.startup.state = "ready";
+		agent.startup.currentStepId = undefined;
+		agent.startup.completedAt = new Date().toISOString();
+		this.saveAgents(featureId, agents);
+	}
+
+	failAgentStartup(agentId: string, featureId: string, message: string): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		if (!agent?.startup) return;
+		const current = agent.startup.steps.find(
+			(step) => step.id === agent.startup?.currentStepId,
+		);
+		if (current) {
+			current.status = "failed";
+			current.error = message;
+			current.completedAt = new Date().toISOString();
+		}
+		agent.startup.state = "failed";
+		agent.startup.error = `${current?.label ?? "Agent startup"}: ${message}`;
+		this.saveAgents(featureId, agents);
+	}
+
 	renameAgent(agentId: string, featureId: string, name: string): void {
 		const agents = this.loadAgents(featureId);
 		const agent = agents.find((a) => a.id === agentId);
@@ -193,6 +280,17 @@ export class AgentManager {
 		agent.hasStarted = true;
 		delete agent.lastError;
 		delete agent.lastExitCode;
+		if (agent.startup) {
+			for (const step of agent.startup.steps) {
+				if (step.status !== "failed") {
+					step.status = "completed";
+					step.completedAt = new Date().toISOString();
+				}
+			}
+			agent.startup.state = "ready";
+			agent.startup.currentStepId = undefined;
+			agent.startup.completedAt = new Date().toISOString();
+		}
 		this.saveAgents(featureId, agents);
 	}
 
@@ -289,7 +387,7 @@ export class AgentManager {
 	reopenAgent(agentId: string, feature: Feature): Agent | undefined {
 		const agents = this.loadAgents(feature.id);
 		const agent = agents.find((a) => a.id === agentId);
-		if (!agent || agent.status !== "done") return undefined;
+		if (agent?.status !== "done") return undefined;
 
 		// Recreate per-agent worktree if it was removed
 		if (feature.isolation === "per-agent" && agent.worktreePath) {

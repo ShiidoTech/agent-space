@@ -275,6 +275,7 @@ export class ProjectManager {
 			config,
 			this.toolRegistry,
 		);
+		featureManager.setOnChange(() => this.notifyChange());
 		const serviceManager = new ServiceManager(
 			store,
 			project.repoPath,

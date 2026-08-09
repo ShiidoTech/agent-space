@@ -1,6 +1,7 @@
 import type {
 	AgentAttentionStatus,
 	AgentSessionBindingState,
+	AgentStartup,
 	AgentStatus,
 } from "../../types";
 
@@ -20,6 +21,7 @@ export interface AgentObservation {
 		state: AgentLifecycleState;
 		source: "agentspace" | "tmux" | "process";
 	};
+	startup?: AgentStartup;
 	attention: {
 		state: AgentObservationAttention;
 		observedAt?: string;

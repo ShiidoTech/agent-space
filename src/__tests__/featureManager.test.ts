@@ -42,6 +42,33 @@ describe("FeatureManager", () => {
 	});
 
 	describe("createFeature", () => {
+		it("persists a visible provisioning record before Git work starts", () => {
+			const feature = manager.createFeatureRecord("slow-start", "shared");
+
+			expect(feature.provisioning?.state).toBe("provisioning");
+			expect(store.loadFeatures()[0]).toMatchObject({ id: feature.id });
+			expect(mockExecSync).not.toHaveBeenCalled();
+		});
+
+		it("preserves completed steps and reports the exact failed provisioning step", async () => {
+			const feature = manager.createFeatureRecord("broken-start", "shared");
+			mockExecSync.mockImplementation((command) => {
+				if (String(command).startsWith("git rev-parse"))
+					return Buffer.from("base-sha\n");
+				throw new Error("worktree already exists");
+			});
+
+			await expect(manager.provisionFeature(feature.id)).rejects.toThrow(
+				"Creating branch and worktree: worktree already exists",
+			);
+			const saved = store.loadFeatures()[0];
+			expect(saved.provisioning?.state).toBe("failed");
+			expect(saved.provisioning?.steps.map((step) => step.status)).toEqual([
+				"completed",
+				"failed",
+			]);
+		});
+
 		it("creates a feature with worktree", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const feature = manager.createFeature("auth-system", "shared");

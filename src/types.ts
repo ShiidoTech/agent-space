@@ -11,6 +11,39 @@ export type AgentAttentionStatus =
 	| "unsupported";
 export type AgentNameSource = "default" | "user";
 export type IsolationMode = "shared" | "per-agent";
+export type LifecycleStepStatus =
+	| "pending"
+	| "running"
+	| "completed"
+	| "failed";
+
+export interface LifecycleStep {
+	id: string;
+	label: string;
+	status: LifecycleStepStatus;
+	detail?: string;
+	error?: string;
+	startedAt?: string;
+	completedAt?: string;
+}
+
+export interface FeatureProvisioning {
+	state: "provisioning" | "ready" | "failed";
+	steps: LifecycleStep[];
+	currentStepId?: string;
+	error?: string;
+	startedAt: string;
+	completedAt?: string;
+}
+
+export interface AgentStartup {
+	state: "provisioning" | "starting" | "ready" | "failed";
+	steps: LifecycleStep[];
+	currentStepId?: string;
+	error?: string;
+	startedAt: string;
+	completedAt?: string;
+}
 
 /**
  * How confident Agent Space is that an agent is linked to a real provider
@@ -59,6 +92,8 @@ export interface Feature {
 	color: string;
 	isolation: IsolationMode;
 	createdAt: string;
+	/** Explicit, user-visible feature setup progress. */
+	provisioning?: FeatureProvisioning;
 	/** Commit the feature branch was created from, when known. */
 	createdFromSha?: string;
 }
@@ -134,6 +169,8 @@ export interface Agent {
 	sessionBaseline?: string[];
 	/** ISO timestamp of the launch this binding relates to. */
 	launchedAt?: string;
+	/** Explicit, user-visible agent startup progress. */
+	startup?: AgentStartup;
 }
 
 export interface CompanionState {

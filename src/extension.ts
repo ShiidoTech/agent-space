@@ -583,16 +583,19 @@ export async function activate(
 				}
 
 				try {
-					const feature = ctx.featureManager.createFeature(
+					const feature = ctx.featureManager.createFeatureRecord(
 						name,
 						isolation,
 						branchKind,
 					);
 					activeFeatureId = feature.id;
+					sidebarProvider.refresh();
+					await activateFeatureInCurrentWindow(feature.id);
 
 					const initialTool = toolRegistry.getPreferredAvailableTool(
 						ctx.config,
 					);
+					let launchInitialAgent = false;
 					if (initialTool) {
 						const launchNow = await vscode.window.showQuickPick(
 							[
@@ -612,16 +615,30 @@ export async function activate(
 								placeHolder: `Launch ${initialTool.name} now?`,
 							},
 						);
-						if (launchNow?.value) {
-							ctx.agentManager.createAgent(feature, initialTool.id);
-						}
+						launchInitialAgent = launchNow?.value === true;
 					} else {
 						vscode.window.showErrorMessage(
 							"Feature created, but no coding tools are available. Add an agent later with 'Add Agent'.",
 						);
 					}
-					sidebarProvider.refresh();
-					await activateFeatureInCurrentWindow(feature.id);
+					void ctx.featureManager
+						.provisionFeature(feature.id)
+						.then(() => {
+							if (!launchInitialAgent || !initialTool) return;
+							const agent = ctx.agentManager.createAgent(
+								feature,
+								initialTool.id,
+							);
+							ctx.agentManager.beginAgentStartup(agent.id, feature.id);
+							projectManager.notifyChange();
+							const index = ctx.agentManager.getAgents(feature.id).length - 1;
+							terminalController.createTerminal(feature, agent, index);
+						})
+						.catch((error) => {
+							vscode.window.showErrorMessage(
+								`Feature setup failed: ${error instanceof Error ? error.message : String(error)}`,
+							);
+						});
 				} catch (err) {
 					const msg =
 						err instanceof Error ? err.message : "Failed to create feature";
@@ -714,10 +731,13 @@ export async function activate(
 				try {
 					const agents = ctx.agentManager.getAgents(featureId);
 					const agent = ctx.agentManager.createAgent(feature, toolPick.toolId);
-					terminalController.createTerminal(feature, agent, agents.length);
+					ctx.agentManager.beginAgentStartup(agent.id, featureId);
 					sidebarProvider.refresh();
 					const home = HomePanel.getInstance();
 					if (home) home.refresh();
+					void Promise.resolve().then(() => {
+						terminalController.createTerminal(feature, agent, agents.length);
+					});
 				} catch (err) {
 					const message =
 						err instanceof Error ? err.message : "Failed to create agent";

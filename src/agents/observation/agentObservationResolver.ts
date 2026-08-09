@@ -29,6 +29,7 @@ export class AgentObservationResolver {
 				providerId: tool.id,
 			},
 			lifecycle,
+			startup: agent.startup,
 			attention: {
 				state: attention.status === "done" ? "unknown" : attention.status,
 				observedAt: attention.observedAt,

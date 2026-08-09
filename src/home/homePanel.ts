@@ -853,7 +853,10 @@ export class HomePanel {
 		);
 
 		const activeAgents = agents.filter(
-			(a) => a.status === "running" || a.status === "idle",
+			(a) =>
+				a.status === "running" ||
+				a.status === "idle" ||
+				(a.startup && a.startup.state !== "ready" && a.status !== "done"),
 		);
 		const erroredAgents = agents.filter((a) => a.status === "errored");
 		const doneAgents = agents.filter((a) => a.status === "done");
@@ -884,6 +887,7 @@ export class HomePanel {
 			</div>
 		</div>
 		<div class="workspace-content">
+			${this.renderFeatureProvisioning(feature)}
 			${this.renderProgressSection(progressPct, doneCount, totalAgents)}
 			${this.renderAgentsSection(
 				activeAgents,
@@ -915,6 +919,18 @@ export class HomePanel {
 .agent-attention-badge.attention-waiting_for_user { color: var(--vscode-notificationsWarningIcon-foreground); background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent); }
 .agent-attention-badge.attention-failed { color: var(--vscode-errorForeground); }
 .agent-attention-badge.attention-idle, .agent-attention-badge.attention-unknown { color: var(--vscode-descriptionForeground); }
+.lifecycle-card { margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: color-mix(in srgb, var(--vscode-editorInfo-background) 35%, transparent); }
+.lifecycle-card.failed { border-color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-inputValidation-errorBackground) 35%, transparent); }
+.lifecycle-card-title { font-weight: 600; margin-bottom: 10px; }
+.lifecycle-steps { display: grid; gap: 6px; }
+.lifecycle-step { display: grid; grid-template-columns: 18px 1fr; gap: 7px; align-items: start; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.lifecycle-step.completed { color: var(--vscode-testing-iconPassed); }
+.lifecycle-step.running { color: var(--vscode-foreground); }
+.lifecycle-step.failed { color: var(--vscode-errorForeground); }
+.lifecycle-step-icon { font-weight: 700; text-align: center; }
+.lifecycle-step small { grid-column: 2; color: var(--vscode-errorForeground); overflow-wrap: anywhere; }
+.lifecycle-error { margin: 10px 0 0; color: var(--vscode-errorForeground); font-size: 12px; }
+.agent-startup-steps { margin: 0 0 10px; }
 .agent-status-dot.attention-working { background: var(--vscode-testing-iconPassed); animation: pulse-green 2s ease-in-out infinite; }
 .agent-status-dot.attention-waiting_for_user { background: var(--vscode-notificationsWarningIcon-foreground); box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 18%, transparent); }
 .agent-status-dot.attention-failed { background: var(--vscode-errorForeground); }
@@ -937,6 +953,25 @@ export class HomePanel {
 	<script src="${jsUri}"></script>
 </body>
 </html>`;
+	}
+
+	private renderFeatureProvisioning(feature: Feature): string {
+		const progress = feature.provisioning;
+		if (!progress || progress.state === "ready") return "";
+		const steps = progress.steps
+			.map((step) => {
+				const icon =
+					step.status === "completed"
+						? "✓"
+						: step.status === "failed"
+							? "!"
+							: step.status === "running"
+								? "…"
+								: "·";
+				return `<div class="lifecycle-step ${step.status}"><span class="lifecycle-step-icon">${icon}</span><span>${this.escapeHtml(step.label)}</span>${step.error ? `<small>${this.escapeHtml(step.error)}</small>` : ""}</div>`;
+			})
+			.join("");
+		return `<section class="lifecycle-card ${progress.state === "failed" ? "failed" : ""}"><div class="lifecycle-card-title">${progress.state === "failed" ? "Feature setup failed" : "Preparing feature"}</div><div class="lifecycle-steps">${steps}</div>${progress.error ? `<p class="lifecycle-error">${this.escapeHtml(progress.error)}</p>` : ""}</section>`;
 	}
 
 	// -- Feature Home render helpers ------------------------------
@@ -1052,6 +1087,10 @@ export class HomePanel {
 						agent.lastError ?? "Agent failed to start or exited unexpectedly.",
 					)
 				: "Click to view live terminal output";
+		const startupProgress =
+			agent.startup && agent.startup.state !== "ready"
+				? `<div class="lifecycle-steps agent-startup-steps">${agent.startup.steps.map((step) => `<div class="lifecycle-step ${step.status}"><span class="lifecycle-step-icon">${step.status === "completed" ? "✓" : step.status === "failed" ? "!" : step.status === "running" ? "…" : "·"}</span><span>${this.escapeHtml(step.label)}</span></div>`).join("")}</div>`
+				: "";
 
 		let actionButtons: string;
 		if (isDone) {
@@ -1080,6 +1119,7 @@ export class HomePanel {
 			</div>
 			<div class="agent-activity" id="agent-activity-${agent.id}">
 				<div class="activity-content">
+					${startupProgress}
 					<pre class="activity-pre" id="activity-pre-${agent.id}" style="display: none"></pre>
 					<div class="activity-empty" id="activity-empty-${agent.id}">
 						${emptyState}

@@ -9,6 +9,27 @@ export function presentAgentState(
 	observation: AgentObservation,
 ): PresentedAgentState {
 	const { lifecycle, attention } = observation;
+	if (observation.startup?.state === "failed") {
+		return {
+			label: "Startup failed",
+			tone: "error",
+			detail: observation.startup.error,
+		};
+	}
+	if (observation.startup?.state === "provisioning") {
+		return {
+			label: "Preparing",
+			tone: "normal",
+			detail: currentStartupStep(observation),
+		};
+	}
+	if (observation.startup?.state === "starting") {
+		return {
+			label: "Starting",
+			tone: "normal",
+			detail: currentStartupStep(observation),
+		};
+	}
 
 	if (lifecycle.state === "errored") {
 		return {
@@ -57,6 +78,12 @@ export function presentAgentState(
 		};
 	}
 	return { label: "Unknown", tone: "muted" };
+}
+
+function currentStartupStep(observation: AgentObservation): string | undefined {
+	const startup = observation.startup;
+	if (!startup) return undefined;
+	return startup.steps.find((step) => step.id === startup.currentStepId)?.label;
 }
 
 function lifecycleDetail(observation: AgentObservation): string | undefined {

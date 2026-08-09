@@ -63,6 +63,28 @@ describe("Agent observation contract", () => {
 		).toMatchObject({ label: "Unknown", detail: "Read failed" });
 	});
 
+	it("keeps provisioning ahead of provider attention", () => {
+		expect(
+			presentAgentState(
+				observation({
+					attention: { state: "unknown", reason: "No provider evidence yet" },
+					startup: {
+						state: "starting",
+						startedAt: "2026-08-09T00:00:00Z",
+						currentStepId: "launch-provider",
+						steps: [
+							{
+								id: "launch-provider",
+								label: "Starting provider",
+								status: "running",
+							},
+						],
+					},
+				}),
+			),
+		).toMatchObject({ label: "Starting", detail: "Starting provider" });
+	});
+
 	it("exposes tones consumed by the Sidebar primary-state dot classes", () => {
 		const cases = [
 			["working", "working"],
