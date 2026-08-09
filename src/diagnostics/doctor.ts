@@ -34,6 +34,7 @@ export interface DoctorInput {
 	tools: CodingTool[];
 	defaultToolId?: string;
 	worktreeBasePath: string;
+	persistencePath?: string;
 	perAgentIsolation: boolean;
 	syncSessionNames: boolean;
 	homeDir?: string;
@@ -56,6 +57,7 @@ export interface DoctorDeps {
 	commandVersion(command: "git" | "tmux"): string | null;
 	commandFunctional?(command: "git" | "tmux"): boolean;
 	pathReadable(targetPath: string): boolean;
+	pathWritable?(targetPath: string): boolean;
 	readProjectConfig(repoPath: string): ProjectConfigProbe;
 	isGitRepo(repoPath: string): boolean;
 	currentBranch(repoPath: string): string | null;
@@ -133,6 +135,14 @@ export const defaultDoctorDeps: DoctorDeps = {
 	pathReadable(targetPath) {
 		try {
 			fs.accessSync(targetPath, fs.constants.R_OK);
+			return true;
+		} catch {
+			return false;
+		}
+	},
+	pathWritable(targetPath) {
+		try {
+			fs.accessSync(targetPath, fs.constants.W_OK);
 			return true;
 		} catch {
 			return false;
@@ -286,6 +296,18 @@ export function runDoctor(
 		"Session-name sync",
 		input.syncSessionNames ? "enabled" : "disabled",
 	);
+	if (input.persistencePath) {
+		const writable = deps.pathWritable?.(input.persistencePath) ?? true;
+		add(
+			systemChecks,
+			writable ? "ok" : "error",
+			"Persistence backend",
+			`${redactHome(input.persistencePath, homeDir)} is ${writable ? "writable" : "not writable"}`,
+			writable
+				? undefined
+				: "Grant the extension access to its global storage directory, then rerun Doctor.",
+		);
+	}
 
 	let availableToolCount = 0;
 	for (const tool of input.tools) {
