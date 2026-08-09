@@ -476,8 +476,14 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const contexts = this.projectManager.getAllContexts();
 
 		let body: string;
+		const navigatorHeader = `
+			<button class="sidebar-title" onclick="openHome(event)" title="Open Agent Space Home">
+				<span>Agent Space</span>
+			</button>
+			<div class="sidebar-section-label">Projects</div>`;
 		if (contexts.length === 0) {
 			body = `
+				${navigatorHeader}
 				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				<div class="empty-state">
 					<div style="font-size: 24px; opacity: 0.3; margin-bottom: 8px;">Waiting for projects...</div>
@@ -489,6 +495,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				.map((ctx) => this.renderProjectSection(ctx, statusMap))
 				.join("");
 			body = `
+				${navigatorHeader}
 				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				${sections}`;
 		}
@@ -522,6 +529,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 .status-dot.primary-state-warning { background-color: var(--vscode-notificationsWarningIcon-foreground); }
 .status-dot.primary-state-error { background-color: var(--vscode-errorForeground); }
 .status-dot.primary-state-normal, .status-dot.primary-state-muted { background-color: var(--vscode-disabledForeground); }
+.sidebar-title { display: flex; width: 100%; align-items: center; padding: 6px 8px; border: 0; color: var(--vscode-foreground); background: transparent; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
+.sidebar-title:hover { background: var(--vscode-list-hoverBackground); }
+.sidebar-section-label { margin: 10px 8px 4px; color: var(--vscode-descriptionForeground); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 </style>
 </head>
 <body>

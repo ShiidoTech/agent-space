@@ -4,6 +4,11 @@ function send(command, data) {
 	vscode.postMessage({ command, ...data });
 }
 
+function openHome(e) {
+	if (e) e.stopPropagation();
+	send("openHome");
+}
+
 function selectFeature(id) {
 	send("selectFeature", { featureId: id });
 }

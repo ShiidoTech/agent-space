@@ -56,11 +56,6 @@
 		"views": {
 			"agentSpace": [
 				{
-					"id": "agentSpace.home",
-					"name": "Home",
-					"type": "webview"
-				},
-				{
 					"id": "agentSpace.features",
 					"name": "Features",
 					"type": "webview"
@@ -189,6 +184,16 @@
 			{
 				"command": "agentSpace.openProjectSettings",
 				"title": "Open Project Settings",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.openProjectConfig",
+				"title": "Open Project Configuration",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.openProviderDocs",
+				"title": "Open Provider Configuration Documentation",
 				"category": "Agent Space"
 			}
 		],
