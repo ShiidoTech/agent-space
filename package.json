@@ -158,6 +158,12 @@
 				"category": "Agent Space"
 			},
 			{
+				"command": "agentSpace.recoverAgentSession",
+				"title": "Attach Existing Agent Session",
+				"category": "Agent Space",
+				"icon": "$(plug)"
+			},
+			{
 				"command": "agentSpace.openWorkspace",
 				"title": "Open Feature Home",
 				"category": "Agent Space",
