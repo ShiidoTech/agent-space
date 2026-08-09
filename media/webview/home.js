@@ -258,6 +258,41 @@ function updateAttention(agent) {
 		badge.textContent = ATTENTION_LABELS[status] || status;
 		badge.title = agent.reason || "No current attention evidence";
 	}
+
+	updateBindingBadge(agent);
+}
+
+// Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
+// binding at all) renders nothing — it is the quiet, expected state.
+const BINDING_LABELS = {
+	pending: "Starting…",
+	ambiguous: "Ambiguous session",
+	unverified: "Session lost",
+	unsupported: "No session tracking",
+};
+
+function updateBindingBadge(agent) {
+	const badge = document.getElementById(`agent-binding-badge-${agent.id}`);
+	if (!badge) return;
+
+	const state = agent.bindingState;
+	const label = state && state !== "bound" ? BINDING_LABELS[state] : null;
+	if (!label) {
+		badge.style.display = "none";
+		badge.textContent = "";
+		badge.title = "";
+		return;
+	}
+
+	let tooltip = agent.bindingDetail || "";
+	if (state === "ambiguous" && tooltip) {
+		tooltip += " Run one agent per worktree to avoid this.";
+	}
+
+	badge.className = `agent-tool-badge binding-badge binding-${state}`;
+	badge.textContent = label;
+	badge.title = tooltip;
+	badge.style.display = "";
 }
 
 window.addEventListener("message", (event) => {

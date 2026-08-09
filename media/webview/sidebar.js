@@ -243,6 +243,41 @@ const ATTENTION_LABELS = {
 	unknown: "Unknown",
 };
 
+// Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
+// binding at all) renders nothing — it is the quiet, expected state.
+const BINDING_LABELS = {
+	pending: "Starting…",
+	ambiguous: "Ambiguous session",
+	unverified: "Session lost",
+	unsupported: "No session tracking",
+};
+
+function updateBindingBadge(agentEl, agent) {
+	var badge = agentEl.querySelector('[data-binding-badge="' + agent.id + '"]');
+	var state = agent.bindingState;
+	var label = state && state !== "bound" ? BINDING_LABELS[state] : null;
+
+	if (!label) {
+		if (badge) badge.remove();
+		return;
+	}
+
+	var tooltip = agent.bindingDetail || "";
+	if (state === "ambiguous" && tooltip) {
+		tooltip += " Run one agent per worktree to avoid this.";
+	}
+
+	if (!badge) {
+		badge = document.createElement("span");
+		badge.setAttribute("data-binding-badge", agent.id);
+		var nameEl = agentEl.querySelector(".agent-name");
+		if (nameEl) nameEl.appendChild(badge);
+	}
+	badge.className = "binding-badge binding-" + state;
+	badge.textContent = label;
+	badge.title = tooltip;
+}
+
 window.addEventListener("message", function (event) {
 	var msg = event.data;
 	if (msg.type !== "sidebarUpdate" || !msg.data) return;
@@ -295,6 +330,8 @@ window.addEventListener("message", function (event) {
 					attentionBadge.title =
 						agent.attentionReason || "No current attention evidence";
 				}
+
+				updateBindingBadge(agentEl, agent);
 
 				// Keep card-level classes tied to persisted lifecycle state.
 				var statusClass = "idle";
