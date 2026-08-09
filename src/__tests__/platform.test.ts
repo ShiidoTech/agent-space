@@ -508,6 +508,31 @@ describe("platform", () => {
 					expect.any(Object),
 				);
 				expect(mockExecSync).toHaveBeenCalledWith(
+					expect.stringMatching(/^tmux has-session -t agentspace-doctor-/),
+					expect.any(Object),
+				);
+				expect(mockExecSync).toHaveBeenCalledWith(
+					expect.stringMatching(/^tmux kill-session -t agentspace-doctor-/),
+					expect.any(Object),
+				);
+			} finally {
+				Object.defineProperty(process, "platform", { value: originalPlatform });
+			}
+		});
+
+		it("returns false when has-session fails and still cleans up", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { value: "linux" });
+			try {
+				mockExecSync.mockImplementation((command: string) => {
+					if (command.startsWith("tmux has-session")) {
+						throw new Error("session is not functional");
+					}
+					return "";
+				});
+				const { tmuxFunctional } = await loadPlatform();
+				expect(tmuxFunctional()).toBe(false);
+				expect(mockExecSync).toHaveBeenCalledWith(
 					expect.stringMatching(/^tmux kill-session -t agentspace-doctor-/),
 					expect.any(Object),
 				);
