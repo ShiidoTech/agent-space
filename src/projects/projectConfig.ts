@@ -38,6 +38,19 @@ export interface ProjectConfig {
 		enabled?: string[];
 		default?: string;
 	};
+	/**
+	 * Project-level operational knowledge: canonical agent instructions and
+	 * runbooks. The files themselves are the source of truth; this block makes
+	 * references explicit so missing/invalid ones fail visibly instead of being
+	 * silently ignored. See `projectKnowledge.ts` and
+	 * `docs/project-operational-knowledge.md`.
+	 */
+	knowledge?: {
+		/** Relative repo paths to canonical agent instructions (AGENTS.md by convention). */
+		instructions?: string[];
+		/** Relative paths (or an id → path map) to runbooks. */
+		runbooks?: string[] | Record<string, string>;
+	};
 }
 
 export interface ProjectAgentPolicy {

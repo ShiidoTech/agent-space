@@ -1,5 +1,9 @@
 import * as vscode from "vscode";
 import { getThemeColors } from "../constants/colors";
+import {
+	buildProjectKnowledgeLaunchNote,
+	discoverProjectKnowledge,
+} from "../projects/projectKnowledge";
 import type { ProjectManager } from "../projects/projectManager";
 import type { Agent, Feature, Service } from "../types";
 import { exec, getTerminalShellArgs } from "../utils/platform";
@@ -7,6 +11,11 @@ import type { CodingToolRegistry } from "./codingToolRegistry";
 import type { TmuxIntegration } from "./tmux";
 
 const AGENT_COLORS = getThemeColors();
+
+/** Single-quote a value for insertion into a shell command line. */
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 interface TerminalMetadata {
 	id: string;
@@ -95,9 +104,19 @@ export class TerminalController implements vscode.Disposable {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
 			try {
-				const launchCommand = shouldResume
+				const baseCommand = shouldResume
 					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
 					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
+				// Fresh launches get the project's operational knowledge note so
+				// the agent's launch context shows which instructions/runbooks
+				// were made available. Resume/attach launches stay quiet.
+				const launchContextNote = shouldResume
+					? undefined
+					: this.buildAgentLaunchNote(feature);
+				const launchCommand = this.withLaunchContextNote(
+					baseCommand,
+					launchContextNote,
+				);
 				// Snapshot the provider's existing sessions for this directory
 				// before the CLI starts, so a session created by THIS launch is the
 				// only one that can later be attributed to the agent.
@@ -436,6 +455,43 @@ export class TerminalController implements vscode.Disposable {
 		cwd: string,
 	): string {
 		return `Failed to start ${agentName} with ${toolName}. Check that the CLI is installed and launches from ${cwd}.`;
+	}
+
+	/**
+	 * Build the launch-context note for a fresh agent: which project
+	 * instructions and runbooks were made available, and any knowledge
+	 * problem. Provider-agnostic — the note points at files the agent can
+	 * read, it never injects provider-specific context.
+	 */
+	private buildAgentLaunchNote(feature: Feature): string | undefined {
+		const ctx = this.projectManager.findContextByFeatureId(feature.id);
+		if (!ctx?.project || !ctx.config) return undefined;
+		try {
+			return buildProjectKnowledgeLaunchNote(
+				discoverProjectKnowledge(ctx.project.repoPath, ctx.config),
+			);
+		} catch {
+			// Knowledge is an enhancement; a resolution failure must never
+			// block an agent launch.
+			return undefined;
+		}
+	}
+
+	/**
+	 * Prepend a visible launch-context note to the CLI command so it is the
+	 * first thing the agent's terminal shows. The note only writes stdout
+	 * before the CLI starts; it never feeds input to the CLI.
+	 */
+	private withLaunchContextNote(
+		command: string,
+		note: string | undefined,
+	): string {
+		if (!note) return command;
+		const echoed = `printf '%s\\n' ${note
+			.split("\n")
+			.map(shellQuote)
+			.join(" ")}`;
+		return `${echoed}; ${command}`;
 	}
 
 	private recordAgentFailure(

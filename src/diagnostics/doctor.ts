@@ -1,7 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { LOCAL_CONFIG_FILE_NAME } from "../projects/projectConfig";
+import {
+	LOCAL_CONFIG_FILE_NAME,
+	loadProjectConfig,
+} from "../projects/projectConfig";
+import {
+	discoverProjectKnowledge,
+	type ProjectKnowledge,
+} from "../projects/projectKnowledge";
 import type { CodingTool, Project } from "../types";
 import {
 	commandExists,
@@ -106,6 +113,13 @@ export interface DoctorDeps {
 	pathReadable(targetPath: string): boolean;
 	pathWritable?(targetPath: string): boolean;
 	readProjectConfig(repoPath: string): ProjectConfigProbe;
+	/**
+	 * Resolve the project's operational knowledge (instructions + runbooks).
+	 * Optional so callers that only care about the classic checks are not
+	 * forced into the knowledge layer. When present, missing/invalid declared
+	 * knowledge references are reported as errors.
+	 */
+	readProjectKnowledge?(repoPath: string): ProjectKnowledge;
 	isGitRepo(repoPath: string): boolean;
 	currentBranch(repoPath: string): string | null;
 	branchExists(repoPath: string, branch: string): boolean;
@@ -216,6 +230,9 @@ export const defaultDoctorDeps: DoctorDeps = {
 		}
 	},
 	readProjectConfig: defaultReadProjectConfig,
+	readProjectKnowledge(repoPath) {
+		return discoverProjectKnowledge(repoPath, loadProjectConfig(repoPath));
+	},
 	isGitRepo(repoPath) {
 		return execSilent("git rev-parse --is-inside-work-tree", { cwd: repoPath });
 	},
@@ -650,6 +667,57 @@ export function runDoctor(
 					? `configured base \`${configuredBase}\` exists`
 					: `no explicit baseBranch; current checkout \`${effectiveBase}\` is the fallback`,
 			);
+		}
+
+		if (deps.readProjectKnowledge) {
+			const knowledge = deps.readProjectKnowledge(project.repoPath);
+			const availableInstructions = knowledge.instructions.filter(
+				(instruction) => instruction.exists,
+			);
+			const availableRunbooks = knowledge.runbooks.filter(
+				(runbook) => runbook.exists,
+			);
+
+			if (
+				!knowledge.hasKnowledge ||
+				(availableInstructions.length === 0 && availableRunbooks.length === 0)
+			) {
+				add(
+					projectChecks,
+					"info",
+					`${project.name} operational knowledge`,
+					"no AGENTS.md or .agentspace/runbooks/*.md found",
+					"Add canonical instructions (AGENTS.md) and runbooks under .agentspace/runbooks; see docs/project-operational-knowledge.md.",
+				);
+			} else {
+				const facts = [
+					`${availableInstructions.length} instruction${availableInstructions.length === 1 ? "" : "s"}`,
+					`${availableRunbooks.length} runbook${availableRunbooks.length === 1 ? "" : "s"}`,
+				];
+				if (availableRunbooks.length > 0) {
+					facts.push(
+						availableRunbooks
+							.map((runbook) => `${runbook.id}: ${runbook.title}`)
+							.join("; "),
+					);
+				}
+				add(
+					projectChecks,
+					"ok",
+					`${project.name} operational knowledge`,
+					facts.join(", "),
+				);
+			}
+
+			for (const problem of knowledge.problems) {
+				add(
+					projectChecks,
+					"error",
+					`${project.name} knowledge reference`,
+					`${problem.reference}: ${problem.detail}`,
+					"Fix the declared reference in .agentspace/config.json or commit the missing file.",
+				);
+			}
 		}
 	}
 

@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Project operational knowledge
+- Introduce a project-level knowledge layer so every newly launched agent
+  discovers the project's canonical instructions and runbooks without previous
+  session history: `AGENTS.md` (canonical agent instructions) and
+  `.agentspace/runbooks/*.md` (deterministic procedures), declared and validated
+  through `knowledge` in `.agentspace/config.json`.
+- Print a launch-context note in a fresh agent's terminal listing the available
+  instructions and runbooks, with declared-but-missing references surfaced
+  visibly instead of silently ignored.
+- Keep the mechanism provider-agnostic: knowledge lives in the repository as
+  plain files every CLI can read, and the launch note only points at them.
+- Let runbooks declare deterministic `commands` and a `canonical` status so
+  known-good procedures are separated from unverified troubleshooting notes.
+- Add `Agent Space: Open Project Runbook` to browse and open a project's
+  runbooks, and extend Doctor with per-project knowledge checks.
+
 
 ## [0.6.0] - 2026-08-08
 

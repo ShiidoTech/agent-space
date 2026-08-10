@@ -139,6 +139,13 @@ Example:
 }
 ```
 
+A `knowledge` block lets a project declare its **operational knowledge** for
+coding agents: canonical instructions (`AGENTS.md`) and runbooks
+(`.agentspace/runbooks/*.md`). Every freshly launched agent discovers them — the
+launch context lists what was made available, and Doctor fails visibly on
+declared-but-missing references. See
+`docs/project-operational-knowledge.md`.
+
 ### Custom Coding Tools
 
 Coding tools are plain records: `id`, `name`, `command`, plus optional `args`. This fork also supports `env`, `family`, `sessionsDir` and `resumeCommand`, and `"enabled": false` to hide a built-in. A custom entry merges over the matching built-in, keeping any field it does not specify; `env` values are merged by key, while list fields such as `args` are replaced rather than combined. A wrapped CLI (for example a variant of a supported tool that uses a separate config folder or profile) is declared the same way, and is resumed through its own executable when a session identifier or `resumeCommand` is available.

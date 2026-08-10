@@ -154,6 +154,11 @@
 				"category": "Agent Space"
 			},
 			{
+				"command": "agentSpace.openProjectRunbook",
+				"title": "Open Project Runbook",
+				"category": "Agent Space"
+			},
+			{
 				"command": "agentSpace.reopenAgent",
 				"title": "Reopen Agent",
 				"category": "Agent Space"
