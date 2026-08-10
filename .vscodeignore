@@ -5,6 +5,8 @@
 .agentspace/**
 .worktrees/**
 .codegraph/**
+.claude/**
+node_modules/**
 src/**
 scripts/**
 feature/**

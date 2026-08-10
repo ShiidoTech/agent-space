@@ -21,7 +21,7 @@ project.
   `npm test -- --run`, `npm run compile`.
 - **Canonical packaging command is `npm run package`** (wraps `vsce package`).
   Do not invoke `vsce` directly in the default path.
-- **Never commit or push without being asked.** Never push directly to `main` or
+- **Commit on a feature branch after the mandatory checks pass; never push directly to `main` or
   `develop`. Submit a pull request to `ShiidoTech/agent-space`.
 
 ## Operational knowledge

@@ -1116,9 +1116,19 @@ export async function activate(
 				terminalController.killFeatureTerminals(featureId);
 				ctx.serviceManager.deleteAllServices(featureId);
 				ctx.agentManager.deleteAllAgents(featureId);
-				ctx.featureManager.deleteFeature(featureId, {
+				const result = ctx.featureManager.deleteFeature(featureId, {
 					force: blockers.length > 0,
 				});
+				if (!result.deleted) {
+					// Fail-closed: the worktree is still on disk, so the feature
+					// record must remain visible — otherwise it would orphan the
+					// worktree (invisible residue).
+					void vscode.window.showErrorMessage(
+						`Feature "${feature.name}" was NOT deleted:\n\n${result.reasons.join("\n")}`,
+					);
+					sidebarProvider.refresh();
+					return;
+				}
 				sidebarProvider.refresh();
 
 				if (activeFeatureId === featureId) {

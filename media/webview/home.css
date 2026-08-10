@@ -402,10 +402,10 @@ body {
 	justify-content: center;
 	width: 28px;
 	height: 28px;
-	background: transparent;
-	border: none;
+	background: var(--vscode-button-background);
+	border: 1px solid var(--vscode-button-background);
 	border-radius: 5px;
-	color: var(--vscode-descriptionForeground);
+	color: var(--vscode-button-foreground);
 	cursor: pointer;
 	font-size: 16px;
 	transition:
@@ -414,8 +414,9 @@ body {
 	flex-shrink: 0;
 }
 .home-back-btn:hover {
-	background: var(--vscode-toolbar-hoverBackground);
-	color: var(--vscode-foreground);
+	background: var(--vscode-button-hoverBackground);
+	border-color: var(--vscode-button-hoverBackground);
+	color: var(--vscode-button-foreground);
 }
 .header-color-dot {
 	width: 12px;
@@ -516,6 +517,195 @@ body {
 
 .project-new-feature {
 	margin-top: 10px;
+}
+
+/* ── Home navigation bar (full-width, replaces the tiny back icon) ── */
+.home-nav-bar {
+	display: block;
+	width: 100%;
+	box-sizing: border-box;
+	padding: 10px 24px;
+	text-align: left;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+	border: none;
+	cursor: pointer;
+}
+.home-nav-bar:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+/* ── Project page: base branch git state chips ── */
+.project-base-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 10px;
+}
+.project-base-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 3px 8px;
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--vscode-descriptionForeground);
+	background: var(--vscode-sideBar-background);
+	border: 1px solid var(--vscode-panel-border);
+}
+.project-base-chip--dirty {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+	border-color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 40%, transparent);
+}
+
+/* ── Project page: rich feature cards (sidebar-equivalent density) ── */
+.project-feature-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin: 12px 0 16px;
+}
+.project-feature-card {
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 6px;
+	overflow: hidden;
+}
+.project-feature-card-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 14px;
+	cursor: pointer;
+	user-select: none;
+}
+.project-feature-card-header:hover {
+	background: var(--vscode-list-hoverBackground);
+}
+.project-feature-card-header.collapsed + .project-feature-card-body {
+	display: none;
+}
+.project-feature-chevron {
+	display: inline-flex;
+	flex: 0 0 auto;
+	font-size: 14px;
+	color: var(--vscode-descriptionForeground);
+	transition: transform 0.15s;
+}
+.project-feature-card-header.collapsed .project-feature-chevron {
+	transform: rotate(90deg);
+}
+.project-feature-color {
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+	flex: 0 0 auto;
+}
+.project-feature-branch {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.project-status-badge {
+	flex: 0 0 auto;
+	padding: 2px 7px;
+	border-radius: 999px;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.03em;
+	text-transform: uppercase;
+}
+.project-status-badge.status-new {
+	color: var(--vscode-testing-iconPassed);
+	background: color-mix(in srgb, var(--vscode-testing-iconPassed) 14%, transparent);
+}
+.project-status-badge.status-modified {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+	background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent);
+}
+.project-status-badge.status-ahead {
+	color: var(--vscode-charts-blue);
+	background: color-mix(in srgb, var(--vscode-charts-blue) 14%, transparent);
+}
+.project-status-badge.status-merged {
+	color: var(--vscode-descriptionForeground);
+	background: var(--vscode-button-secondaryBackground);
+}
+.project-base-label {
+	flex: 0 0 auto;
+	padding: 2px 7px;
+	border-radius: 999px;
+	font-size: 10px;
+	font-weight: 700;
+	text-transform: uppercase;
+	color: var(--vscode-descriptionForeground);
+	background: var(--vscode-button-secondaryBackground);
+}
+.project-feature-counts {
+	margin-left: auto;
+	flex: 0 0 auto;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	white-space: nowrap;
+}
+.project-feature-delete {
+	flex: 0 0 auto;
+	width: 22px;
+	height: 22px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border: none;
+	border-radius: 4px;
+	font-size: 14px;
+	line-height: 1;
+	color: var(--vscode-descriptionForeground);
+	background: transparent;
+	cursor: pointer;
+}
+.project-feature-delete:hover {
+	color: var(--vscode-errorForeground);
+	background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+}
+.project-feature-card-body {
+	padding: 4px 14px 14px;
+	border-top: 1px solid var(--vscode-panel-border);
+}
+.project-feature-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-top: 14px;
+}
+.project-feature-actions .quick-action-btn {
+	flex: 1 1 auto;
+}
+
+.project-overview-grid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 10px;
+	margin: 12px 0 16px;
+}
+.project-overview-grid > div {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	padding: 10px;
+	border-radius: 4px;
+	background: var(--vscode-sideBar-background);
+}
+.project-overview-grid strong { font-size: 20px; }
+.project-overview-grid span {
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
 }
 
 .project-settings-card {

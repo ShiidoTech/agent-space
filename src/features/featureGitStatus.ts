@@ -65,6 +65,114 @@ export function invalidateGitStatusCache(featureBranch?: string): void {
 	}
 }
 
+export function gitStatusLabel(status: GitAwareStatus): string {
+	switch (status) {
+		case "new":
+			return "New";
+		case "modified":
+			return "Modified";
+		case "ahead":
+			return "Ahead";
+		case "merged":
+			return "Merged";
+		default:
+			return status;
+	}
+}
+
+// -- Base branch git state (the comparison branch for all features) --------
+
+export interface BaseBranchGitState {
+	branch: string;
+	dirty: boolean;
+	/** Commits ahead of the tracked remote (0 when no remote tracking). */
+	ahead: number;
+	/** Commits behind the tracked remote (0 when no remote tracking). */
+	behind: number;
+	/** Last commit short sha + subject, e.g. "abc1234 fix: x". */
+	lastCommit: string;
+	hasRemote: boolean;
+}
+
+const GIT_STATE_TTL_MS = 10_000;
+const baseStateCache = new Map<
+	string,
+	{ result: BaseBranchGitState; timestamp: number }
+>();
+
+function gitQuiet(command: string, cwd: string): string | null {
+	try {
+		return execSync(command, {
+			cwd,
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "pipe"],
+		})
+			.trim()
+			.split(/\r?\n/)[0];
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Git state of the project's base branch — the branch every feature is
+ * compared against. Fail-closed: every field degrades to a safe default
+ * (dirty=false, ahead=0, behind=0) rather than throwing.
+ */
+export function computeBaseBranchGitState(
+	repoRoot: string,
+	branch: string,
+): BaseBranchGitState {
+	const key = `${repoRoot}:${branch}`;
+	const cached = baseStateCache.get(key);
+	if (cached && Date.now() - cached.timestamp < GIT_STATE_TTL_MS) {
+		return cached.result;
+	}
+
+	const dirty = (gitQuiet("git status --porcelain", repoRoot) ?? "").length > 0;
+
+	// origin/<branch> may not exist yet; both counts degrade to 0.
+	const counts =
+		gitQuiet(
+			`git rev-list --left-right --count "origin/${branch}"...${branch}`,
+			repoRoot,
+		) ?? "";
+	const [behindRaw, aheadRaw] = counts.split(/\s+/);
+	const behind = Number.parseInt(behindRaw ?? "0", 10);
+	const ahead = Number.parseInt(aheadRaw ?? "0", 10);
+	const hasRemote =
+		gitQuiet(
+			`git rev-parse --verify --quiet "refs/remotes/origin/${branch}"`,
+			repoRoot,
+		) !== null;
+
+	const lastCommit =
+		gitQuiet(`git log -1 --format=%h%x20%s "${branch}"`, repoRoot) ?? "";
+
+	const result: BaseBranchGitState = {
+		branch,
+		dirty,
+		ahead: Number.isFinite(ahead) ? ahead : 0,
+		behind: Number.isFinite(behind) ? behind : 0,
+		lastCommit,
+		hasRemote,
+	};
+	baseStateCache.set(key, { result, timestamp: Date.now() });
+	return result;
+}
+
+export function invalidateBaseBranchGitState(repoRoot?: string): void {
+	if (repoRoot) {
+		for (const key of baseStateCache.keys()) {
+			if (key.startsWith(`${repoRoot}:`)) {
+				baseStateCache.delete(key);
+			}
+		}
+	} else {
+		baseStateCache.clear();
+	}
+}
+
 export function computeGitStatus(input: GitStatusInput): GitAwareStatus {
 	const key = cacheKey(input);
 	const cached = gitStatusCache.get(key);

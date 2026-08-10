@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { execSync } from "node:child_process";
 import type { AgentManager } from "../agents/agentManager";
 import { presentSessionBinding } from "../agents/attention/sessionBindingPresentation";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
@@ -29,19 +30,7 @@ import type {
 	Service,
 } from "../types";
 import type { FeatureManager } from "./featureManager";
-
-function gitStatusLabel(status: GitAwareStatus): string {
-	switch (status) {
-		case "new":
-			return "New";
-		case "modified":
-			return "Modified";
-		case "ahead":
-			return "Ahead";
-		case "merged":
-			return "Merged";
-	}
-}
+import { gitStatusLabel } from "./featureGitStatus";
 
 export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "agentSpace.features";
@@ -482,18 +471,15 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		let body: string;
 		if (contexts.length === 0) {
 			body = `
-				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				<div class="empty-state">
 					<div style="font-size: 24px; opacity: 0.3; margin-bottom: 8px;">Waiting for projects...</div>
 					<p>No projects registered</p>
-					<button class="btn-primary" onclick="send('addProject')">Add Project</button>
 				</div>`;
 		} else {
 			const sections = contexts
 				.map((ctx) => this.renderProjectSection(ctx, statusMap))
 				.join("");
 			body = `
-				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				${sections}`;
 		}
 
