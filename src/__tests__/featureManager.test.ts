@@ -253,6 +253,31 @@ describe("FeatureManager", () => {
 				expect.any(Object),
 			);
 		});
+
+		it("keeps the feature record when git refuses to remove the worktree", () => {
+			// Real worktree base inside the tmp dir so fs.existsSync sees the
+			// worktree still on disk after the (simulated) git failure.
+			const fm = new FeatureManager(store, tmpDir, tmpDir);
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = fm.createFeature("sticky", "shared");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
+
+			mockExecSync.mockReset();
+			mockExecSync.mockImplementation((command: string) => {
+				if (String(command).includes("git worktree remove")) {
+					throw new Error("git worktree remove failed");
+				}
+				return Buffer.from("");
+			});
+
+			const result = fm.deleteFeature(feature.id);
+
+			expect(result.deleted).toBe(false);
+			expect(result.reasons.join("\n")).toContain("refused to remove worktree");
+			// Fail-closed: the feature must remain visible so the worktree is
+			// not orphaned into an invisible residue.
+			expect(fm.getFeatures()).toHaveLength(1);
+		});
 	});
 
 	describe("getFeatures / getFeature", () => {

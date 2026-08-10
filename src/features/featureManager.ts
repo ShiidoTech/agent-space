@@ -459,7 +459,18 @@ export class FeatureManager {
 					},
 				);
 			} catch {
-				// Worktree may already be gone
+				// Worktree may already be gone — but if it is still on disk,
+				// the removal actually failed. Do NOT drop the feature record:
+				// it would silently orphan the worktree (invisible residue).
+				if (fs.existsSync(feature.worktreePath)) {
+					return {
+						deleted: false,
+						reasons: [
+							...safety.reasons,
+							`Git refused to remove worktree: ${feature.worktreePath}`,
+						],
+					};
+				}
 			}
 		} else {
 			console.error(
