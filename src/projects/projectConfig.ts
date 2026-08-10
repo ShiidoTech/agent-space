@@ -230,6 +230,19 @@ export function saveProjectConfig(
 	return loadProjectConfig(repoRoot);
 }
 
+/** Replace the shareable project config after an explicit JSON edit. */
+export function replaceProjectConfig(
+	repoRoot: string,
+	config: ProjectConfig,
+): ProjectConfig {
+	const dir = path.join(repoRoot, CONFIG_DIR_NAME);
+	const file = path.join(dir, CONFIG_FILE_NAME);
+	fs.mkdirSync(dir, { recursive: true });
+	fs.writeFileSync(file, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+	cachedConfig = undefined;
+	return loadProjectConfig(repoRoot);
+}
+
 /** Resolve the effective worktree base for a project. */
 export function resolveWorktreeBaseDir(
 	repoRoot: string,

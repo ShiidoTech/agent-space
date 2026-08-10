@@ -1,13 +1,15 @@
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { TERMINAL_COLOR_KEYS } from "../constants/colors";
 import { checkWorktreeDeletionSafety } from "../git/worktreeSafety";
 import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
 import type {
 	Feature,
+	FeatureProvisioning,
 	FeatureStatus,
 	GitAwareStatus,
 	IsolationMode,
@@ -15,6 +17,8 @@ import type {
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { computeGitStatus, computeGitStatusAsync } from "./featureGitStatus";
 import { normalizeFeatureName } from "./featureName";
+
+const execFileAsync = promisify(execFile);
 
 export interface FeatureDeleteResult {
 	deleted: boolean;
@@ -39,6 +43,7 @@ export interface FeatureLifecycleDiagnostic {
 export class FeatureManager {
 	private features: Feature[];
 	private cachedBaseBranch: string | undefined;
+	private onChangeCallback?: () => void;
 
 	constructor(
 		private readonly store: Store,
@@ -47,6 +52,10 @@ export class FeatureManager {
 		private config: ProjectConfig = {},
 	) {
 		this.features = store.loadFeatures();
+	}
+
+	setOnChange(callback: () => void): void {
+		this.onChangeCallback = callback;
 	}
 
 	/**
@@ -251,6 +260,17 @@ export class FeatureManager {
 		isolation: IsolationMode,
 		branchKind?: string,
 	): Feature {
+		const feature = this.createFeatureRecord(name, isolation, branchKind);
+		this.provisionFeatureSync(feature.id);
+		return feature;
+	}
+
+	/** Save a visible Feature record before Git work starts. */
+	createFeatureRecord(
+		name: string,
+		isolation: IsolationMode,
+		branchKind?: string,
+	): Feature {
 		const displayName = name.trim();
 		const normalizedName = normalizeFeatureName(displayName);
 		if (!normalizedName) {
@@ -277,24 +297,6 @@ export class FeatureManager {
 			this.worktreeBase,
 			`${kind}-${normalizedName}`,
 		);
-		const baseBranch = this.getBaseBranch();
-		const createdFromSha = String(
-			execSync(`git rev-parse "${baseBranch}"`, {
-				cwd: this.repoRoot,
-				encoding: "utf-8",
-				stdio: ["ignore", "pipe", "pipe"],
-			}),
-		).trim();
-
-		execSync(
-			`git worktree add "${worktreePath}" -b "${branch}" "${baseBranch}"`,
-			{
-				cwd: this.repoRoot,
-				encoding: "utf-8",
-				stdio: ["ignore", "pipe", "pipe"],
-			},
-		);
-
 		const feature: Feature = {
 			id,
 			name: displayName,
@@ -304,12 +306,109 @@ export class FeatureManager {
 			color: this.pickColor(displayName),
 			isolation,
 			createdAt: new Date().toISOString(),
-			createdFromSha,
+			provisioning: {
+				state: "provisioning",
+				steps: [
+					{ id: "resolve-base", label: "Preparing feature", status: "pending" },
+					{ id: "create-worktree", label: "Creating branch and worktree", status: "pending" },
+				],
+			},
 		};
 
 		this.features.push(feature);
 		this.store.saveFeatures(this.features);
 		return feature;
+	}
+
+	async provisionFeature(id: string): Promise<Feature | undefined> {
+		// Yield once so the cockpit paints its pending state, then keep Git off
+		// the extension host thread while the worktree is being created.
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		try {
+			await this.provisionFeatureAsync(id);
+			return this.features.find((candidate) => candidate.id === id);
+		} catch (error) {
+			const feature = this.features.find((candidate) => candidate.id === id);
+			const progress = feature?.provisioning;
+			if (progress) {
+				const step = progress.steps.find((candidate) => candidate.status === "running");
+				const message = error instanceof Error ? error.message : String(error);
+				if (step) { step.status = "failed"; step.error = message; }
+				progress.state = "failed";
+				progress.error = message;
+				this.saveAndNotify();
+			}
+			throw error;
+		}
+	}
+
+	private async provisionFeatureAsync(id: string): Promise<void> {
+		const feature = this.features.find((candidate) => candidate.id === id);
+		if (!feature?.provisioning) return;
+		const baseBranch = this.getBaseBranch();
+		feature.provisioning.steps[0].status = "running";
+		this.saveAndNotify();
+		const baseResult = await execFileAsync("git", ["rev-parse", baseBranch], {
+			cwd: this.repoRoot,
+			encoding: "utf8",
+		});
+		feature.createdFromSha = String(baseResult.stdout).trim();
+		feature.provisioning.steps[0].status = "completed";
+		feature.provisioning.steps[1].status = "running";
+		this.saveAndNotify();
+		await execFileAsync(
+			"git",
+			[
+				"worktree",
+				"add",
+				feature.worktreePath,
+				"-b",
+				feature.branch,
+				baseBranch,
+			],
+			{ cwd: this.repoRoot, encoding: "utf8" },
+		);
+		feature.provisioning.state = "ready";
+		feature.provisioning.currentStepId = undefined;
+		for (const step of feature.provisioning.steps) step.status = "completed";
+		this.saveAndNotify();
+	}
+
+	private provisionFeatureSync(id: string): void {
+		const feature = this.features.find((candidate) => candidate.id === id);
+		if (!feature?.provisioning) return;
+		const baseBranch = this.getBaseBranch();
+		feature.provisioning.steps[0].status = "running";
+		this.saveAndNotify();
+		feature.createdFromSha = String(execSync(`git rev-parse "${baseBranch}"`, { cwd: this.repoRoot, encoding: "utf-8" })).trim();
+		feature.provisioning.steps[0].status = "completed";
+		feature.provisioning.steps[1].status = "running";
+		this.saveAndNotify();
+		execSync(`git worktree add "${feature.worktreePath}" -b "${feature.branch}" "${baseBranch}"`, { cwd: this.repoRoot });
+		feature.provisioning.state = "ready";
+		feature.provisioning.currentStepId = undefined;
+		for (const step of feature.provisioning.steps) step.status = "completed";
+		this.saveAndNotify();
+	}
+
+	private startStep(progress: FeatureProvisioning, id: string): void {
+		const step = progress.steps.find((candidate) => candidate.id === id);
+		if (!step) throw new Error(`Unknown provisioning step: ${id}`);
+		step.status = "running";
+		progress.currentStepId = id;
+		this.saveAndNotify();
+	}
+
+	private completeStep(progress: FeatureProvisioning, id: string): void {
+		const step = progress.steps.find((candidate) => candidate.id === id);
+		if (!step) throw new Error(`Unknown provisioning step: ${id}`);
+		step.status = "completed";
+		this.saveAndNotify();
+	}
+
+	private saveAndNotify(): void {
+		this.store.saveFeatures(this.features);
+		this.onChangeCallback?.();
 	}
 
 	/**

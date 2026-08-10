@@ -138,6 +138,18 @@ export class AgentManager {
 		return agent;
 	}
 
+	beginAgentStartup(agentId: string, featureId: string, waitingForWorktree = false): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		if (!agent) return;
+		agent.startup = { state: "starting", steps: [
+			{ id: "worktree", label: "Waiting for feature worktree", status: waitingForWorktree ? "running" : "completed" },
+			{ id: "terminal", label: "Creating terminal", status: waitingForWorktree ? "pending" : "running" },
+			{ id: "provider", label: `Starting ${agent.toolId ?? "agent"}`, status: "pending" },
+		] };
+		this.saveAgents(featureId, agents);
+	}
+
 	renameAgent(agentId: string, featureId: string, name: string): void {
 		const agents = this.loadAgents(featureId);
 		const agent = agents.find((a) => a.id === agentId);
@@ -193,6 +205,10 @@ export class AgentManager {
 		agent.hasStarted = true;
 		delete agent.lastError;
 		delete agent.lastExitCode;
+		if (agent.startup) {
+			for (const step of agent.startup.steps) step.status = "completed";
+			agent.startup.state = "ready";
+		}
 		this.saveAgents(featureId, agents);
 	}
 
@@ -208,6 +224,14 @@ export class AgentManager {
 		agent.status = "errored";
 		agent.lastError = message;
 		agent.lastExitCode = exitCode ?? null;
+		if (agent.startup) {
+			const step = agent.startup.steps.find((candidate) => candidate.status === "running");
+			if (step) {
+				step.status = "failed";
+				step.error = message;
+			}
+			agent.startup.state = "failed";
+		}
 		this.saveAgents(featureId, agents);
 	}
 

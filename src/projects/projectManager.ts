@@ -11,6 +11,7 @@ import { Store } from "../storage/store";
 import type { Feature, Project } from "../types";
 import {
 	loadProjectConfig,
+	replaceProjectConfig,
 	type ProjectConfig,
 	resolveWorktreeBaseDir,
 	saveProjectConfig,
@@ -106,6 +107,26 @@ export class ProjectManager {
 		}
 		this.notifyChange();
 		return config;
+	}
+
+	replaceProjectConfig(
+		projectId: string,
+		config: ProjectConfig,
+	): ProjectConfig | undefined {
+		const project = this.getProjects().find(
+			(candidate) => candidate.id === projectId,
+		);
+		if (!project) return undefined;
+
+		const nextConfig = replaceProjectConfig(project.repoPath, config);
+		const context = this.contexts.get(projectId);
+		if (context) {
+			context.config = nextConfig;
+			context.featureManager.setProjectConfig(nextConfig);
+			context.agentManager.setProjectConfig(nextConfig);
+		}
+		this.notifyChange();
+		return nextConfig;
 	}
 
 	// ── Cross-window sync ────────────────────────────────
@@ -267,6 +288,7 @@ export class ProjectManager {
 			worktreeBase,
 			config,
 		);
+		featureManager.setOnChange(() => this.notifyChange());
 		const agentManager = new AgentManager(
 			store,
 			project.repoPath,

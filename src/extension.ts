@@ -25,6 +25,7 @@ import {
 } from "./git/gitViewHandoff";
 import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
+
 import { PrerequisiteChecker } from "./prerequisites";
 import { discoverProjectKnowledge } from "./projects/projectKnowledge";
 import type { ProjectContext } from "./projects/projectManager";
@@ -214,16 +215,34 @@ export async function activate(
 		return panel;
 	};
 
+	const ensureFeaturePanel = (featureId: string) => {
+		const panel = HomePanel.createOrShowFeature(
+			featureId,
+			projectManager,
+			tmux,
+			toolRegistry,
+			context.extensionUri,
+			globalStore,
+			terminalController,
+		);
+		panel.onViewStateChange(({ active }) => {
+			if (active) workspaceIsolation.scheduleEnter();
+		});
+		return panel;
+	};
+
 	const showAgentSpace = async (featureId?: string): Promise<HomePanel> => {
-		const panel = ensureHomePanel();
 		if (featureId) {
 			activeFeatureId = featureId;
-			panel.showFeature(featureId);
+			const panel = ensureFeaturePanel(featureId);
+			await workspaceIsolation.enter();
+			return panel;
 		} else {
+			const panel = ensureHomePanel();
 			panel.showWelcome();
+			await workspaceIsolation.enter();
+			return panel;
 		}
-		await workspaceIsolation.enter();
-		return panel;
 	};
 
 	const activateFeatureInCurrentWindow = async (
@@ -232,10 +251,6 @@ export async function activate(
 		if (featureActivationInProgress) return;
 		featureActivationInProgress = true;
 		try {
-			if (activeFeatureId && activeFeatureId !== featureId) {
-				terminalController.disposeFeatureTerminals(activeFeatureId);
-			}
-
 			activeFeatureId = featureId;
 			const resolved = projectManager.resolveFeature(featureId);
 			if (!resolved) return;
@@ -249,8 +264,6 @@ export async function activate(
 				await showAgentSpace(featureId);
 				return;
 			}
-			terminalController.reconnectTmuxSessions(feature);
-
 			await showAgentSpace(featureId);
 		} finally {
 			featureActivationInProgress = false;
@@ -276,12 +289,9 @@ export async function activate(
 			return;
 		}
 
-		// Sidebar visible → reconnect and re-enter isolation
-		// enter() in showAgentSpace cancels any pending leave via cancelPending()
+		// Sidebar visibility changes only alter UI context. Reconnecting every
+		// agent here would replace terminals the user still expects to keep.
 		if (activeFeatureId) {
-			const resolved = projectManager.resolveFeature(activeFeatureId);
-			if (!resolved) return;
-			terminalController.reconnectTmuxSessions(resolved.feature);
 			void showAgentSpace(activeFeatureId);
 			return;
 		}
@@ -475,9 +485,8 @@ export async function activate(
 	);
 
 	projectManager.onChange(() => {
-		sidebarProvider.refresh();
-		const home = HomePanel.getInstance();
-		if (home) home.refresh();
+		sidebarProvider.refreshState();
+		HomePanel.refreshAll();
 	});
 
 	// Command: Open Home
@@ -632,16 +641,22 @@ export async function activate(
 				}
 
 				try {
-					const feature = ctx.featureManager.createFeature(
+					const feature = ctx.featureManager.createFeatureRecord(
 						name,
 						isolation,
 						branchKind,
 					);
 					activeFeatureId = feature.id;
+					sidebarProvider.refresh();
+					await activateFeatureInCurrentWindow(feature.id);
+					// Let Git setup run while the optional agent choice is displayed.
+					const provisioning = ctx.featureManager.provisionFeature(feature.id);
 
 					const initialTool = toolRegistry.getPreferredAvailableTool(
 						ctx.config,
 					);
+					let launchInitialAgent = false;
+					let initialAgent: ReturnType<typeof ctx.agentManager.createAgent> | undefined;
 					if (initialTool) {
 						const launchNow = await vscode.window.showQuickPick(
 							[
@@ -661,16 +676,25 @@ export async function activate(
 								placeHolder: `Launch ${initialTool.name} now?`,
 							},
 						);
-						if (launchNow?.value) {
-							ctx.agentManager.createAgent(feature, initialTool.id);
+						launchInitialAgent = launchNow?.value === true;
+						if (launchInitialAgent) {
+							initialAgent = ctx.agentManager.createAgent(feature, initialTool.id);
+							ctx.agentManager.beginAgentStartup(initialAgent.id, feature.id, true);
+							projectManager.notifyChange();
 						}
 					} else {
 						vscode.window.showErrorMessage(
 							"Feature created, but no coding tools are available. Add an agent later with 'Add Agent'.",
 						);
 					}
-					sidebarProvider.refresh();
-					await activateFeatureInCurrentWindow(feature.id);
+					void provisioning.then(() => {
+						if (launchInitialAgent && initialAgent) {
+							const agents = ctx.agentManager.getAgents(feature.id);
+							terminalController.createTerminal(feature, initialAgent, agents.length - 1);
+						}
+						sidebarProvider.refresh();
+						HomePanel.refreshAll();
+					}).catch((error) => vscode.window.showErrorMessage(`Feature setup failed: ${error instanceof Error ? error.message : String(error)}`));
 				} catch (err) {
 					const msg =
 						err instanceof Error ? err.message : "Failed to create feature";
@@ -763,10 +787,22 @@ export async function activate(
 				try {
 					const agents = ctx.agentManager.getAgents(featureId);
 					const agent = ctx.agentManager.createAgent(feature, toolPick.toolId);
-					terminalController.createTerminal(feature, agent, agents.length);
+					ctx.agentManager.beginAgentStartup(agent.id, featureId);
 					sidebarProvider.refresh();
-					const home = HomePanel.getInstance();
-					if (home) home.refresh();
+					HomePanel.refreshAll();
+					// Let the Feature page paint the materialized agent and its
+					// startup indicator before tmux/provider setup can block.
+					setTimeout(() => {
+						try {
+							terminalController.createTerminal(feature, agent, agents.length);
+						} catch (err) {
+							const message =
+								err instanceof Error ? err.message : "Failed to create agent terminal";
+							ctx.agentManager.recordAgentFailure(agent.id, featureId, message);
+							projectManager.notifyChange();
+							void vscode.window.showErrorMessage(`Add agent failed: ${message}`);
+						}
+					}, 0);
 				} catch (err) {
 					const message =
 						err instanceof Error ? err.message : "Failed to create agent";

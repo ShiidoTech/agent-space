@@ -22,6 +22,9 @@ interface TerminalMetadata {
 	kind: "agent" | "service";
 	featureId?: string;
 	sessionName: string;
+	feature?: Feature;
+	agent?: Agent;
+	justLaunched?: boolean;
 }
 
 export class TerminalController implements vscode.Disposable {
@@ -42,6 +45,12 @@ export class TerminalController implements vscode.Disposable {
 		private readonly toolRegistry: CodingToolRegistry,
 	) {
 		this.disposables.push(
+			vscode.window.onDidOpenTerminal((terminal) => {
+				const metadata = this.terminalMetadata.get(terminal);
+				if (metadata?.kind === "agent" && metadata.featureId) {
+					this.markAgentTerminalReady(metadata);
+				}
+			}),
 			vscode.window.onDidCloseTerminal((terminal) => {
 				const metadata = this.terminalMetadata.get(terminal);
 				if (!metadata) {
@@ -168,18 +177,15 @@ export class TerminalController implements vscode.Disposable {
 			kind: "agent",
 			featureId: feature.id,
 			sessionName,
+			feature,
+			agent,
+			justLaunched,
 		});
-
-		const ctx = this.projectManager.findContextByFeatureId(feature.id);
-		if (ctx) {
-			ctx.agentManager.markAgentStarted(agent.id, feature.id);
-			// Only now is the agent visible to session binding: reconciliation
-			// skips agents that have not started, so announcing the launch any
-			// earlier meant the first attempt always looked at nothing and the
-			// agent waited a full reconciliation interval for its first real try.
-			if (justLaunched) this.afterLaunchCallback?.(feature, agent);
-			this.projectManager.notifyChange();
-		}
+		// The onDidOpenTerminal event is the VS Code lifecycle boundary used to
+		// mark the agent ready. Showing the terminal alone is not enough: the
+		// extension must keep the startup indicator visible until VS Code has
+		// actually registered the terminal for the user.
+		terminal.show(true);
 
 		return terminal;
 	}
@@ -506,6 +512,17 @@ export class TerminalController implements vscode.Disposable {
 		}
 
 		ctx.agentManager.recordAgentFailure(agentId, featureId, message, exitCode);
+		this.projectManager.notifyChange();
+	}
+
+	private markAgentTerminalReady(metadata: TerminalMetadata): void {
+		if (!metadata.featureId) return;
+		const ctx = this.projectManager.findContextByFeatureId(metadata.featureId);
+		if (!ctx) return;
+		ctx.agentManager.markAgentStarted(metadata.id, metadata.featureId);
+		if (metadata.justLaunched && metadata.feature && metadata.agent) {
+			this.afterLaunchCallback?.(metadata.feature, metadata.agent);
+		}
 		this.projectManager.notifyChange();
 	}
 
