@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createTerminalMock, showErrorMessageMock, onDidCloseTerminalMock } =
+const {
+	createTerminalMock,
+	showErrorMessageMock,
+	onDidOpenTerminalMock,
+	onDidCloseTerminalMock,
+} =
 	vi.hoisted(() => ({
 		createTerminalMock: vi.fn(),
 		showErrorMessageMock: vi.fn(),
+		onDidOpenTerminalMock: vi.fn(() => ({ dispose: vi.fn() })),
 		onDidCloseTerminalMock: vi.fn(() => ({ dispose: vi.fn() })),
 	}));
 
@@ -23,6 +29,7 @@ vi.mock("vscode", () => ({
 	window: {
 		createTerminal: createTerminalMock,
 		showErrorMessage: showErrorMessageMock,
+		onDidOpenTerminal: onDidOpenTerminalMock,
 		onDidCloseTerminal: onDidCloseTerminalMock,
 	},
 	ThemeIcon: class {
@@ -92,6 +99,9 @@ describe("TerminalController", () => {
 				hide: ReturnType<typeof vi.fn>;
 		  }) => void)
 		| undefined;
+	let openedTerminalHandler:
+		| ((terminal: typeof terminalInstance) => void)
+		| undefined;
 	let terminalInstance: {
 		show: ReturnType<typeof vi.fn>;
 		dispose: ReturnType<typeof vi.fn>;
@@ -104,6 +114,12 @@ describe("TerminalController", () => {
 			callback: typeof closedTerminalHandler,
 		) => {
 			closedTerminalHandler = callback;
+			return { dispose: vi.fn() };
+		}) as never);
+		onDidOpenTerminalMock.mockImplementation(((
+			callback: typeof openedTerminalHandler,
+		) => {
+			openedTerminalHandler = callback;
 			return { dispose: vi.fn() };
 		}) as never);
 		findContextByFeatureId.mockReturnValue({
@@ -193,6 +209,8 @@ describe("TerminalController", () => {
 		);
 
 		expect(terminal).toBe(terminalInstance);
+		expect(markAgentStarted).not.toHaveBeenCalled();
+		openedTerminalHandler?.(terminalInstance);
 		expect(isSessionAlive).toHaveBeenCalledWith("companion-f1-a1");
 		expect(adoptSession).not.toHaveBeenCalled();
 		expect(vi.mocked(exec)).not.toHaveBeenCalled();
@@ -291,6 +309,7 @@ describe("TerminalController", () => {
 			0,
 			true,
 		);
+		openedTerminalHandler?.(terminalInstance);
 
 		expect(buildLaunchCommand).toHaveBeenCalledWith(
 			expect.objectContaining({ id: "claude" }),
@@ -341,6 +360,7 @@ describe("TerminalController", () => {
 		);
 		expect(terminal).toBe(terminalInstance);
 		expect(closedTerminalHandler).toBeDefined();
+		openedTerminalHandler?.(terminalInstance);
 
 		closedTerminalHandler?.(terminalInstance);
 

@@ -7,6 +7,7 @@ import { Store } from "../storage/store";
 
 // Mock child_process.execSync for git operations
 vi.mock("node:child_process", () => ({
+	execFile: vi.fn(),
 	execSync: vi.fn(),
 }));
 
@@ -14,10 +15,11 @@ vi.mock("../features/featureGitStatus", () => ({
 	computeGitStatus: vi.fn(),
 }));
 
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import { computeGitStatus } from "../features/featureGitStatus";
 
 const mockExecSync = vi.mocked(execSync);
+const mockExecFile = vi.mocked(execFile);
 const mockComputeGitStatus = vi.mocked(computeGitStatus);
 
 describe("FeatureManager", () => {
@@ -35,6 +37,7 @@ describe("FeatureManager", () => {
 			path.join(repoRoot, ".worktrees"),
 		);
 		mockExecSync.mockReset();
+		mockExecFile.mockReset();
 	});
 
 	afterEach(() => {
@@ -42,6 +45,47 @@ describe("FeatureManager", () => {
 	});
 
 	describe("createFeature", () => {
+		it("provisions asynchronously without blocking the extension host", async () => {
+			mockExecFile.mockImplementation(((
+				_callbackFile: string,
+				_callbackArgs: readonly string[],
+				_callbackOptions: unknown,
+				callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+			) => {
+				callback(null, { stdout: "abc123\n", stderr: "" });
+			}) as never);
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+
+			const feature = asyncManager.createFeatureRecord("async-feature", "shared");
+			const promise = asyncManager.provisionFeature(feature.id);
+
+			expect(feature.provisioning?.state).toBe("provisioning");
+			await expect(promise).resolves.toMatchObject({
+				id: feature.id,
+				createdFromSha: "abc123",
+			});
+			expect(mockExecFile).toHaveBeenNthCalledWith(
+				1,
+				"git",
+				["rev-parse", "main"],
+				{ cwd: repoRoot, encoding: "utf8" },
+				expect.any(Function),
+			);
+			expect(mockExecFile).toHaveBeenNthCalledWith(
+			2,
+			"git",
+			expect.arrayContaining(["worktree", "add", feature.worktreePath]),
+			expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
+			expect.any(Function),
+			);
+			expect(feature.provisioning?.state).toBe("ready");
+		});
+
 		it("creates a feature with worktree", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const feature = manager.createFeature("auth-system", "shared");

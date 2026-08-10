@@ -48,10 +48,9 @@ function syncNames(e) {
 	send("syncNames");
 }
 
-// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function attachProviderSession(e, featureId, agentId) {
 	e.stopPropagation();
-	send("attachProviderSession", { featureId, agentId });
+	send("attachProviderSession", { featureId: featureId, agentId: agentId });
 }
 
 function focusService(e, featureId, serviceId) {
@@ -111,19 +110,19 @@ let _menuAgentId = "";
 const _agentMenu = document.getElementById("agentContextMenu");
 const MENU_VIEWPORT_GUTTER = 8;
 
-document.getElementById("menuRename")?.addEventListener("click", (e) => {
+document.getElementById("menuRename").addEventListener("click", (e) => {
 	e.stopPropagation();
 	_agentMenu.classList.remove("visible");
 	send("renameAgent", { featureId: _menuFeatureId, agentId: _menuAgentId });
 });
 
-document.getElementById("menuMarkDone")?.addEventListener("click", (e) => {
+document.getElementById("menuMarkDone").addEventListener("click", (e) => {
 	e.stopPropagation();
 	_agentMenu.classList.remove("visible");
 	send("closeAgent", { featureId: _menuFeatureId, agentId: _menuAgentId });
 });
 
-document.getElementById("menuDeleteAgent")?.addEventListener("click", (e) => {
+document.getElementById("menuDeleteAgent").addEventListener("click", (e) => {
 	e.stopPropagation();
 	_agentMenu.classList.remove("visible");
 	send("deleteAgent", { featureId: _menuFeatureId, agentId: _menuAgentId });

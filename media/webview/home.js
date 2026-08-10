@@ -40,19 +40,22 @@ function showProjectSettings(projectId) {
 	send("showProjectSettings", { projectId });
 }
 
-function openProjectConfig(projectId) {
-	send("openProjectConfig", { projectId });
-}
-
-function openConfigDocs() {
-	send("openConfigDocs");
-}
-
-function openDiagnostics() {
-	send("openDiagnostics");
-}
-
+/** @param {string} projectId */
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function saveProjectConfig(projectId) {
+	const editor = /** @type {HTMLTextAreaElement|null} */ (
+		document.getElementById("project-config-" + projectId)
+	);
+	if (!editor) return;
+	send("saveProjectConfig", { projectId, content: editor.value });
+}
+
+/** @param {string} projectId */
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function removeProject(projectId) {
+	send("removeProject", { projectId });
+}
+
 function attachProviderSession(featureId, agentId) {
 	send("attachProviderSession", { featureId, agentId });
 }
