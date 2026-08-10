@@ -184,6 +184,14 @@ function toggleStoppedServicesHome(header) {
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+/** @param {HTMLElement} header */
+function toggleCardCollapse(header) {
+	header.classList.toggle("collapsed");
+	const body = header.nextElementSibling;
+	if (body) body.classList.toggle("collapsed");
+}
+
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function serviceAction(action, featureId, serviceId) {
 	switch (action) {
 		case "stop":

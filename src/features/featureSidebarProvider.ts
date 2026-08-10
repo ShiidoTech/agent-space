@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { execSync } from "node:child_process";
 import type { AgentManager } from "../agents/agentManager";
 import { presentSessionBinding } from "../agents/attention/sessionBindingPresentation";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
@@ -29,19 +30,7 @@ import type {
 	Service,
 } from "../types";
 import type { FeatureManager } from "./featureManager";
-
-function gitStatusLabel(status: GitAwareStatus): string {
-	switch (status) {
-		case "new":
-			return "New";
-		case "modified":
-			return "Modified";
-		case "ahead":
-			return "Ahead";
-		case "merged":
-			return "Merged";
-	}
-}
+import { gitStatusLabel } from "./featureGitStatus";
 
 export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "agentSpace.features";

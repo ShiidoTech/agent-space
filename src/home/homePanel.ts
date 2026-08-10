@@ -9,6 +9,10 @@ import { ICON_GIT } from "../constants/icons";
 import type { ProjectManager } from "../projects/projectManager";
 import type { GlobalStore } from "../storage/globalStore";
 import type { Agent, Feature, Service } from "../types";
+import {
+	computeBaseBranchGitState,
+	gitStatusLabel,
+} from "../features/featureGitStatus";
 
 export class HomePanel {
 	public static readonly viewType = "agentSpace.home";
@@ -915,8 +919,8 @@ export class HomePanel {
 			totalAgents > 0 ? Math.round((doneCount / totalAgents) * 100) : 0;
 
 		const body = `
+		<button class="home-nav-bar" onclick="goHome()" title="Back to Agent Space">&#8592; Agent Space</button>
 		<div class="workspace-header">
-			<button class="home-back-btn" onclick="goHome()" title="Back to Agent Space">&larr;</button>
 			<div class="header-color-dot" style="background: ${dotColor}"></div>
 			<div class="header-info">
 				<div class="header-title">${this.escapeHtml(feature.name)}</div>
@@ -1021,25 +1025,62 @@ export class HomePanel {
 			...(context.agentManager.getAgents(baseFeature.id).length > 0 || context.serviceManager.getServices(baseFeature.id).length > 0 ? [baseFeature] : []),
 			...features,
 		];
+
+		// ── Base branch git state (the comparison branch) ──────────────
+		const baseGit = computeBaseBranchGitState(
+			context.project.repoPath,
+			effectiveBaseBranch,
+		);
+		const baseStateChips = [
+			baseGit.dirty
+				? '<span class="project-base-chip project-base-chip--dirty" title="Uncommitted changes">dirty</span>'
+				: '<span class="project-base-chip" title="No uncommitted changes">clean</span>',
+			baseGit.hasRemote
+				? `<span class="project-base-chip" title="Commits vs origin/${this.escapeHtml(effectiveBaseBranch)}">${baseGit.ahead} ahead &middot; ${baseGit.behind} behind</span>`
+				: '<span class="project-base-chip" title="No remote tracking branch">no remote</span>',
+		].join("");
+
+		// ── Rich feature cards (sidebar-equivalent density) ────────────
 		const featureRows = projectFeatures.length
 			? projectFeatures
 					.map((feature) => {
 						const agents = context.agentManager.getAgents(feature.id);
 						const services = context.serviceManager.getServices(feature.id);
 						const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
-						const agentLabel = agents.length === 1 ? "1 agent" : `${agents.length} agents`;
-						const serviceLabel = services.length === 1 ? "1 script" : `${services.length} scripts`;
+						const gitStatus =
+							feature.id.startsWith("base:")
+								? null
+								: context.featureManager.getFeatureGitStatus(feature);
+						const statusBadge = gitStatus
+							? `<span class="project-status-badge status-${gitStatus}">${gitStatusLabel(gitStatus)}</span>`
+							: '<span class="project-base-label">base</span>';
+						const agentCount = agents.filter((a) => a.status !== "done").length;
+						const serviceCount = services.filter((s) => s.status === "running").length;
+						const counts = [
+							agentCount > 0 ? `${agentCount} agent${agentCount > 1 ? "s" : ""}` : "",
+							serviceCount > 0 ? `${serviceCount} script${serviceCount > 1 ? "s" : ""}` : "",
+						]
+							.filter(Boolean)
+							.join(" &middot; ");
 						return `
-						<div class="feature-resume-card" onclick="resumeFeature('${feature.id}')">
-							<div class="feature-card-top">
-								<div class="feature-card-color" style="background: ${dotColor}"></div>
-								<div class="feature-card-name">${this.escapeHtml(feature.branch)}</div>
-								<span class="feature-card-status ${feature.status}">${feature.status === "done" ? "Done" : "Active"}</span>
+						<div class="project-feature-card" data-feature-id="${feature.id}">
+							<div class="project-feature-card-header" onclick="toggleCardCollapse(this)">
+								<span class="project-feature-chevron" id="pf-chevron-${feature.id}">&rsaquo;</span>
+								<div class="project-feature-color" style="background: ${dotColor}"></div>
+								<span class="project-feature-branch">${this.escapeHtml(feature.branch)}</span>
+								${statusBadge}
+								<span class="project-feature-counts">${counts}</span>
+								<button class="project-feature-delete" onclick="event.stopPropagation(); deleteFeature('${feature.id}')" title="Delete Feature">&times;</button>
 							</div>
-							<div class="feature-card-meta">
-								<span class="feature-card-counts">${agentLabel} &middot; ${serviceLabel}</span>
+							<div class="project-feature-card-body" id="pf-body-${feature.id}">
+								${this.renderProjectFeatureBody(context, feature)}
+								<div class="project-feature-actions">
+									<button class="quick-action-btn primary" onclick="resumeFeature('${feature.id}')">Resume</button>
+									<button class="quick-action-btn" onclick="quickAction('openGitView', '${feature.id}')">Open Workspace</button>
+									<button class="quick-action-btn" onclick="quickAction('addAgent', '${feature.id}')">Add Agent</button>
+									<button class="quick-action-btn" onclick="quickAction('addService', '${feature.id}')">Add Service</button>
+								</div>
 							</div>
-							<button class="feature-card-resume" onclick="event.stopPropagation(); resumeFeature('${feature.id}')">Resume &rarr;</button>
 						</div>`;
 					})
 					.join("")
@@ -1078,17 +1119,18 @@ export class HomePanel {
 					<div><strong>${projectFeatures.reduce((count, feature) => count + context.agentManager.getAgents(feature.id).length, 0)}</strong><span>Agents</span></div>
 					<div><strong>${projectFeatures.reduce((count, feature) => count + context.serviceManager.getServices(feature.id).length, 0)}</strong><span>Scripts</span></div>
 				</div>
-				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong></p>
+				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong> ${baseGit.lastCommit ? `&middot; <span title="Last commit">${this.escapeHtml(baseGit.lastCommit)}</span>` : ""}</p>
+				<div class="project-base-chips">${baseStateChips}</div>
 			</div>
 			<div>
 				<div class="section-label">Active / recent features</div>
-				<div class="feature-grid project-feature-grid">${featureRows}</div>
+				<div class="project-feature-list">${featureRows}</div>
 				<button class="quick-action-btn primary project-new-feature" onclick="newFeature('${projectId}')">New Feature</button>
 			</div>`;
 
 		const body = `
+		<button class="home-nav-bar" onclick="goHome()" title="Back to Agent Space">&#8592; Agent Space</button>
 		<div class="workspace-header">
-			<button class="home-back-btn" onclick="goHome()" title="Back to Agent Space">&larr;</button>
 			<div class="header-info">
 				<div class="header-title">${this.escapeHtml(context.project.name)}</div>
 				<div class="header-branch">${this.escapeHtml(context.project.repoPath)}</div>
@@ -1120,6 +1162,29 @@ export class HomePanel {
 	<script src="${jsUri}"></script>
 </body>
 </html>`;
+	}
+
+	/**
+	 * Body of a rich feature card on the project page: agents + services
+	 * sections (same helpers as the full feature page), then quick actions.
+	 */
+	private renderProjectFeatureBody(
+		context: import("../projects/projectManager").ProjectContext,
+		feature: Feature,
+	): string {
+		const agents = context.agentManager.getAgents(feature.id);
+		const services = context.serviceManager.getServices(feature.id);
+
+		const activeAgents = agents.filter(
+			(a) => a.status === "running" || a.status === "idle" || (a.startup && a.startup.state !== "ready"),
+		);
+		const erroredAgents = agents.filter((a) => a.status === "errored");
+		const doneAgents = agents.filter((a) => a.status === "done");
+		const stoppedAgents = agents.filter((a) => a.status === "stopped");
+
+		return `
+			${this.renderAgentsSection(activeAgents, erroredAgents, doneAgents, stoppedAgents, agents, feature)}
+			${this.renderServicesSection(services, feature)}`;
 	}
 
 	private saveProjectConfig(projectId: string, content: string): void {
