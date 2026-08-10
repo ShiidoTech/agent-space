@@ -101,6 +101,8 @@ export interface FeatureGitObservations {
 	readonly head: GitObservation<ObservedCommit>;
 	readonly feature: GitObservation<ObservedCommit>;
 	readonly base: GitObservation<ObservedCommit>;
+	readonly creationPoint: GitObservation<ObservedCommit>;
+	readonly creationPointInFeature: GitObservation<AncestryObservation>;
 	readonly upstream: GitObservation<UpstreamObservation>;
 	readonly upstreamDivergence: GitObservation<CommitComparison | null>;
 	/** Committed feature delta. This never includes working-tree changes. */

@@ -22,7 +22,7 @@ export interface FeatureGitInspectionInput {
 	readonly repoRoot: string;
 	readonly worktreePath: string;
 	readonly featureBranch: string;
-	readonly baseRef: string;
+	readonly baseRef?: string;
 	readonly createdFromSha?: string;
 }
 
@@ -152,15 +152,25 @@ export class FeatureGitInspector {
 						path: targetPath,
 					});
 
-		const base = await this.resolveCommit(
-			input.baseRef,
-			input.repoRoot,
-			"base",
-		);
+		const base = input.baseRef
+			? await this.resolveCommit(input.baseRef, input.repoRoot, "base")
+			: unknown("base_unknown", "No base ref was observed");
 		const feature = await this.resolveCommit(
 			input.featureBranch,
 			input.repoRoot,
 			"feature",
+		);
+		const creationPoint = input.createdFromSha
+			? await this.resolveCommit(
+					input.createdFromSha,
+					input.repoRoot,
+					"creation",
+				)
+			: unknown("creation_point_unknown");
+		const creationPointInFeature = await this.observeAncestry(
+			creationPoint,
+			feature,
+			input.repoRoot,
 		);
 		const featureDelta = await this.compare(base, feature, input.repoRoot);
 		const featureDiff = await this.observeFeatureDiff(
@@ -200,6 +210,8 @@ export class FeatureGitInspector {
 				head: missing,
 				feature,
 				base,
+				creationPoint,
+				creationPointInFeature,
 				upstream,
 				upstreamDivergence,
 				featureDelta,
@@ -214,15 +226,23 @@ export class FeatureGitInspector {
 			["symbolic-ref", "--quiet", "--short", "HEAD"],
 			{ cwd: input.worktreePath },
 		);
-		const actualBranch = successful(branchResult)
-			? branchResult.stdout.trim()
-			: null;
-		const branch = known({
-			expected: input.featureBranch,
-			actual: actualBranch,
-			detached: actualBranch === null,
-			matchesExpected: actualBranch === input.featureBranch,
-		});
+		const branch = successful(branchResult)
+			? known({
+					expected: input.featureBranch,
+					actual: branchResult.stdout.trim(),
+					detached: false,
+					matchesExpected: branchResult.stdout.trim() === input.featureBranch,
+				})
+			: branchResult.exitCode === 1 && branchResult.signal === null
+				? known({
+						expected: input.featureBranch,
+						actual: null,
+						detached: true,
+						matchesExpected: false,
+					})
+				: unknown("git_command_failed", message(branchResult), {
+						expected: input.featureBranch,
+					});
 		const head = await this.resolveCommit("HEAD", input.worktreePath, "head");
 		const statusResult = await this.git.read(
 			["status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -239,6 +259,8 @@ export class FeatureGitInspector {
 			head,
 			feature,
 			base,
+			creationPoint,
+			creationPointInFeature,
 			upstream,
 			upstreamDivergence,
 			featureDelta,
@@ -252,7 +274,7 @@ export class FeatureGitInspector {
 	private async resolveCommit(
 		ref: string,
 		cwd: string,
-		role: "base" | "head" | "feature",
+		role: "base" | "head" | "feature" | "creation",
 	): Promise<GitObservation<ObservedCommit>> {
 		const result = await this.git.read(
 			["rev-parse", "--verify", `${ref}^{commit}`],
@@ -264,9 +286,11 @@ export class FeatureGitInspector {
 		return unknown(
 			role === "base"
 				? "base_unknown"
-				: role === "feature"
-					? "ref_not_found"
-					: "unborn_head",
+				: role === "creation"
+					? "creation_point_invalid"
+					: role === "feature"
+						? "ref_not_found"
+						: "unborn_head",
 			message(result),
 			{ ref },
 		);
@@ -462,6 +486,8 @@ export class FeatureGitInspector {
 			head: unavailable,
 			feature: unavailable,
 			base: unavailable,
+			creationPoint: unavailable,
+			creationPointInFeature: unavailable,
 			upstream: unavailable,
 			upstreamDivergence: unavailable,
 			featureDelta: unavailable,

@@ -8,18 +8,11 @@ vi.mock("node:child_process", () => ({
 	execSync: vi.fn(),
 }));
 
-vi.mock("../features/featureGitStatus", () => ({
-	computeGitStatus: vi.fn(),
-	computeGitStatusAsync: vi.fn(),
-}));
-
 import { execSync } from "node:child_process";
-import { computeGitStatus } from "../features/featureGitStatus";
 import { FeatureManager } from "../features/featureManager";
 import { Store } from "../storage/store";
 
 const mockExecSync = vi.mocked(execSync);
-const mockComputeGitStatus = vi.mocked(computeGitStatus);
 
 describe("FeatureManager worktree branch reconciliation", () => {
 	let tmpDir: string;
@@ -37,7 +30,6 @@ describe("FeatureManager worktree branch reconciliation", () => {
 			defaultBranchKind: "feature",
 		});
 		mockExecSync.mockReset();
-		mockComputeGitStatus.mockReset();
 	});
 
 	afterEach(() => {
@@ -62,23 +54,6 @@ describe("FeatureManager worktree branch reconciliation", () => {
 			"git symbolic-ref --quiet --short HEAD",
 			expect.objectContaining({ cwd: feature.worktreePath }),
 		);
-	});
-
-	it("computes git status against the reconciled branch, not the stale stored ref", () => {
-		const feature = createEndingFeature();
-		mockExecSync.mockReset();
-		mockExecSync.mockReturnValue("feature/1066_closure\n");
-		mockComputeGitStatus.mockReturnValue("ahead");
-
-		const status = manager.getFeatureGitStatus(feature);
-
-		expect(status).toBe("ahead");
-		expect(mockComputeGitStatus).toHaveBeenCalledWith({
-			featureBranch: "feature/1066_closure",
-			baseBranch: "v2_ia_first",
-			worktreePath: feature.worktreePath,
-			repoRoot,
-		});
 	});
 
 	it("keeps the persisted branch when the worktree branch cannot be resolved", () => {

@@ -6,10 +6,12 @@ import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_GIT } from "../constants/icons";
+import { gitStatusLabel } from "../features/featureGitStatus";
 import {
-	computeBaseBranchGitState,
-	gitStatusLabel,
-} from "../features/featureGitStatus";
+	type FeatureSnapshot,
+	featureSnapshotGitStatus,
+} from "../features/featureSnapshot";
+import type { FeatureStateCoordinator } from "../features/featureStateCoordinator";
 import type { ProjectManager } from "../projects/projectManager";
 import type { GlobalStore } from "../storage/globalStore";
 import type { Agent, Feature, Service } from "../types";
@@ -29,7 +31,6 @@ export class HomePanel {
 	private currentFeatureId: string | null = null;
 	private currentProjectId: string | null = null;
 	private currentProjectSettings = false;
-	private refreshTimer?: ReturnType<typeof setInterval>;
 	private onViewStateChangeCallback?:
 		| ((state: { active: boolean; visible: boolean }) => void)
 		| undefined;
@@ -37,6 +38,7 @@ export class HomePanel {
 
 	public static createOrShow(
 		projectManager: ProjectManager,
+		featureStateCoordinator: FeatureStateCoordinator,
 		tmux: TmuxIntegration,
 		toolRegistry: CodingToolRegistry,
 		extensionUri: vscode.Uri,
@@ -64,6 +66,7 @@ export class HomePanel {
 		HomePanel.instance = new HomePanel(
 			panel,
 			projectManager,
+			featureStateCoordinator,
 			tmux,
 			toolRegistry,
 			extensionUri,
@@ -77,6 +80,7 @@ export class HomePanel {
 	public static createOrShowFeature(
 		featureId: string,
 		projectManager: ProjectManager,
+		featureStateCoordinator: FeatureStateCoordinator,
 		tmux: TmuxIntegration,
 		toolRegistry: CodingToolRegistry,
 		extensionUri: vscode.Uri,
@@ -104,6 +108,7 @@ export class HomePanel {
 		const featurePanel = new HomePanel(
 			panel,
 			projectManager,
+			featureStateCoordinator,
 			tmux,
 			toolRegistry,
 			extensionUri,
@@ -128,6 +133,7 @@ export class HomePanel {
 	private constructor(
 		panel: vscode.WebviewPanel,
 		projectManager: ProjectManager,
+		private readonly featureStateCoordinator: FeatureStateCoordinator,
 		tmux: TmuxIntegration,
 		toolRegistry: CodingToolRegistry,
 		extensionUri: vscode.Uri,
@@ -171,7 +177,6 @@ export class HomePanel {
 		this.currentFeatureId = null;
 		this.currentProjectId = null;
 		this.panel.title = "Agent Space";
-		this.stopGitPolling();
 		this.panel.webview.html = this.getWelcomeHtml();
 	}
 
@@ -184,7 +189,7 @@ export class HomePanel {
 			? `Agent Space: ${resolved.feature.branch}`
 			: "Agent Space";
 		this.panel.reveal(vscode.ViewColumn.One, true);
-		this.startGitPolling();
+		this.sendGitStatsAsync().catch(() => {});
 		this.panel.webview.html = this.getFeatureHtml(featureId);
 	}
 
@@ -203,7 +208,6 @@ export class HomePanel {
 		this.currentProjectId = projectId;
 		this.currentProjectSettings = settings;
 		this.panel.title = `Agent Space: ${context.project.name}`;
-		this.stopGitPolling();
 		this.panel.reveal(vscode.ViewColumn.One, true);
 		this.panel.webview.html = this.getProjectHtml(projectId, settings);
 	}
@@ -236,26 +240,10 @@ export class HomePanel {
 		} else {
 			HomePanel.instance = undefined;
 		}
-		this.stopGitPolling();
 		for (const d of this.disposables) {
 			d.dispose();
 		}
 		this.panel.dispose();
-	}
-
-	private startGitPolling(): void {
-		this.stopGitPolling();
-		this.refreshTimer = setInterval(() => {
-			this.sendGitStatsAsync().catch(() => {});
-		}, 15_000);
-		this.sendGitStatsAsync().catch(() => {});
-	}
-
-	private stopGitPolling(): void {
-		if (this.refreshTimer) {
-			clearInterval(this.refreshTimer);
-			this.refreshTimer = undefined;
-		}
 	}
 
 	private setupMessageHandler(): void {
@@ -598,9 +586,12 @@ export class HomePanel {
 	private async sendGitStatsAsync(): Promise<void> {
 		if (!this.currentFeatureId) return;
 		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
-		if (!resolved) return;
+		const snapshot = this.featureStateCoordinator.getSnapshot(
+			this.currentFeatureId,
+		);
+		if (!resolved || !snapshot) return;
 
-		const agents = resolved.ctx.agentManager.getAgents(this.currentFeatureId);
+		const agents = this.snapshotAgents(snapshot);
 		this.panel.webview.postMessage({
 			type: "agentAttentionUpdate",
 			agents: agents.map((agent) => ({
@@ -616,7 +607,7 @@ export class HomePanel {
 			})),
 		});
 
-		const stats = await this.getGitDiffStatsAsync(resolved.feature);
+		const stats = this.snapshotGitStats(snapshot);
 		if (!stats) return;
 
 		this.panel.webview.postMessage({
@@ -625,21 +616,65 @@ export class HomePanel {
 		});
 	}
 
-	private async getGitDiffStatsAsync(
-		feature: Feature,
-	): Promise<GitStats | null> {
-		const context = this.projectManager.findContextByFeatureId(feature.id);
-		if (!context) return null;
-		const observation =
-			await context.featureManager.getFeatureGitObservationsAsync(feature);
-		if (observation.featureDiff.status === "unknown") return null;
-		const diff = observation.featureDiff.value;
+	private snapshotGitStats(snapshot: FeatureSnapshot): GitStats | null {
+		if (snapshot.git.featureDiff.status === "unknown") return null;
+		const diff = snapshot.git.featureDiff.value;
 		return {
 			filesChanged: diff.filesChanged,
 			insertions: diff.insertions,
 			deletions: diff.deletions,
 			raw: diff.raw,
 		};
+	}
+
+	private snapshotAgents(snapshot: FeatureSnapshot): Agent[] {
+		return snapshot.runtime.agents.status === "known"
+			? snapshot.runtime.agents.value.map(({ agent }) => agent as Agent)
+			: [];
+	}
+
+	private snapshotServices(snapshot: FeatureSnapshot): Service[] {
+		return snapshot.runtime.services.status === "known"
+			? snapshot.runtime.services.value.map(({ service }) => service as Service)
+			: [];
+	}
+
+	private snapshotCollectionCount(
+		snapshots: readonly FeatureSnapshot[],
+		collection: "agents" | "services",
+	): number | null {
+		let total = 0;
+		for (const snapshot of snapshots) {
+			const observation = snapshot.runtime[collection];
+			if (observation.status === "unknown") return null;
+			total += observation.value.length;
+		}
+		return total;
+	}
+
+	private renderBaseStateChips(snapshot: FeatureSnapshot | undefined): string {
+		if (!snapshot) {
+			return '<span class="project-base-chip">unknown</span>';
+		}
+		const workingTree = snapshot.git.workingTree;
+		const worktreeChip =
+			workingTree.status === "unknown"
+				? '<span class="project-base-chip">unknown</span>'
+				: workingTree.value.staged.length > 0 ||
+						workingTree.value.unstaged.length > 0 ||
+						workingTree.value.untracked.length > 0 ||
+						workingTree.value.conflicted.length > 0
+					? '<span class="project-base-chip project-base-chip--dirty" title="Uncommitted changes">dirty</span>'
+					: '<span class="project-base-chip" title="No uncommitted changes">clean</span>';
+		const upstream = snapshot.git.upstream;
+		const divergence = snapshot.git.upstreamDivergence;
+		const upstreamChip =
+			upstream.status === "unknown" || divergence.status === "unknown"
+				? '<span class="project-base-chip">upstream unknown</span>'
+				: upstream.value.upstream === null || divergence.value === null
+					? '<span class="project-base-chip" title="No remote tracking branch">no remote</span>'
+					: `<span class="project-base-chip" title="Commits vs ${this.escapeHtml(upstream.value.upstream.ref)}">${divergence.value.rightOnly} ahead &middot; ${divergence.value.leftOnly} behind</span>`;
+		return `${worktreeChip}${upstreamChip}`;
 	}
 
 	private renderGitStatsContent(stats: GitStats): string {
@@ -677,34 +712,29 @@ export class HomePanel {
 			feature: Feature;
 			projectName: string;
 			projectId: string;
-			agentCount: number;
-			serviceCount: number;
+			agentCount: number | null;
+			serviceCount: number | null;
 		}> = [];
 		for (const ctx of contexts) {
-			// Include synthetic base feature (repo root / base branch)
-			const baseFeature = ctx.featureManager.getBaseFeature(ctx.project.id);
-			const baseAgentCount = ctx.agentManager.getAgents(baseFeature.id).length;
-			const baseServiceCount = ctx.serviceManager.getServices(
-				baseFeature.id,
-			).length;
-			if (baseAgentCount > 0 || baseServiceCount > 0) {
+			for (const snapshot of this.featureStateCoordinator.getProjectSnapshots(
+				ctx.project.id,
+			)) {
+				const isBase = snapshot.feature.id.startsWith("base:");
+				const agentCount =
+					snapshot.runtime.agents.status === "known"
+						? snapshot.runtime.agents.value.length
+						: null;
+				const serviceCount =
+					snapshot.runtime.services.status === "known"
+						? snapshot.runtime.services.value.length
+						: null;
+				if (isBase && agentCount === 0 && serviceCount === 0) continue;
 				allFeatures.push({
-					feature: baseFeature,
+					feature: snapshot.feature as Feature,
 					projectName: ctx.project.name,
 					projectId: ctx.project.id,
-					agentCount: baseAgentCount,
-					serviceCount: baseServiceCount,
-				});
-			}
-
-			const features = ctx.featureManager.getFeatures();
-			for (const f of features) {
-				allFeatures.push({
-					feature: f,
-					projectName: ctx.project.name,
-					projectId: ctx.project.id,
-					agentCount: ctx.agentManager.getAgents(f.id).length,
-					serviceCount: ctx.serviceManager.getServices(f.id).length,
+					agentCount,
+					serviceCount,
 				});
 			}
 		}
@@ -742,13 +772,17 @@ export class HomePanel {
 								const f = entry.feature;
 								const dotColor = TERMINAL_COLOR_MAP[f.color] || "#569cd6";
 								const agentLabel =
-									entry.agentCount === 1
-										? "1 agent"
-										: `${entry.agentCount} agents`;
+									entry.agentCount === null
+										? "agents unknown"
+										: entry.agentCount === 1
+											? "1 agent"
+											: `${entry.agentCount} agents`;
 								const serviceLabel =
-									entry.serviceCount === 1
-										? "1 script"
-										: `${entry.serviceCount} scripts`;
+									entry.serviceCount === null
+										? "scripts unknown"
+										: entry.serviceCount === 1
+											? "1 script"
+											: `${entry.serviceCount} scripts`;
 								return `
 						<div class="feature-resume-card" onclick="resumeFeature('${f.id}')">
 							<div class="feature-card-top">
@@ -768,9 +802,17 @@ export class HomePanel {
 
 			const projectRows = contexts
 				.map((ctx) => {
-					const featureCount = ctx.featureManager.getFeatures().length;
+					const snapshots = this.featureStateCoordinator.getProjectSnapshots(
+						ctx.project.id,
+					);
+					const featureCount = snapshots.filter(
+						(snapshot) => !snapshot.feature.id.startsWith("base:"),
+					).length;
 					const explicitBaseBranch = ctx.config.baseBranch?.trim();
-					const effectiveBaseBranch = ctx.featureManager.getBaseBranchName();
+					const effectiveBaseBranch =
+						snapshots.find((snapshot) =>
+							snapshot.feature.id.startsWith("base:"),
+						)?.feature.branch ?? "Unknown";
 					const branchKinds = ctx.featureManager.getBranchKinds();
 					const defaultBranchKind = ctx.featureManager.getDefaultBranchKind();
 					return `
@@ -839,9 +881,18 @@ export class HomePanel {
 		const resolved = this.projectManager.resolveFeature(featureId);
 		if (!resolved) return this.emptyHtml("Feature not found");
 
-		const { ctx, feature } = resolved;
-		const agents = ctx.agentManager.getAgents(featureId);
-		const services = ctx.serviceManager.getServices(featureId);
+		const snapshot = this.featureStateCoordinator.getSnapshot(featureId);
+		if (!snapshot) return this.emptyHtml("Feature state is being observed");
+		const { ctx } = resolved;
+		const feature = snapshot.feature as Feature;
+		const agents = this.snapshotAgents(snapshot);
+		const services = this.snapshotServices(snapshot);
+		const agentsKnown = snapshot.runtime.agents.status === "known";
+		const servicesKnown = snapshot.runtime.services.status === "known";
+		const runtimeNotice =
+			!agentsKnown || !servicesKnown
+				? '<div class="activity-empty">Runtime state unavailable</div>'
+				: "";
 		const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
 
 		const cssUri = this.panel.webview.asWebviewUri(
@@ -886,18 +937,23 @@ export class HomePanel {
 		</div>
 		<div class="workspace-content">
 			${this.renderFeatureProvisioning(feature)}
-			${this.renderProgressSection(progressPct, doneCount, totalAgents)}
-			${this.renderAgentsSection(
-				activeAgents,
-				erroredAgents,
-				doneAgents,
-				stoppedAgents,
-				agents,
-				feature,
-			)}
-			${this.renderServicesSection(services, feature)}
-			${this.renderFeatureTmuxSection(feature, agents, services)}
-			${this.renderGitStatsSection(feature)}
+			${runtimeNotice}
+			${agentsKnown ? this.renderProgressSection(progressPct, doneCount, totalAgents) : ""}
+			${
+				agentsKnown
+					? this.renderAgentsSection(
+							activeAgents,
+							erroredAgents,
+							doneAgents,
+							stoppedAgents,
+							agents,
+							feature,
+						)
+					: ""
+			}
+			${servicesKnown ? this.renderServicesSection(services, feature) : ""}
+			${this.renderFeatureTmuxSection(snapshot)}
+			${this.renderGitStatsSection(snapshot)}
 			${this.renderQuickActions(
 				feature,
 				ctx.featureManager.getBootstrapCommands().length > 0,
@@ -964,45 +1020,59 @@ export class HomePanel {
 			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.js"),
 		);
 		const explicitBaseBranch = context.config.baseBranch?.trim();
-		const effectiveBaseBranch = context.featureManager.getBaseBranchName();
+		const snapshots =
+			this.featureStateCoordinator.getProjectSnapshots(projectId);
+		const baseSnapshot = snapshots.find((snapshot) =>
+			snapshot.feature.id.startsWith("base:"),
+		);
+		const effectiveBaseBranch = baseSnapshot?.feature.branch ?? "Unknown";
+		const baseSource = explicitBaseBranch
+			? "Configured"
+			: baseSnapshot
+				? "Observed current checkout"
+				: "Unavailable";
+		const baseCommitLabel =
+			baseSnapshot?.git.base.status === "known"
+				? baseSnapshot.git.base.value.sha.slice(0, 12)
+				: "";
 		const branchKinds = context.featureManager.getBranchKinds();
 		const defaultBranchKind = context.featureManager.getDefaultBranchKind();
-		const baseFeature = context.featureManager.getBaseFeature(
-			context.project.id,
+		const featureSnapshots = snapshots.filter(
+			(snapshot) => !snapshot.feature.id.startsWith("base:"),
 		);
-		const features = context.featureManager.getFeatures();
-		const projectFeatures = [
-			...(context.agentManager.getAgents(baseFeature.id).length > 0 ||
-			context.serviceManager.getServices(baseFeature.id).length > 0
-				? [baseFeature]
+		const projectSnapshots = [
+			...(baseSnapshot &&
+			(this.snapshotAgents(baseSnapshot).length > 0 ||
+				this.snapshotServices(baseSnapshot).length > 0 ||
+				baseSnapshot.runtime.agents.status === "unknown" ||
+				baseSnapshot.runtime.services.status === "unknown")
+				? [baseSnapshot]
 				: []),
-			...features,
+			...featureSnapshots,
 		];
+		const projectAgentCount = this.snapshotCollectionCount(
+			projectSnapshots,
+			"agents",
+		);
+		const projectServiceCount = this.snapshotCollectionCount(
+			projectSnapshots,
+			"services",
+		);
 
 		// ── Base branch git state (the comparison branch) ──────────────
-		const baseGit = computeBaseBranchGitState(
-			context.project.repoPath,
-			effectiveBaseBranch,
-		);
-		const baseStateChips = [
-			baseGit.dirty
-				? '<span class="project-base-chip project-base-chip--dirty" title="Uncommitted changes">dirty</span>'
-				: '<span class="project-base-chip" title="No uncommitted changes">clean</span>',
-			baseGit.hasRemote
-				? `<span class="project-base-chip" title="Commits vs origin/${this.escapeHtml(effectiveBaseBranch)}">${baseGit.ahead} ahead &middot; ${baseGit.behind} behind</span>`
-				: '<span class="project-base-chip" title="No remote tracking branch">no remote</span>',
-		].join("");
+		const baseStateChips = this.renderBaseStateChips(baseSnapshot);
 
 		// ── Rich feature cards (sidebar-equivalent density) ────────────
-		const featureRows = projectFeatures.length
-			? projectFeatures
-					.map((feature) => {
-						const agents = context.agentManager.getAgents(feature.id);
-						const services = context.serviceManager.getServices(feature.id);
+		const featureRows = projectSnapshots.length
+			? projectSnapshots
+					.map((snapshot) => {
+						const feature = snapshot.feature as Feature;
+						const agents = this.snapshotAgents(snapshot);
+						const services = this.snapshotServices(snapshot);
 						const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
 						const gitStatus = feature.id.startsWith("base:")
 							? null
-							: context.featureManager.getFeatureGitStatus(feature);
+							: featureSnapshotGitStatus(snapshot);
 						const statusBadge = gitStatus
 							? `<span class="project-status-badge status-${gitStatus}">${gitStatusLabel(gitStatus)}</span>`
 							: '<span class="project-base-label">base</span>';
@@ -1010,16 +1080,20 @@ export class HomePanel {
 						const serviceCount = services.filter(
 							(s) => s.status === "running",
 						).length;
-						const counts = [
-							agentCount > 0
-								? `${agentCount} agent${agentCount > 1 ? "s" : ""}`
-								: "",
-							serviceCount > 0
-								? `${serviceCount} script${serviceCount > 1 ? "s" : ""}`
-								: "",
-						]
-							.filter(Boolean)
-							.join(" &middot; ");
+						const counts =
+							snapshot.runtime.agents.status === "unknown" ||
+							snapshot.runtime.services.status === "unknown"
+								? "runtime unknown"
+								: [
+										agentCount > 0
+											? `${agentCount} agent${agentCount > 1 ? "s" : ""}`
+											: "",
+										serviceCount > 0
+											? `${serviceCount} script${serviceCount > 1 ? "s" : ""}`
+											: "",
+									]
+										.filter(Boolean)
+										.join(" &middot; ");
 						return `
 						<div class="project-feature-card" data-feature-id="${feature.id}">
 							<div class="project-feature-card-header" onclick="toggleCardCollapse(this)">
@@ -1031,7 +1105,7 @@ export class HomePanel {
 								<button class="project-feature-delete" onclick="event.stopPropagation(); deleteFeature('${feature.id}')" title="Delete Feature">&times;</button>
 							</div>
 							<div class="project-feature-card-body" id="pf-body-${feature.id}">
-								${this.renderProjectFeatureBody(context, feature)}
+								${this.renderProjectFeatureBody(snapshot, feature, agents, services)}
 								<div class="project-feature-actions">
 									<button class="quick-action-btn primary" onclick="resumeFeature('${feature.id}')">Resume</button>
 									<button class="quick-action-btn" onclick="quickAction('openGitView', '${feature.id}')">Open Workspace</button>
@@ -1048,7 +1122,7 @@ export class HomePanel {
 			<div class="project-settings-card">
 				<div class="section-label">Project Settings</div>
 				<div class="project-settings-grid">
-					<div><span class="project-setting-label">Base branch</span><strong>${this.escapeHtml(effectiveBaseBranch)}</strong><span class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</span></div>
+					<div><span class="project-setting-label">Base branch</span><strong>${this.escapeHtml(effectiveBaseBranch)}</strong><span class="project-setting-source">${baseSource}</span></div>
 					<div><span class="project-setting-label">Branch kinds</span><span>${this.escapeHtml(branchKinds.join(", ") || "Default")}</span>${defaultBranchKind ? `<span class="project-setting-source">Default: ${this.escapeHtml(defaultBranchKind)}</span>` : ""}</div>
 					<div><span class="project-setting-label">Worktrees</span><span class="project-worktree-cell">${this.escapeHtml(context.featureManager.getWorktreeBase())}</span></div>
 				</div>
@@ -1072,12 +1146,12 @@ export class HomePanel {
 			<div class="project-health-card">
 				<div class="section-label">Project overview</div>
 				<div class="project-overview-grid">
-					<div><strong>${features.length}</strong><span>Features</span></div>
-					<div><strong>${features.filter((feature) => feature.status === "active").length}</strong><span>Active</span></div>
-					<div><strong>${projectFeatures.reduce((count, feature) => count + context.agentManager.getAgents(feature.id).length, 0)}</strong><span>Agents</span></div>
-					<div><strong>${projectFeatures.reduce((count, feature) => count + context.serviceManager.getServices(feature.id).length, 0)}</strong><span>Scripts</span></div>
+					<div><strong>${featureSnapshots.length}</strong><span>Features</span></div>
+					<div><strong>${featureSnapshots.filter((snapshot) => snapshot.feature.status === "active").length}</strong><span>Active</span></div>
+					<div><strong>${projectAgentCount ?? "?"}</strong><span>Agents</span></div>
+					<div><strong>${projectServiceCount ?? "?"}</strong><span>Scripts</span></div>
 				</div>
-				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong> ${baseGit.lastCommit ? `&middot; <span title="Last commit">${this.escapeHtml(baseGit.lastCommit)}</span>` : ""}</p>
+				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong> ${baseCommitLabel ? `&middot; <span title="Observed base SHA">${this.escapeHtml(baseCommitLabel)}</span>` : ""}</p>
 				<div class="project-base-chips">${baseStateChips}</div>
 			</div>
 			<div>
@@ -1127,12 +1201,11 @@ export class HomePanel {
 	 * sections (same helpers as the full feature page), then quick actions.
 	 */
 	private renderProjectFeatureBody(
-		context: import("../projects/projectManager").ProjectContext,
+		snapshot: FeatureSnapshot,
 		feature: Feature,
+		agents: Agent[],
+		services: Service[],
 	): string {
-		const agents = context.agentManager.getAgents(feature.id);
-		const services = context.serviceManager.getServices(feature.id);
-
 		const activeAgents = agents.filter(
 			(a) =>
 				a.status === "running" ||
@@ -1144,8 +1217,8 @@ export class HomePanel {
 		const stoppedAgents = agents.filter((a) => a.status === "stopped");
 
 		return `
-			${this.renderAgentsSection(activeAgents, erroredAgents, doneAgents, stoppedAgents, agents, feature)}
-			${this.renderServicesSection(services, feature)}`;
+			${snapshot.runtime.agents.status === "known" ? this.renderAgentsSection(activeAgents, erroredAgents, doneAgents, stoppedAgents, agents, feature) : '<div class="activity-empty">Agent runtime unavailable</div>'}
+			${snapshot.runtime.services.status === "known" ? this.renderServicesSection(services, feature) : '<div class="activity-empty">Service runtime unavailable</div>'}`;
 	}
 
 	private saveProjectConfig(projectId: string, content: string): void {
@@ -1441,17 +1514,11 @@ export class HomePanel {
 	): string {
 		const projectSections = contexts
 			.map((ctx) => {
-				const baseFeature = ctx.featureManager.getBaseFeature(ctx.project.id);
-				const allFeatures = [baseFeature, ...ctx.featureManager.getFeatures()];
-				const featureSections = allFeatures
-					.map((feature) => {
-						return this.renderTmuxFeatureGroup(
-							feature,
-							ctx.agentManager.getAgents(feature.id),
-							ctx.serviceManager.getServices(feature.id),
-							ctx.project.id,
-						);
-					})
+				const featureSections = this.featureStateCoordinator
+					.getProjectSnapshots(ctx.project.id)
+					.map((snapshot) =>
+						this.renderTmuxFeatureGroup(snapshot, ctx.project.id),
+					)
 					.filter(Boolean)
 					.join("");
 				if (!featureSections) return "";
@@ -1483,12 +1550,8 @@ export class HomePanel {
 		</div>`;
 	}
 
-	private renderFeatureTmuxSection(
-		feature: Feature,
-		agents: Agent[],
-		services: Service[],
-	): string {
-		const featureGroup = this.renderTmuxFeatureGroup(feature, agents, services);
+	private renderFeatureTmuxSection(snapshot: FeatureSnapshot): string {
+		const featureGroup = this.renderTmuxFeatureGroup(snapshot);
 		return `
 		<div>
 			<div class="section-label">Tmux Sessions</div>
@@ -1500,17 +1563,17 @@ export class HomePanel {
 	}
 
 	private renderTmuxFeatureGroup(
-		feature: Feature,
-		agents: Agent[],
-		services: Service[],
+		snapshot: FeatureSnapshot,
 		projectId?: string,
 	): string | null {
-		const { liveRows, inactiveRows } = this.getTmuxSessionRows(
-			feature.id,
-			agents,
-			services,
-		);
-		if (liveRows.length === 0 && inactiveRows.length === 0) {
+		const feature = snapshot.feature;
+		const { liveRows, inactiveRows, unknownRows } =
+			this.getTmuxSessionRows(snapshot);
+		if (
+			liveRows.length === 0 &&
+			inactiveRows.length === 0 &&
+			unknownRows.length === 0
+		) {
 			return null;
 		}
 
@@ -1534,7 +1597,7 @@ export class HomePanel {
 					<div class="tmux-feature-branch">${this.escapeHtml(feature.branch)}</div>
 				</div>
 				<div class="tmux-feature-actions">
-					<span class="tmux-count-badge">${liveRows.length} session${liveRows.length === 1 ? "" : "s"}</span>
+					<span class="tmux-count-badge">${unknownRows.length > 0 ? "unknown" : `${liveRows.length} session${liveRows.length === 1 ? "" : "s"}`}</span>
 					<button class="quick-action-btn danger subtle" onclick="killFeatureSessions('${feature.id}')">Kill Feature Sessions</button>
 					${
 						projectId
@@ -1544,67 +1607,116 @@ export class HomePanel {
 				</div>
 			</div>
 			<div class="tmux-session-list">
-				${liveRows.length > 0 ? liveRows.join("") : '<div class="tmux-empty-state">No live tmux sessions for this feature.</div>'}
+				${liveRows.length > 0 ? liveRows.join("") : unknownRows.length === 0 ? '<div class="tmux-empty-state">No live tmux sessions for this feature.</div>' : ""}
+				${unknownRows.join("")}
 			</div>
 			${inactiveSection}
 		</div>`;
 	}
 
-	private getTmuxSessionRows(
-		featureId: string,
-		agents: Agent[],
-		services: Service[],
-	): { liveRows: string[]; inactiveRows: string[] } {
+	private getTmuxSessionRows(snapshot: FeatureSnapshot): {
+		liveRows: string[];
+		inactiveRows: string[];
+		unknownRows: string[];
+	} {
 		const liveRows: string[] = [];
 		const inactiveRows: string[] = [];
+		const unknownRows: string[] = [];
+		const featureId = snapshot.feature.id;
 
-		for (const agent of agents) {
-			const sessionName =
-				agent.tmuxSession ?? this.tmux.sessionName(featureId, agent.id);
-			if (this.tmux.isSessionAlive(sessionName)) {
-				liveRows.push(
-					this.renderTmuxAgentSessionRow(featureId, agent, sessionName, true),
-				);
-			} else {
-				inactiveRows.push(
-					this.renderTmuxAgentSessionRow(featureId, agent, sessionName, false),
-				);
+		if (snapshot.runtime.agents.status === "unknown") {
+			unknownRows.push(
+				'<div class="tmux-empty-state">Agent runtime unavailable.</div>',
+			);
+		} else
+			for (const { agent, tmuxAlive } of snapshot.runtime.agents.value) {
+				const sessionName =
+					agent.tmuxSession ?? this.tmux.sessionName(featureId, agent.id);
+				if (tmuxAlive.status === "unknown") {
+					unknownRows.push(
+						this.renderTmuxAgentSessionRow(
+							featureId,
+							agent as Agent,
+							sessionName,
+							null,
+						),
+					);
+				} else if (tmuxAlive.value) {
+					liveRows.push(
+						this.renderTmuxAgentSessionRow(
+							featureId,
+							agent as Agent,
+							sessionName,
+							true,
+						),
+					);
+				} else {
+					inactiveRows.push(
+						this.renderTmuxAgentSessionRow(
+							featureId,
+							agent as Agent,
+							sessionName,
+							false,
+						),
+					);
+				}
 			}
-		}
 
-		for (const service of services) {
-			if (this.tmux.isSessionAlive(service.tmuxSession)) {
-				liveRows.push(
-					this.renderTmuxServiceSessionRow(featureId, service, true),
-				);
-			} else {
-				inactiveRows.push(
-					this.renderTmuxServiceSessionRow(featureId, service, false),
-				);
+		if (snapshot.runtime.services.status === "unknown") {
+			unknownRows.push(
+				'<div class="tmux-empty-state">Service runtime unavailable.</div>',
+			);
+		} else
+			for (const { service, tmuxAlive } of snapshot.runtime.services.value) {
+				if (tmuxAlive.status === "unknown") {
+					unknownRows.push(
+						this.renderTmuxServiceSessionRow(
+							featureId,
+							service as Service,
+							null,
+						),
+					);
+				} else if (tmuxAlive.value) {
+					liveRows.push(
+						this.renderTmuxServiceSessionRow(
+							featureId,
+							service as Service,
+							true,
+						),
+					);
+				} else {
+					inactiveRows.push(
+						this.renderTmuxServiceSessionRow(
+							featureId,
+							service as Service,
+							false,
+						),
+					);
+				}
 			}
-		}
 
-		return { liveRows, inactiveRows };
+		return { liveRows, inactiveRows, unknownRows };
 	}
 
 	private renderTmuxAgentSessionRow(
 		featureId: string,
 		agent: Agent,
 		sessionName?: string,
-		alive = true,
+		alive: boolean | null = true,
 	): string {
 		const resolvedSessionName =
 			sessionName ?? this.tmux.sessionName(featureId, agent.id);
-		const actionButton = alive
-			? `<button class="quick-action-btn danger subtle" onclick="killAgentSession('${featureId}', '${agent.id}')">Kill</button>`
-			: "";
+		const actionButton =
+			alive === true
+				? `<button class="quick-action-btn danger subtle" onclick="killAgentSession('${featureId}', '${agent.id}')">Kill</button>`
+				: "";
 		return `
 		<div class="tmux-session-row">
 			<div class="tmux-session-main">
 				<div class="tmux-session-title">
 					<span class="tmux-session-type">Agent</span>
 					<span>${this.escapeHtml(agent.name)}</span>
-					<span class="tmux-live-pill ${alive ? "live" : "dead"}">${alive ? "Live" : "Stopped"}</span>
+					<span class="tmux-live-pill ${alive === null ? "" : alive ? "live" : "dead"}">${alive === null ? "Unknown" : alive ? "Live" : "Stopped"}</span>
 				</div>
 				<div class="tmux-session-meta">
 					<span>${this.escapeHtml(resolvedSessionName)}</span>
@@ -1618,18 +1730,19 @@ export class HomePanel {
 	private renderTmuxServiceSessionRow(
 		featureId: string,
 		service: Service,
-		alive = true,
+		alive: boolean | null = true,
 	): string {
-		const actionButton = alive
-			? `<button class="quick-action-btn danger subtle" onclick="killServiceSession('${featureId}', '${service.id}')">Kill</button>`
-			: "";
+		const actionButton =
+			alive === true
+				? `<button class="quick-action-btn danger subtle" onclick="killServiceSession('${featureId}', '${service.id}')">Kill</button>`
+				: "";
 		return `
 		<div class="tmux-session-row">
 			<div class="tmux-session-main">
 				<div class="tmux-session-title">
 					<span class="tmux-session-type">Script</span>
 					<span>${this.escapeHtml(service.name)}</span>
-					<span class="tmux-live-pill ${alive ? "live" : "dead"}">${alive ? "Live" : "Stopped"}</span>
+					<span class="tmux-live-pill ${alive === null ? "" : alive ? "live" : "dead"}">${alive === null ? "Unknown" : alive ? "Live" : "Stopped"}</span>
 				</div>
 				<div class="tmux-session-meta">
 					<span>${this.escapeHtml(service.tmuxSession)}</span>
@@ -1640,12 +1753,16 @@ export class HomePanel {
 		</div>`;
 	}
 
-	private renderGitStatsSection(_feature: Feature): string {
+	private renderGitStatsSection(snapshot: FeatureSnapshot): string {
+		const stats = this.snapshotGitStats(snapshot);
+		const content = stats
+			? this.renderGitStatsContent(stats)
+			: '<div class="activity-empty">Git state unavailable</div>';
 		return `
 		<div>
 			<div class="section-label">Git Changes</div>
 			<div class="git-stats" id="git-stats-content">
-				<div class="activity-empty">Observing Git state...</div>
+				${content}
 			</div>
 		</div>`;
 	}

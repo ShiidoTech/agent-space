@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { evaluateIntegration } from "../features/integrationEvaluator";
 import {
 	type FeatureGitInspectionInput,
 	FeatureGitInspector,
@@ -11,6 +12,7 @@ import type {
 	FeatureGitObservations,
 	GitObservation,
 } from "../git/featureGitObservations";
+import { GitClient, type GitReader } from "../git/gitClient";
 
 const temporaryDirectories: string[] = [];
 
@@ -231,6 +233,70 @@ describe("FeatureGitInspector against real repositories", () => {
 		expect(git(repo, "rev-parse", "HEAD")).toBe(sha);
 	});
 
+	it("keeps unexpected symbolic-ref failures unknown instead of detached", async () => {
+		const repo = repository();
+		commit(repo, "file.txt", "content\n", "initial");
+		git(repo, "switch", "-c", "feature/test");
+		const client = new GitClient();
+		const reader: GitReader = {
+			readSync: (argv, options) => client.readSync(argv, options),
+			read: (argv, options) =>
+				argv[0] === "symbolic-ref"
+					? Promise.resolve({
+							argv,
+							cwd: options.cwd,
+							exitCode: 128,
+							signal: null,
+							stdout: "",
+							stderr: "permission denied",
+							error: new Error("permission denied"),
+						})
+					: client.read(argv, options),
+		};
+
+		const observation = await new FeatureGitInspector(reader).inspect(
+			input(repo),
+		);
+		expect(observation.branch).toMatchObject({
+			status: "unknown",
+			reason: "git_command_failed",
+		});
+	});
+
+	it("executes only local read commands", async () => {
+		const repo = repository();
+		const createdFromSha = commit(repo, "file.txt", "content\n", "initial");
+		git(repo, "switch", "-c", "feature/test");
+		const client = new GitClient();
+		const commands: string[][] = [];
+		const reader: GitReader = {
+			readSync: (argv, options) => client.readSync(argv, options),
+			read: (argv, options) => {
+				commands.push([...argv]);
+				return client.read(argv, options);
+			},
+		};
+
+		await new FeatureGitInspector(reader).inspect(
+			input(repo, { createdFromSha }),
+		);
+		const forbidden = new Set([
+			"add",
+			"branch",
+			"checkout",
+			"commit",
+			"fetch",
+			"merge",
+			"pull",
+			"push",
+			"reset",
+			"switch",
+			"update-ref",
+		]);
+		expect(commands.length).toBeGreaterThan(0);
+		expect(commands.some(([command]) => forbidden.has(command))).toBe(false);
+	});
+
 	it("reports a missing worktree and unknown base explicitly", async () => {
 		const repo = repository();
 		commit(repo, "file.txt", "content\n", "initial");
@@ -308,12 +374,20 @@ describe("FeatureGitInspector against real repositories", () => {
 		expect(value(proven.featureInBase)).toMatchObject({
 			isAncestor: true,
 		});
+		expect(evaluateIntegration(proven, createdFromSha)).toMatchObject({
+			status: "known",
+			outcome: "integrated_by_ancestry",
+		});
 
 		const impossible = await inspect(repo);
 		expect(value(impossible.featureInBase)).toMatchObject({
 			isAncestor: true,
 		});
 		expect(JSON.stringify(impossible)).not.toContain('"kind":"integrated"');
+		expect(evaluateIntegration(impossible)).toMatchObject({
+			status: "unknown",
+			reason: "creation_point_unknown",
+		});
 		expect(existsSync(path.join(repo, ".git", "FETCH_HEAD"))).toBe(false);
 	});
 });
