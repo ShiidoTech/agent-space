@@ -1,5 +1,10 @@
 export type FeatureStatus = "active" | "done";
-export type GitAwareStatus = "new" | "modified" | "ahead" | "merged";
+export type GitAwareStatus =
+	| "new"
+	| "modified"
+	| "ahead"
+	| "merged"
+	| "unknown";
 export type AgentStatus = "running" | "idle" | "stopped" | "done" | "errored";
 export type AgentAttentionStatus =
 	| "working"
@@ -11,7 +16,11 @@ export type AgentAttentionStatus =
 	| "unsupported";
 export type AgentNameSource = "default" | "user";
 export type IsolationMode = "shared" | "per-agent";
-export type LifecycleStepStatus = "pending" | "running" | "completed" | "failed";
+export type LifecycleStepStatus =
+	| "pending"
+	| "running"
+	| "completed"
+	| "failed";
 
 export interface LifecycleStep {
 	id: string;

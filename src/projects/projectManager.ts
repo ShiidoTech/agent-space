@@ -5,14 +5,16 @@ import { CodingToolRegistry } from "../agents/codingToolRegistry";
 import type { TerminalController } from "../agents/terminalController";
 import { TmuxIntegration } from "../agents/tmux";
 import { FeatureManager } from "../features/featureManager";
+import { FeatureGitInspector } from "../git/featureGitInspector";
+import { GitClient } from "../git/gitClient";
 import { ServiceManager } from "../services/serviceManager";
 import type { GlobalStore } from "../storage/globalStore";
 import { Store } from "../storage/store";
 import type { Feature, Project } from "../types";
 import {
 	loadProjectConfig,
-	replaceProjectConfig,
 	type ProjectConfig,
+	replaceProjectConfig,
 	resolveWorktreeBaseDir,
 	saveProjectConfig,
 } from "./projectConfig";
@@ -23,6 +25,8 @@ export interface ProjectContext {
 	featureManager: FeatureManager;
 	agentManager: AgentManager;
 	serviceManager: ServiceManager;
+	gitClient: GitClient;
+	featureGitInspector: FeatureGitInspector;
 	config: ProjectConfig;
 }
 
@@ -282,11 +286,14 @@ export class ProjectManager {
 			config,
 			this.worktreeRelativePath,
 		);
+		const gitClient = new GitClient();
+		const featureGitInspector = new FeatureGitInspector(gitClient);
 		const featureManager = new FeatureManager(
 			store,
 			project.repoPath,
 			worktreeBase,
 			config,
+			featureGitInspector,
 		);
 		featureManager.setOnChange(() => this.notifyChange());
 		const agentManager = new AgentManager(
@@ -314,6 +321,8 @@ export class ProjectManager {
 			featureManager,
 			agentManager,
 			serviceManager,
+			gitClient,
+			featureGitInspector,
 			config,
 		};
 	}

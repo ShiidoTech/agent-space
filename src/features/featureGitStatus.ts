@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import type { FeatureGitObservations } from "../git/featureGitObservations";
 import type { GitAwareStatus } from "../types";
 
 export interface GitStatusInput {
@@ -75,9 +76,44 @@ export function gitStatusLabel(status: GitAwareStatus): string {
 			return "Ahead";
 		case "merged":
 			return "Merged";
+		case "unknown":
+			return "Unknown";
 		default:
 			return status;
 	}
+}
+
+/** Preserve the legacy badge vocabulary while deriving it from explicit evidence. */
+export function gitStatusFromObservations(
+	observations: FeatureGitObservations,
+	createdFromSha?: string,
+): GitAwareStatus {
+	if (observations.workingTree.status === "unknown") return "unknown";
+	const workingTree = observations.workingTree.value;
+	if (
+		workingTree.staged.length > 0 ||
+		workingTree.unstaged.length > 0 ||
+		workingTree.untracked.length > 0 ||
+		workingTree.conflicted.length > 0
+	) {
+		return "modified";
+	}
+
+	if (
+		observations.featureDelta.status === "unknown" ||
+		observations.featureInBase.status === "unknown" ||
+		observations.feature.status === "unknown" ||
+		observations.base.status === "unknown"
+	) {
+		return "unknown";
+	}
+
+	const delta = observations.featureDelta.value;
+	const ancestry = observations.featureInBase.value;
+	if (delta.leftOnly === 0 && delta.rightOnly === 0) return "new";
+	if (!ancestry.isAncestor) return delta.rightOnly > 0 ? "ahead" : "unknown";
+	if (!createdFromSha) return "unknown";
+	return observations.feature.value.sha === createdFromSha ? "new" : "merged";
 }
 
 // -- Base branch git state (the comparison branch for all features) --------
@@ -238,98 +274,4 @@ function computeGitStatusUncached(input: GitStatusInput): GitAwareStatus {
 	}
 
 	return "new";
-}
-
-// -- Async variant -----------------------------------------------------------
-export async function computeGitStatusAsync(
-	input: GitStatusInput,
-): Promise<GitAwareStatus> {
-	const key = cacheKey(input);
-	const cached = gitStatusCache.get(key);
-	if (cached && Date.now() - cached.timestamp < GIT_STATUS_TTL_MS) {
-		return cached.result;
-	}
-
-	const { execAsync } = await import("../utils/platform");
-	const { featureBranch, baseBranch, worktreePath, repoRoot, createdFromSha } =
-		input;
-
-	const gitOpts = {
-		encoding: "utf-8" as const,
-		stdio: ["ignore", "pipe", "pipe"] as const,
-	};
-
-	async function gitCmd(command: string, cwd: string): Promise<string> {
-		const { stdout } = await execAsync(command, { cwd, ...gitOpts });
-		return stdout.trim();
-	}
-
-	async function branchMovedSinceCreationAsync(): Promise<boolean | null> {
-		try {
-			const reflog = (
-				await gitCmd(`git reflog show --format=%H "${featureBranch}"`, repoRoot)
-			)
-				.split(/\r?\n/)
-				.filter(Boolean);
-			if (reflog.length < 2) return null;
-			return reflog[0] !== reflog[reflog.length - 1];
-		} catch {
-			return null;
-		}
-	}
-
-	let result: GitAwareStatus = "new";
-
-	// Check modified
-	try {
-		const status = await gitCmd("git status --porcelain", worktreePath);
-		if (status.length > 0) {
-			result = "modified";
-			gitStatusCache.set(key, { result, timestamp: Date.now() });
-			return result;
-		}
-	} catch {
-		// Can't determine, continue
-	}
-
-	// Check merged
-	try {
-		const featureSha = await gitCmd(
-			`git rev-parse "${featureBranch}"`,
-			repoRoot,
-		);
-		const baseSha = await gitCmd(`git rev-parse "${baseBranch}"`, repoRoot);
-		if (featureSha !== baseSha) {
-			await gitCmd(
-				`git merge-base --is-ancestor "${featureBranch}" "${baseBranch}"`,
-				repoRoot,
-			);
-			const moved = createdFromSha
-				? featureSha !== createdFromSha
-				: await branchMovedSinceCreationAsync();
-			if (moved === true) {
-				result = "merged";
-				gitStatusCache.set(key, { result, timestamp: Date.now() });
-				return result;
-			}
-		}
-	} catch {
-		// Not merged, continue checking
-	}
-
-	// Check ahead
-	try {
-		const count = await gitCmd(
-			`git rev-list --count "${baseBranch}..${featureBranch}"`,
-			repoRoot,
-		);
-		if (Number.parseInt(count, 10) > 0) {
-			result = "ahead";
-		}
-	} catch {
-		// Can't determine, continue
-	}
-
-	gitStatusCache.set(key, { result, timestamp: Date.now() });
-	return result;
 }
