@@ -482,18 +482,15 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		let body: string;
 		if (contexts.length === 0) {
 			body = `
-				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				<div class="empty-state">
 					<div style="font-size: 24px; opacity: 0.3; margin-bottom: 8px;">Waiting for projects...</div>
 					<p>No projects registered</p>
-					<button class="btn-primary" onclick="send('addProject')">Add Project</button>
 				</div>`;
 		} else {
 			const sections = contexts
 				.map((ctx) => this.renderProjectSection(ctx, statusMap))
 				.join("");
 			body = `
-				<button class="btn-secondary" onclick="send('addProject')">Add Project</button>
 				${sections}`;
 		}
 

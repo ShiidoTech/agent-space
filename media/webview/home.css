@@ -402,10 +402,10 @@ body {
 	justify-content: center;
 	width: 28px;
 	height: 28px;
-	background: transparent;
-	border: none;
+	background: var(--vscode-button-background);
+	border: 1px solid var(--vscode-button-background);
 	border-radius: 5px;
-	color: var(--vscode-descriptionForeground);
+	color: var(--vscode-button-foreground);
 	cursor: pointer;
 	font-size: 16px;
 	transition:
@@ -414,8 +414,9 @@ body {
 	flex-shrink: 0;
 }
 .home-back-btn:hover {
-	background: var(--vscode-toolbar-hoverBackground);
-	color: var(--vscode-foreground);
+	background: var(--vscode-button-hoverBackground);
+	border-color: var(--vscode-button-hoverBackground);
+	color: var(--vscode-button-foreground);
 }
 .header-color-dot {
 	width: 12px;
@@ -516,6 +517,26 @@ body {
 
 .project-new-feature {
 	margin-top: 10px;
+}
+
+.project-overview-grid {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 10px;
+	margin: 12px 0 16px;
+}
+.project-overview-grid > div {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	padding: 10px;
+	border-radius: 4px;
+	background: var(--vscode-sideBar-background);
+}
+.project-overview-grid strong { font-size: 20px; }
+.project-overview-grid span {
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
 }
 
 .project-settings-card {

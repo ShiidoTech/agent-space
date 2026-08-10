@@ -1015,21 +1015,35 @@ export class HomePanel {
 		const effectiveBaseBranch = context.featureManager.getBaseBranchName();
 		const branchKinds = context.featureManager.getBranchKinds();
 		const defaultBranchKind = context.featureManager.getDefaultBranchKind();
+		const baseFeature = context.featureManager.getBaseFeature(context.project.id);
 		const features = context.featureManager.getFeatures();
-		const featureRows = features.length
-			? features
-					.map(
-						(feature) => `
-						<div class="project-feature-row">
-							<div>
-								<strong>${this.escapeHtml(feature.name)}</strong>
-								<div class="project-setting-source">${this.escapeHtml(feature.branch)}</div>
+		const projectFeatures = [
+			...(context.agentManager.getAgents(baseFeature.id).length > 0 || context.serviceManager.getServices(baseFeature.id).length > 0 ? [baseFeature] : []),
+			...features,
+		];
+		const featureRows = projectFeatures.length
+			? projectFeatures
+					.map((feature) => {
+						const agents = context.agentManager.getAgents(feature.id);
+						const services = context.serviceManager.getServices(feature.id);
+						const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
+						const agentLabel = agents.length === 1 ? "1 agent" : `${agents.length} agents`;
+						const serviceLabel = services.length === 1 ? "1 script" : `${services.length} scripts`;
+						return `
+						<div class="feature-resume-card" onclick="resumeFeature('${feature.id}')">
+							<div class="feature-card-top">
+								<div class="feature-card-color" style="background: ${dotColor}"></div>
+								<div class="feature-card-name">${this.escapeHtml(feature.branch)}</div>
+								<span class="feature-card-status ${feature.status}">${feature.status === "done" ? "Done" : "Active"}</span>
 							</div>
-							<button class="quick-action-btn subtle" onclick="resumeFeature('${feature.id}')">Open</button>
-						</div>`,
-					)
+							<div class="feature-card-meta">
+								<span class="feature-card-counts">${agentLabel} &middot; ${serviceLabel}</span>
+							</div>
+							<button class="feature-card-resume" onclick="event.stopPropagation(); resumeFeature('${feature.id}')">Resume &rarr;</button>
+						</div>`;
+					})
 					.join("")
-			: '<div class="activity-empty">No features yet.</div>';
+			: '<div class="empty-welcome"><div class="empty-welcome-text">No features yet. Create one to get started.</div></div>';
 
 		const projectSettingsCard = `
 			<div class="project-settings-card">
@@ -1056,9 +1070,19 @@ export class HomePanel {
 				<button class="quick-action-btn primary">Overview</button>
 				<button class="quick-action-btn" onclick="showProjectSettings('${projectId}')">Settings</button>
 			</div>
+			<div class="project-health-card">
+				<div class="section-label">Project overview</div>
+				<div class="project-overview-grid">
+					<div><strong>${features.length}</strong><span>Features</span></div>
+					<div><strong>${features.filter((feature) => feature.status === "active").length}</strong><span>Active</span></div>
+					<div><strong>${projectFeatures.reduce((count, feature) => count + context.agentManager.getAgents(feature.id).length, 0)}</strong><span>Agents</span></div>
+					<div><strong>${projectFeatures.reduce((count, feature) => count + context.serviceManager.getServices(feature.id).length, 0)}</strong><span>Scripts</span></div>
+				</div>
+				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong></p>
+			</div>
 			<div>
-				<div class="section-label">Features</div>
-				<div class="project-feature-list">${featureRows}</div>
+				<div class="section-label">Active / recent features</div>
+				<div class="feature-grid project-feature-grid">${featureRows}</div>
 				<button class="quick-action-btn primary project-new-feature" onclick="newFeature('${projectId}')">New Feature</button>
 			</div>`;
 
