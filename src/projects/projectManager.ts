@@ -222,6 +222,18 @@ export class ProjectManager {
 		return this.tmux.listSessions();
 	}
 
+	observeTmuxSessions() {
+		return this.tmux.observeSessions();
+	}
+
+	agentTmuxSessionName(
+		featureId: string,
+		agentId: string,
+		persisted?: string,
+	): string {
+		return persisted ?? this.tmux.sessionName(featureId, agentId);
+	}
+
 	findContextByFeatureId(featureId: string): ProjectContext | undefined {
 		if (featureId.startsWith("base:")) {
 			const projectId = featureId.slice("base:".length);
@@ -293,7 +305,6 @@ export class ProjectManager {
 			project.repoPath,
 			worktreeBase,
 			config,
-			featureGitInspector,
 		);
 		featureManager.setOnChange(() => this.notifyChange());
 		const agentManager = new AgentManager(

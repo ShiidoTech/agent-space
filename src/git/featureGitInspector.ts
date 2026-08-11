@@ -23,8 +23,13 @@ export interface FeatureGitInspectionInput {
 	readonly repoRoot: string;
 	readonly worktreePath: string;
 	readonly featureBranch: string;
-	readonly baseRef: string;
+	readonly baseRef?: string;
 	readonly createdFromSha?: string;
+}
+
+export interface FeatureGitProjectObservation {
+	readonly repository: GitObservation<{ readonly root: string }>;
+	readonly worktrees: GitObservation<readonly GitWorktreeObservation[]>;
 }
 
 const CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
@@ -117,29 +122,46 @@ function completeWorktree(value: {
 export class FeatureGitInspector {
 	constructor(private readonly git: GitReader = defaultGitClient) {}
 
-	async inspect(
-		input: FeatureGitInspectionInput,
-	): Promise<FeatureGitObservations> {
+	async observeProject(
+		repoRoot: string,
+	): Promise<FeatureGitProjectObservation> {
 		const repositoryResult = await this.git.read(
 			["rev-parse", "--show-toplevel"],
-			{ cwd: input.repoRoot },
+			{ cwd: repoRoot },
 		);
-		if (!successful(repositoryResult)) {
-			return this.unavailable(
-				input,
-				"not_a_repository",
-				message(repositoryResult),
-			);
-		}
-
-		const repository = known({ root: repositoryResult.stdout.trim() });
+		const repository = successful(repositoryResult)
+			? known({ root: repositoryResult.stdout.trim() })
+			: unknown("not_a_repository", message(repositoryResult), {
+					root: repoRoot,
+				});
 		const worktreesResult = await this.git.read(
 			["worktree", "list", "--porcelain"],
-			{ cwd: input.repoRoot },
+			{ cwd: repoRoot },
 		);
 		const worktrees = successful(worktreesResult)
 			? known(parseWorktrees(worktreesResult.stdout))
 			: unknown("git_command_failed", message(worktreesResult));
+		return { repository, worktrees };
+	}
+
+	async inspect(
+		input: FeatureGitInspectionInput,
+		projectObservation?: FeatureGitProjectObservation,
+	): Promise<FeatureGitObservations> {
+		const project =
+			projectObservation ?? (await this.observeProject(input.repoRoot));
+		if (project.repository.status === "unknown") {
+			return this.unavailable(
+				input,
+				project.repository.reason === "not_a_repository"
+					? "not_a_repository"
+					: "repository_unavailable",
+				project.repository.message,
+			);
+		}
+
+		const repository = project.repository;
+		const worktrees = project.worktrees;
 		const targetPath = path.resolve(input.worktreePath);
 		const worktree =
 			worktrees.status === "known"
@@ -153,15 +175,25 @@ export class FeatureGitInspector {
 						path: targetPath,
 					});
 
-		const base = await this.resolveCommit(
-			input.baseRef,
-			input.repoRoot,
-			"base",
-		);
+		const base = input.baseRef
+			? await this.resolveCommit(input.baseRef, input.repoRoot, "base")
+			: unknown("base_unknown", "No base ref was observed");
 		const feature = await this.resolveCommit(
 			input.featureBranch,
 			input.repoRoot,
 			"feature",
+		);
+		const creationPoint = input.createdFromSha
+			? await this.resolveCommit(
+					input.createdFromSha,
+					input.repoRoot,
+					"creation",
+				)
+			: unknown("creation_point_unknown");
+		const creationPointInFeature = await this.observeAncestry(
+			creationPoint,
+			feature,
+			input.repoRoot,
 		);
 		const featureDelta = await this.compare(base, feature, input.repoRoot);
 		const featureDiff = await this.observeFeatureDiff(
@@ -201,6 +233,8 @@ export class FeatureGitInspector {
 				head: missing,
 				feature,
 				base,
+				creationPoint,
+				creationPointInFeature,
 				upstream,
 				upstreamDivergence,
 				featureDelta,
@@ -248,6 +282,8 @@ export class FeatureGitInspector {
 			head,
 			feature,
 			base,
+			creationPoint,
+			creationPointInFeature,
 			upstream,
 			upstreamDivergence,
 			featureDelta,
@@ -261,7 +297,7 @@ export class FeatureGitInspector {
 	private async resolveCommit(
 		ref: string,
 		cwd: string,
-		role: "base" | "head" | "feature",
+		role: "base" | "head" | "feature" | "creation",
 	): Promise<GitObservation<ObservedCommit>> {
 		const result = await this.git.read(
 			["rev-parse", "--verify", `${ref}^{commit}`],
@@ -273,9 +309,11 @@ export class FeatureGitInspector {
 		return unknown(
 			role === "base"
 				? "base_unknown"
-				: role === "feature"
-					? "ref_not_found"
-					: "unborn_head",
+				: role === "creation"
+					? "creation_point_invalid"
+					: role === "feature"
+						? "ref_not_found"
+						: "unborn_head",
 			message(result),
 			{ ref },
 		);
@@ -461,6 +499,8 @@ export class FeatureGitInspector {
 			head: unavailable,
 			feature: unavailable,
 			base: unavailable,
+			creationPoint: unavailable,
+			creationPointInFeature: unavailable,
 			upstream: unavailable,
 			upstreamDivergence: unavailable,
 			featureDelta: unavailable,

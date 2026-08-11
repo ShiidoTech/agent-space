@@ -3,6 +3,10 @@ import { commandExists, exec, execFile } from "../utils/platform";
 export const TMUX_SESSION_PREFIX = "agent-space";
 export const LEGACY_TMUX_SESSION_PREFIX = "companion";
 
+export type TmuxSessionsObservation =
+	| { readonly status: "known"; readonly sessions: readonly string[] }
+	| { readonly status: "unknown"; readonly detail: string };
+
 /**
  * Replace characters that tmux interprets as target-specification separators.
  * `:` delimits session:window and `.` delimits window.pane — both break
@@ -133,6 +137,28 @@ export class TmuxIntegration {
 				.filter(Boolean);
 		} catch {
 			return [];
+		}
+	}
+
+	observeSessions(): TmuxSessionsObservation {
+		if (!this.isAvailable()) {
+			return { status: "unknown", detail: "tmux is not available" };
+		}
+		try {
+			const sessions = execFile("tmux", [
+				"list-sessions",
+				"-F",
+				"#{session_name}",
+			])
+				.split("\n")
+				.map((line) => line.trim())
+				.filter(Boolean);
+			return { status: "known", sessions };
+		} catch (error) {
+			return {
+				status: "unknown",
+				detail: error instanceof Error ? error.message : String(error),
+			};
 		}
 	}
 

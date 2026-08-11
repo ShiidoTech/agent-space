@@ -305,11 +305,13 @@ window.addEventListener("message", function (event) {
 
 	var needsFullRefresh = false;
 	var projects = msg.data.projects;
+	var observedFeatureIds = {};
 
 	for (var p = 0; p < projects.length; p++) {
 		var proj = projects[p];
 		for (var f = 0; f < proj.features.length; f++) {
 			var feat = proj.features[f];
+			observedFeatureIds[feat.id] = true;
 			var card = document.querySelector('[data-feature-id="' + feat.id + '"]');
 			if (!card) {
 				needsFullRefresh = true;
@@ -326,8 +328,14 @@ window.addEventListener("message", function (event) {
 			}
 
 			// Update agent lifecycle + attention status
-			for (var a = 0; a < feat.agents.length; a++) {
+			var observedAgentIds = {};
+			for (
+				var a = 0;
+				feat.agentsKnown !== false && a < feat.agents.length;
+				a++
+			) {
 				var agent = feat.agents[a];
+				observedAgentIds[agent.id] = true;
 				var agentEl = card.querySelector('[data-agent-id="' + agent.id + '"]');
 				if (!agentEl) {
 					needsFullRefresh = true;
@@ -374,10 +382,23 @@ window.addEventListener("message", function (event) {
 					" " +
 					statusClass;
 			}
+			if (feat.agentsKnown !== false) {
+				card.querySelectorAll("[data-agent-id]").forEach(function (agentEl) {
+					if (!observedAgentIds[agentEl.getAttribute("data-agent-id")]) {
+						needsFullRefresh = true;
+					}
+				});
+			}
 
 			// Update service statuses
-			for (var s = 0; s < feat.services.length; s++) {
+			var observedServiceIds = {};
+			for (
+				var s = 0;
+				feat.servicesKnown !== false && s < feat.services.length;
+				s++
+			) {
 				var svc = feat.services[s];
+				observedServiceIds[svc.id] = true;
 				var svcEl = card.querySelector('[data-service-id="' + svc.id + '"]');
 				if (!svcEl) {
 					needsFullRefresh = true;
@@ -388,21 +409,44 @@ window.addEventListener("message", function (event) {
 					" " +
 					svc.status;
 			}
+			if (feat.servicesKnown !== false) {
+				card
+					.querySelectorAll("[data-service-id]")
+					.forEach(function (serviceEl) {
+						if (
+							!observedServiceIds[serviceEl.getAttribute("data-service-id")]
+						) {
+							needsFullRefresh = true;
+						}
+					});
+			}
 
 			// Update collapse count
 			var activeCount =
-				feat.agents.filter(function (a) {
-					return a.status !== "done";
-				}).length +
-				feat.services.filter(function (s) {
-					return s.status === "running";
-				}).length;
+				feat.agentsKnown === false || feat.servicesKnown === false
+					? null
+					: feat.agents.filter(function (a) {
+							return a.status !== "done";
+						}).length +
+						feat.services.filter(function (s) {
+							return s.status === "running";
+						}).length;
 			var countEl = document.getElementById("collapse-count-" + feat.id);
 			if (countEl) {
-				countEl.textContent = activeCount > 0 ? String(activeCount) : "";
+				countEl.textContent =
+					activeCount === null
+						? "?"
+						: activeCount > 0
+							? String(activeCount)
+							: "";
 			}
 		}
 	}
+	document.querySelectorAll("[data-feature-id]").forEach(function (card) {
+		if (!observedFeatureIds[card.getAttribute("data-feature-id")]) {
+			needsFullRefresh = true;
+		}
+	});
 
 	if (needsFullRefresh) {
 		send("requestFullRefresh");

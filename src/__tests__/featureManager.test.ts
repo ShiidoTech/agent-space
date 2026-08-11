@@ -11,16 +11,10 @@ vi.mock("node:child_process", () => ({
 	execSync: vi.fn(),
 }));
 
-vi.mock("../features/featureGitStatus", () => ({
-	computeGitStatus: vi.fn(),
-}));
-
 import { execFile, execSync } from "node:child_process";
-import { computeGitStatus } from "../features/featureGitStatus";
 
 const mockExecSync = vi.mocked(execSync);
 const mockExecFile = vi.mocked(execFile);
-const mockComputeGitStatus = vi.mocked(computeGitStatus);
 
 describe("FeatureManager", () => {
 	let tmpDir: string;
@@ -50,7 +44,10 @@ describe("FeatureManager", () => {
 				_callbackFile: string,
 				_callbackArgs: readonly string[],
 				_callbackOptions: unknown,
-				callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
 			) => {
 				callback(null, { stdout: "abc123\n", stderr: "" });
 			}) as never);
@@ -61,7 +58,10 @@ describe("FeatureManager", () => {
 				{ baseBranch: "main" },
 			);
 
-			const feature = asyncManager.createFeatureRecord("async-feature", "shared");
+			const feature = asyncManager.createFeatureRecord(
+				"async-feature",
+				"shared",
+			);
 			const promise = asyncManager.provisionFeature(feature.id);
 
 			expect(feature.provisioning?.state).toBe("provisioning");
@@ -77,11 +77,11 @@ describe("FeatureManager", () => {
 				expect.any(Function),
 			);
 			expect(mockExecFile).toHaveBeenNthCalledWith(
-			2,
-			"git",
-			expect.arrayContaining(["worktree", "add", feature.worktreePath]),
-			expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
-			expect.any(Function),
+				2,
+				"git",
+				expect.arrayContaining(["worktree", "add", feature.worktreePath]),
+				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
+				expect.any(Function),
 			);
 			expect(feature.provisioning?.state).toBe("ready");
 		});
@@ -368,40 +368,6 @@ describe("FeatureManager", () => {
 			manager.updateFeatureIsolation("nonexistent", "per-agent");
 
 			expect(manager.getFeatures()[0].isolation).toBe("shared");
-		});
-	});
-
-	describe("getFeatureGitStatus", () => {
-		it("delegates to computeGitStatus with correct parameters", () => {
-			mockExecSync.mockReturnValue(Buffer.from(""));
-			mockComputeGitStatus.mockReturnValue("ahead");
-			const feature = manager.createFeature("status-test", "shared");
-
-			const result = manager.getFeatureGitStatus(feature);
-
-			expect(result).toBe("ahead");
-			expect(mockComputeGitStatus).toHaveBeenCalledWith({
-				featureBranch: feature.branch,
-				baseBranch: "main",
-				worktreePath: feature.worktreePath,
-				repoRoot: repoRoot,
-			});
-		});
-
-		it("uses cached base branch", () => {
-			mockExecSync.mockReturnValueOnce("develop\n");
-			mockExecSync.mockReturnValue(Buffer.from(""));
-			mockComputeGitStatus.mockReturnValue("new");
-
-			// Trigger base branch detection
-			manager.getBaseFeature("p1");
-
-			const feature = manager.createFeature("test", "shared");
-			manager.getFeatureGitStatus(feature);
-
-			expect(mockComputeGitStatus).toHaveBeenCalledWith(
-				expect.objectContaining({ baseBranch: "develop" }),
-			);
 		});
 	});
 

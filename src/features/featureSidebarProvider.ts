@@ -1,6 +1,4 @@
 import * as vscode from "vscode";
-import { execSync } from "node:child_process";
-import type { AgentManager } from "../agents/agentManager";
 import { presentSessionBinding } from "../agents/attention/sessionBindingPresentation";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { presentAgentState } from "../agents/observation/presentAgentState";
@@ -21,27 +19,23 @@ import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
-import type { ServiceManager } from "../services/serviceManager";
-import type {
-	Agent,
-	AgentAttentionStatus,
-	Feature,
-	GitAwareStatus,
-	Service,
-} from "../types";
-import type { FeatureManager } from "./featureManager";
+import type { Agent, AgentAttentionStatus, Feature, Service } from "../types";
 import { gitStatusLabel } from "./featureGitStatus";
+import type { FeatureSnapshot } from "./featureSnapshot";
+import { featureSnapshotGitStatus } from "./featureSnapshot";
+import type { FeatureStateCoordinator } from "./featureStateCoordinator";
 
 export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "agentSpace.features";
 	private _view?: vscode.WebviewView;
 	private _onVisibilityChange?: (visible: boolean) => void;
-	private _pollingTimer?: ReturnType<typeof setInterval>;
+	private consumer?: { dispose: () => void };
 
 	private terminalController?: TerminalController;
 
 	constructor(
 		private readonly projectManager: ProjectManager,
+		private readonly featureStateCoordinator: FeatureStateCoordinator,
 		private readonly toolRegistry: CodingToolRegistry,
 		_prerequisites: unknown,
 		private readonly extensionUri: vscode.Uri,
@@ -57,6 +51,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this._view = webviewView;
+		this.setConsumerVisible(webviewView.visible);
 		webviewView.webview.options = {
 			enableScripts: true,
 			localResourceRoots: [
@@ -67,13 +62,14 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 		webviewView.onDidChangeVisibility(() => {
 			if (webviewView.visible) {
-				this.startPolling();
+				this.setConsumerVisible(true);
+				this.refreshState();
 			} else {
-				this.stopPolling();
+				this.setConsumerVisible(false);
 			}
 			this._onVisibilityChange?.(webviewView.visible);
 		});
-		this.startPolling();
+		this.refreshState();
 
 		webviewView.webview.onDidReceiveMessage((message) => {
 			const run = (cmd: string, ...args: unknown[]) => {
@@ -156,6 +152,15 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		});
 	}
 
+	private setConsumerVisible(visible: boolean): void {
+		if (visible) {
+			this.consumer ??= this.featureStateCoordinator.acquireConsumer();
+			return;
+		}
+		this.consumer?.dispose();
+		this.consumer = undefined;
+	}
+
 	/** Full HTML rebuild — used for initial load and structural changes (feature create/delete). */
 	refresh(): void {
 		this.refreshAsync().catch(() => {});
@@ -169,27 +174,10 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private async refreshAsync(): Promise<void> {
 		try {
 			if (!this._view) return;
-
-			// Pre-compute all git statuses in parallel
-			const contexts = this.projectManager.getAllContexts();
-			const statusMap = new Map<string, import("../types").GitAwareStatus>();
-
-			const tasks: Promise<void>[] = [];
-			for (const ctx of contexts) {
-				for (const feature of ctx.featureManager.getFeatures()) {
-					tasks.push(
-						ctx.featureManager
-							.getFeatureGitStatusAsync(feature)
-							.then((status) => {
-								statusMap.set(feature.id, status);
-							}),
-					);
-				}
-			}
-			await Promise.all(tasks);
+			await this.featureStateCoordinator.reconcile();
 
 			if (this._view) {
-				this._view.webview.html = this.getHtml(statusMap);
+				this._view.webview.html = this.getHtml();
 			}
 		} catch {
 			// Webview may have been disposed; swallow to prevent cascade
@@ -203,19 +191,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			if (!this._view?.webview) return;
 
 			const contexts = this.projectManager.getAllContexts();
-			const statusMap = new Map<string, import("../types").GitAwareStatus>();
-
-			const asyncTasks: Promise<void>[] = [];
-			for (const ctx of contexts) {
-				for (const feature of ctx.featureManager.getFeatures()) {
-					asyncTasks.push(
-						ctx.featureManager.getFeatureGitStatusAsync(feature).then((s) => {
-							statusMap.set(feature.id, s);
-						}),
-					);
-				}
-			}
-			await Promise.all(asyncTasks);
 
 			interface SidebarAgent {
 				id: string;
@@ -243,6 +218,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				isBase: boolean;
 				agents: SidebarAgent[];
 				services: SidebarService[];
+				agentsKnown: boolean;
+				servicesKnown: boolean;
 			}
 			interface SidebarProject {
 				id: string;
@@ -251,50 +228,21 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			}
 
 			const projects: SidebarProject[] = contexts.map((ctx) => {
-				const baseFeature = ctx.featureManager.getBaseFeature(ctx.project.id);
-				const baseAgents = ctx.agentManager.getAgents(baseFeature.id);
-				const baseServices = ctx.serviceManager.getServices(baseFeature.id);
-
-				const features: SidebarFeature[] = [
-					{
-						id: baseFeature.id,
-						branch: baseFeature.branch,
-						isBase: true,
-						agents: baseAgents.map((a) => ({
-							...(() => {
-								const presented = presentAgentState(
-									ctx.agentManager.observe(a),
-								);
-								return { presentedState: presented };
-							})(),
-							id: a.id,
-							name: a.name,
-							sessionTitle: a.sessionTitle,
-							status: a.status,
-							attentionStatus: a.attentionStatus,
-							attentionReason: a.attentionReason,
-							toolId: a.toolId,
-							lastError: a.lastError,
-							bindingState: a.sessionBinding?.state,
-							bindingDetail: a.sessionBinding?.detail,
-						})),
-						services: baseServices.map((s) => ({
-							id: s.id,
-							name: s.name,
-							command: s.command,
-							status: s.status,
-						})),
-					},
-				];
-
-				for (const feature of ctx.featureManager.getFeatures()) {
-					const agents = ctx.agentManager.getAgents(feature.id);
-					const services = ctx.serviceManager.getServices(feature.id);
-					features.push({
-						id: feature.id,
-						branch: feature.branch,
-						gitStatus: statusMap.get(feature.id),
-						isBase: false,
+				const snapshots = this.featureStateCoordinator.getProjectSnapshots(
+					ctx.project.id,
+				);
+				const features: SidebarFeature[] = snapshots.map((snapshot) => {
+					const agents = this.snapshotAgents(snapshot);
+					const services = this.snapshotServices(snapshot);
+					return {
+						id: snapshot.feature.id,
+						branch: snapshot.feature.branch,
+						gitStatus: snapshot.feature.id.startsWith("base:")
+							? undefined
+							: featureSnapshotGitStatus(snapshot),
+						isBase: snapshot.feature.id.startsWith("base:"),
+						agentsKnown: snapshot.runtime.agents.status === "known",
+						servicesKnown: snapshot.runtime.services.status === "known",
 						agents: agents.map((a) => ({
 							...(() => {
 								const presented = presentAgentState(
@@ -319,8 +267,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 							command: s.command,
 							status: s.status,
 						})),
-					});
-				}
+					};
+				});
 
 				return { id: ctx.project.id, name: ctx.project.name, features };
 			});
@@ -332,25 +280,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		} catch {
 			// Webview may have been disposed
 		}
-	}
-
-	startPolling(): void {
-		this.stopPolling();
-		this.sendUpdate().catch(() => {});
-		this._pollingTimer = setInterval(() => {
-			this.sendUpdate().catch(() => {});
-		}, 15_000);
-	}
-
-	stopPolling(): void {
-		if (this._pollingTimer) {
-			clearInterval(this._pollingTimer);
-			this._pollingTimer = undefined;
-		}
-	}
-
-	dispose(): void {
-		this.stopPolling();
 	}
 
 	private handleStopService(featureId: string, serviceId: string): void {
@@ -454,9 +383,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		);
 	}
 
-	private getHtml(
-		statusMap?: Map<string, import("../types").GitAwareStatus>,
-	): string {
+	private getHtml(): string {
 		const webview = this._view?.webview;
 		if (!webview) return "";
 		const cssUri = webview.asWebviewUri(
@@ -477,7 +404,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				</div>`;
 		} else {
 			const sections = contexts
-				.map((ctx) => this.renderProjectSection(ctx, statusMap))
+				.map((ctx) => this.renderProjectSection(ctx))
 				.join("");
 			body = `
 				${sections}`;
@@ -529,29 +456,18 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 </html>`;
 	}
 
-	private renderProjectSection(
-		ctx: ProjectContext,
-		statusMap?: Map<string, import("../types").GitAwareStatus>,
-	): string {
+	private renderProjectSection(ctx: ProjectContext): string {
 		const { project } = ctx;
-		const baseFeature = ctx.featureManager.getBaseFeature(project.id);
-		const baseCard = this.renderBaseCard(
-			baseFeature,
-			ctx.agentManager,
-			ctx.serviceManager,
+		const snapshots = this.featureStateCoordinator.getProjectSnapshots(
+			project.id,
 		);
-
-		const features = ctx.featureManager.getFeatures();
-		const featureCards = features
-			.map((f) =>
-				this.renderFeatureCard(
-					f,
-					ctx.agentManager,
-					ctx.serviceManager,
-					ctx.featureManager,
-					statusMap,
-				),
-			)
+		const baseSnapshot = snapshots.find((snapshot) =>
+			snapshot.feature.id.startsWith("base:"),
+		);
+		const baseCard = baseSnapshot ? this.renderBaseCard(baseSnapshot) : "";
+		const featureCards = snapshots
+			.filter((snapshot) => !snapshot.feature.id.startsWith("base:"))
+			.map((snapshot) => this.renderFeatureCard(snapshot))
 			.join("");
 
 		return `
@@ -571,18 +487,25 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		</div>`;
 	}
 
-	private renderBaseCard(
-		feature: Feature,
-		agentManager: AgentManager,
-		serviceManager: ServiceManager,
-	): string {
-		const agents = agentManager.getAgents(feature.id);
-		const services = serviceManager.getServices(feature.id);
+	dispose(): void {
+		this.consumer?.dispose();
+		this.consumer = undefined;
+	}
+
+	private renderBaseCard(snapshot: FeatureSnapshot): string {
+		const feature = snapshot.feature as Feature;
+		const agents = this.snapshotAgents(snapshot);
+		const services = this.snapshotServices(snapshot);
 		const totalCount =
 			agents.filter((a) => a.status !== "done").length +
 			services.filter((s) => s.status === "running").length;
 
-		const bodyHtml = this.renderCardBody(feature, agents, services);
+		const bodyHtml = this.renderSnapshotCardBody(snapshot, agents, services);
+		const count = this.snapshotRuntimeKnown(snapshot)
+			? totalCount > 0
+				? String(totalCount)
+				: ""
+			: "?";
 
 		return `
 		<div class="feature-card base-card" data-feature-id="${feature.id}" onclick="selectFeature('${feature.id}')">
@@ -590,7 +513,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				<span class="card-chevron" id="card-chevron-${feature.id}">${ICON_CHEVRON_DOWN}</span>
 				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
 				<span class="base-label">base</span>
-				<span class="collapse-count" id="collapse-count-${feature.id}">${totalCount > 0 ? totalCount : ""}</span>
+				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
 			</div>
 			<div class="feature-card-body" id="card-body-${feature.id}">
 				${bodyHtml}
@@ -603,22 +526,21 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		</div>`;
 	}
 
-	private renderFeatureCard(
-		feature: Feature,
-		agentManager: AgentManager,
-		serviceManager: ServiceManager,
-		featureManager: FeatureManager,
-		statusMap?: Map<string, import("../types").GitAwareStatus>,
-	): string {
-		const agents = agentManager.getAgents(feature.id);
-		const services = serviceManager.getServices(feature.id);
+	private renderFeatureCard(snapshot: FeatureSnapshot): string {
+		const feature = snapshot.feature as Feature;
+		const agents = this.snapshotAgents(snapshot);
+		const services = this.snapshotServices(snapshot);
 		const totalCount =
 			agents.filter((a) => a.status !== "done").length +
 			services.filter((s) => s.status === "running").length;
 
-		const gitStatus =
-			statusMap?.get(feature.id) ?? featureManager.getFeatureGitStatus(feature);
-		const bodyHtml = this.renderCardBody(feature, agents, services);
+		const gitStatus = featureSnapshotGitStatus(snapshot);
+		const bodyHtml = this.renderSnapshotCardBody(snapshot, agents, services);
+		const count = this.snapshotRuntimeKnown(snapshot)
+			? totalCount > 0
+				? String(totalCount)
+				: ""
+			: "?";
 
 		return `
 		<div class="feature-card" data-feature-id="${feature.id}" onclick="selectFeature('${feature.id}')">
@@ -626,7 +548,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				<span class="card-chevron" id="card-chevron-${feature.id}">${ICON_CHEVRON_DOWN}</span>
 				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
 				<span class="status-badge status-${gitStatus}" data-status-badge="${feature.id}">${gitStatusLabel(gitStatus)}</span>
-				<span class="collapse-count" id="collapse-count-${feature.id}">${totalCount > 0 ? totalCount : ""}</span>
+				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
 				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Delete Feature">${ICON_DELETE}</button>
 			</div>
 			<div class="feature-card-body" id="card-body-${feature.id}">
@@ -640,13 +562,39 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		</div>`;
 	}
 
-	private renderCardBody(
-		feature: Feature,
+	private snapshotAgents(snapshot: FeatureSnapshot): Agent[] {
+		return snapshot.runtime.agents.status === "known"
+			? snapshot.runtime.agents.value.map(({ agent }) => agent as Agent)
+			: [];
+	}
+
+	private snapshotServices(snapshot: FeatureSnapshot): Service[] {
+		return snapshot.runtime.services.status === "known"
+			? snapshot.runtime.services.value.map(({ service }) => service as Service)
+			: [];
+	}
+
+	private snapshotRuntimeKnown(snapshot: FeatureSnapshot): boolean {
+		return (
+			snapshot.runtime.agents.status === "known" &&
+			snapshot.runtime.services.status === "known"
+		);
+	}
+
+	private renderSnapshotCardBody(
+		snapshot: FeatureSnapshot,
 		agents: Agent[],
 		services: Service[],
 	): string {
-		const agentsHtml = this.renderAgentsSection(feature, agents);
-		const servicesHtml = this.renderServicesSection(feature, services);
+		const feature = snapshot.feature as Feature;
+		const agentsHtml =
+			snapshot.runtime.agents.status === "known"
+				? this.renderAgentsSection(feature, agents)
+				: '<div class="empty-placeholder">Agent runtime unavailable</div>';
+		const servicesHtml =
+			snapshot.runtime.services.status === "known"
+				? this.renderServicesSection(feature, services)
+				: '<div class="empty-placeholder">Service runtime unavailable</div>';
 		return `${agentsHtml}${servicesHtml}`;
 	}
 

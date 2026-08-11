@@ -262,6 +262,45 @@ describe("TmuxIntegration", () => {
 		});
 	});
 
+	describe("observeSessions", () => {
+		it("keeps unavailable tmux unknown", () => {
+			mockCommandExists.mockReturnValue(false);
+			expect(tmux.observeSessions()).toEqual({
+				status: "unknown",
+				detail: "tmux is not available",
+			});
+		});
+
+		it("keeps list failures unknown", () => {
+			mockCommandExists.mockReturnValue(true);
+			mockExecFile.mockImplementation(() => {
+				throw new Error("server unavailable");
+			});
+			expect(tmux.observeSessions()).toEqual({
+				status: "unknown",
+				detail: "server unavailable",
+			});
+		});
+
+		it("returns only successfully observed session names", () => {
+			mockCommandExists.mockReturnValue(true);
+			mockExecFile.mockReturnValue("agent-space-a\nagent-space-b\n");
+			expect(tmux.observeSessions()).toEqual({
+				status: "known",
+				sessions: ["agent-space-a", "agent-space-b"],
+			});
+		});
+
+		it("distinguishes a successful empty listing from a failed observation", () => {
+			mockCommandExists.mockReturnValue(true);
+			mockExecFile.mockReturnValue("");
+			expect(tmux.observeSessions()).toEqual({
+				status: "known",
+				sessions: [],
+			});
+		});
+	});
+
 	// -------------------------------------------------------------------
 	// killSession
 	// -------------------------------------------------------------------

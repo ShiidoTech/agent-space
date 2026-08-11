@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { evaluateIntegration } from "../features/integrationEvaluator";
 import {
 	type FeatureGitInspectionInput,
 	FeatureGitInspector,
@@ -262,6 +263,40 @@ describe("FeatureGitInspector against real repositories", () => {
 		});
 	});
 
+	it("executes only local read commands", async () => {
+		const repo = repository();
+		const createdFromSha = commit(repo, "file.txt", "content\n", "initial");
+		git(repo, "switch", "-c", "feature/test");
+		const client = new GitClient();
+		const commands: string[][] = [];
+		const reader: GitReader = {
+			readSync: (argv, options) => client.readSync(argv, options),
+			read: (argv, options) => {
+				commands.push([...argv]);
+				return client.read(argv, options);
+			},
+		};
+
+		await new FeatureGitInspector(reader).inspect(
+			input(repo, { createdFromSha }),
+		);
+		const forbidden = new Set([
+			"add",
+			"branch",
+			"checkout",
+			"commit",
+			"fetch",
+			"merge",
+			"pull",
+			"push",
+			"reset",
+			"switch",
+			"update-ref",
+		]);
+		expect(commands.length).toBeGreaterThan(0);
+		expect(commands.some(([command]) => forbidden.has(command))).toBe(false);
+	});
+
 	it("exposes canonical old and new paths for a real rename", async () => {
 		const repo = repository();
 		commit(repo, "old.ts", "const value = 1;\n", "initial");
@@ -278,6 +313,66 @@ describe("FeatureGitInspector against real repositories", () => {
 				newPath: "new.ts",
 			}),
 		]);
+	});
+
+	it("shares project-wide worktree facts across feature inspections", async () => {
+		const repo = repository();
+		commit(repo, "base.txt", "base\n", "base");
+		const featurePath = mkdtempSync(
+			path.join(tmpdir(), "agent-space-feature-"),
+		);
+		rmSync(featurePath, { recursive: true });
+		temporaryDirectories.push(featurePath);
+		git(repo, "worktree", "add", featurePath, "-b", "feature/test");
+		const inspector = new FeatureGitInspector();
+		const project = await inspector.observeProject(repo);
+		const readerCommands: string[][] = [];
+		const client = new GitClient();
+		const reader: GitReader = {
+			readSync: (argv, options) => client.readSync(argv, options),
+			read: (argv, options) => {
+				readerCommands.push([...argv]);
+				return client.read(argv, options);
+			},
+		};
+		const sharedInspector = new FeatureGitInspector(reader);
+		await sharedInspector.inspect(
+			input(repo, { worktreePath: featurePath }),
+			project,
+		);
+		await sharedInspector.inspect(
+			input(repo, { worktreePath: featurePath }),
+			project,
+		);
+		expect(
+			readerCommands.filter(
+				([command, subcommand]) =>
+					command === "worktree" && subcommand === "list",
+			),
+		).toHaveLength(0);
+	});
+
+	it("does not prove integration when feature and base only meet after base advancement", async () => {
+		const repo = repository();
+		const createdFromSha = commit(repo, "base.txt", "A\n", "A");
+		const featurePath = mkdtempSync(
+			path.join(tmpdir(), "agent-space-feature-"),
+		);
+		rmSync(featurePath, { recursive: true });
+		temporaryDirectories.push(featurePath);
+		git(repo, "worktree", "add", featurePath, "-b", "feature/test");
+		commit(repo, "base.txt", "B\n", "B");
+		git(featurePath, "reset", "--hard", "main");
+
+		const observation = await inspect(repo, {
+			worktreePath: featurePath,
+			createdFromSha,
+		});
+		expect(value(observation.feature).sha).toBe(value(observation.base).sha);
+		expect(evaluateIntegration(observation, createdFromSha)).toMatchObject({
+			status: "unknown",
+			reason: "ancestry_unknown",
+		});
 	});
 
 	it("reports a missing worktree and unknown base explicitly", async () => {
@@ -357,12 +452,20 @@ describe("FeatureGitInspector against real repositories", () => {
 		expect(value(proven.featureInBase)).toMatchObject({
 			isAncestor: true,
 		});
+		expect(evaluateIntegration(proven, createdFromSha)).toMatchObject({
+			status: "known",
+			outcome: "integrated_by_ancestry",
+		});
 
 		const impossible = await inspect(repo);
 		expect(value(impossible.featureInBase)).toMatchObject({
 			isAncestor: true,
 		});
 		expect(JSON.stringify(impossible)).not.toContain('"kind":"integrated"');
+		expect(evaluateIntegration(impossible)).toMatchObject({
+			status: "unknown",
+			reason: "creation_point_unknown",
+		});
 		expect(existsSync(path.join(repo, ".git", "FETCH_HEAD"))).toBe(false);
 	});
 });

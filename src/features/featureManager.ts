@@ -4,25 +4,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { TERMINAL_COLOR_KEYS } from "../constants/colors";
-import {
-	type FeatureGitInspectionInput,
-	FeatureGitInspector,
-} from "../git/featureGitInspector";
-import type { FeatureGitObservations } from "../git/featureGitObservations";
 import { checkWorktreeDeletionSafety } from "../git/worktreeSafety";
 import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
-import type {
-	Feature,
-	FeatureStatus,
-	GitAwareStatus,
-	IsolationMode,
-} from "../types";
+import type { Feature, FeatureStatus, IsolationMode } from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
-import {
-	computeGitStatus,
-	gitStatusFromObservations,
-} from "./featureGitStatus";
 import { normalizeFeatureName } from "./featureName";
 
 const execFileAsync = promisify(execFile);
@@ -57,7 +43,6 @@ export class FeatureManager {
 		private readonly repoRoot: string,
 		private readonly worktreeBase: string,
 		private config: ProjectConfig = {},
-		private readonly featureGitInspector: FeatureGitInspector = new FeatureGitInspector(),
 	) {
 		this.features = store.loadFeatures();
 	}
@@ -506,40 +491,6 @@ export class FeatureManager {
 		if (!feature) return;
 		feature.isolation = isolation;
 		this.store.saveFeatures(this.features);
-	}
-
-	getFeatureGitStatus(feature: Feature): GitAwareStatus {
-		this.reconcileFeatureBranch(feature);
-		return computeGitStatus({
-			featureBranch: feature.branch,
-			baseBranch: this.getBaseBranch(),
-			worktreePath: feature.worktreePath,
-			repoRoot: this.repoRoot,
-			...(feature.createdFromSha
-				? { createdFromSha: feature.createdFromSha }
-				: {}),
-		});
-	}
-
-	async getFeatureGitStatusAsync(feature: Feature): Promise<GitAwareStatus> {
-		this.reconcileFeatureBranch(feature);
-		const observations = await this.getFeatureGitObservationsAsync(feature);
-		return gitStatusFromObservations(observations, feature.createdFromSha);
-	}
-
-	getFeatureGitObservationsAsync(
-		feature: Feature,
-	): Promise<FeatureGitObservations> {
-		const input: FeatureGitInspectionInput = {
-			repoRoot: this.repoRoot,
-			worktreePath: feature.worktreePath,
-			featureBranch: feature.branch,
-			baseRef: this.getBaseBranch(),
-			...(feature.createdFromSha
-				? { createdFromSha: feature.createdFromSha }
-				: {}),
-		};
-		return this.featureGitInspector.inspect(input);
 	}
 
 	private pickColor(name: string): string {

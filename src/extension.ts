@@ -14,6 +14,7 @@ import {
 import { runBootstrapCommands } from "./features/bootstrapRunner";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
+import { FeatureStateCoordinator } from "./features/featureStateCoordinator";
 import {
 	buildGitHubCompareUrl,
 	buildGitHubPullRequestBaseMetadata,
@@ -114,6 +115,7 @@ export async function activate(
 		tmux,
 		toolRegistry,
 	);
+	const featureStateCoordinator = new FeatureStateCoordinator(projectManager);
 	const gitViewHandoffAction = getGitViewHandoffAction(
 		globalStore.getPreference(PENDING_GIT_VIEW_HANDOFF_PREF),
 		vscode.workspace.workspaceFolders,
@@ -141,6 +143,7 @@ export async function activate(
 	context.subscriptions.push(storageWatcher);
 
 	await ensureDefaultToolConfigured(toolRegistry, globalStore);
+	await featureStateCoordinator.reconcile();
 
 	const defaultToolId = toolRegistry.getDefaultToolId();
 	const availableTools = toolRegistry.getAvailableTools();
@@ -169,6 +172,7 @@ export async function activate(
 
 	const sidebarProvider = new FeatureSidebarProvider(
 		projectManager,
+		featureStateCoordinator,
 		toolRegistry,
 		prerequisites,
 		context.extensionUri,
@@ -180,11 +184,12 @@ export async function activate(
 			sidebarProvider,
 		),
 	);
-	context.subscriptions.push({ dispose: () => sidebarProvider.stopPolling() });
+	context.subscriptions.push({ dispose: () => sidebarProvider.dispose() });
 
 	const ensureHomePanel = () => {
 		const panel = HomePanel.createOrShow(
 			projectManager,
+			featureStateCoordinator,
 			tmux,
 			toolRegistry,
 			context.extensionUri,
@@ -219,6 +224,7 @@ export async function activate(
 		const panel = HomePanel.createOrShowFeature(
 			featureId,
 			projectManager,
+			featureStateCoordinator,
 			tmux,
 			toolRegistry,
 			context.extensionUri,
@@ -254,7 +260,7 @@ export async function activate(
 			activeFeatureId = featureId;
 			const resolved = projectManager.resolveFeature(featureId);
 			if (!resolved) return;
-			const { ctx, feature } = resolved;
+			const { ctx } = resolved;
 
 			const agents = ctx.agentManager.getAgents(featureId);
 			if (agents.length === 0) {
@@ -484,10 +490,25 @@ export async function activate(
 		),
 	);
 
+	let featureRefreshQueued = false;
+	context.subscriptions.push(
+		featureStateCoordinator.onDidChange(() => {
+			if (featureRefreshQueued) return;
+			featureRefreshQueued = true;
+			queueMicrotask(() => {
+				featureRefreshQueued = false;
+				sidebarProvider.refreshState();
+				HomePanel.refreshAll();
+			});
+		}),
+	);
 	projectManager.onChange(() => {
-		sidebarProvider.refreshState();
+		featureStateCoordinator.invalidate();
+		sidebarProvider.refresh();
 		HomePanel.refreshAll();
 	});
+	featureStateCoordinator.start();
+	context.subscriptions.push(featureStateCoordinator);
 
 	// Command: Open Home
 	context.subscriptions.push(
@@ -656,7 +677,9 @@ export async function activate(
 						ctx.config,
 					);
 					let launchInitialAgent = false;
-					let initialAgent: ReturnType<typeof ctx.agentManager.createAgent> | undefined;
+					let initialAgent:
+						| ReturnType<typeof ctx.agentManager.createAgent>
+						| undefined;
 					if (initialTool) {
 						const launchNow = await vscode.window.showQuickPick(
 							[
@@ -678,8 +701,15 @@ export async function activate(
 						);
 						launchInitialAgent = launchNow?.value === true;
 						if (launchInitialAgent) {
-							initialAgent = ctx.agentManager.createAgent(feature, initialTool.id);
-							ctx.agentManager.beginAgentStartup(initialAgent.id, feature.id, true);
+							initialAgent = ctx.agentManager.createAgent(
+								feature,
+								initialTool.id,
+							);
+							ctx.agentManager.beginAgentStartup(
+								initialAgent.id,
+								feature.id,
+								true,
+							);
 							projectManager.notifyChange();
 						}
 					} else {
@@ -687,14 +717,24 @@ export async function activate(
 							"Feature created, but no coding tools are available. Add an agent later with 'Add Agent'.",
 						);
 					}
-					void provisioning.then(() => {
-						if (launchInitialAgent && initialAgent) {
-							const agents = ctx.agentManager.getAgents(feature.id);
-							terminalController.createTerminal(feature, initialAgent, agents.length - 1);
-						}
-						sidebarProvider.refresh();
-						HomePanel.refreshAll();
-					}).catch((error) => vscode.window.showErrorMessage(`Feature setup failed: ${error instanceof Error ? error.message : String(error)}`));
+					void provisioning
+						.then(() => {
+							if (launchInitialAgent && initialAgent) {
+								const agents = ctx.agentManager.getAgents(feature.id);
+								terminalController.createTerminal(
+									feature,
+									initialAgent,
+									agents.length - 1,
+								);
+							}
+							sidebarProvider.refresh();
+							HomePanel.refreshAll();
+						})
+						.catch((error) =>
+							vscode.window.showErrorMessage(
+								`Feature setup failed: ${error instanceof Error ? error.message : String(error)}`,
+							),
+						);
 				} catch (err) {
 					const msg =
 						err instanceof Error ? err.message : "Failed to create feature";
@@ -797,10 +837,14 @@ export async function activate(
 							terminalController.createTerminal(feature, agent, agents.length);
 						} catch (err) {
 							const message =
-								err instanceof Error ? err.message : "Failed to create agent terminal";
+								err instanceof Error
+									? err.message
+									: "Failed to create agent terminal";
 							ctx.agentManager.recordAgentFailure(agent.id, featureId, message);
 							projectManager.notifyChange();
-							void vscode.window.showErrorMessage(`Add agent failed: ${message}`);
+							void vscode.window.showErrorMessage(
+								`Add agent failed: ${message}`,
+							);
 						}
 					}, 0);
 				} catch (err) {
