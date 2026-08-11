@@ -202,6 +202,36 @@ describe("FeatureStateCoordinator", () => {
 		coordinator.dispose();
 	});
 
+	it("starts and stops polling as sidebar and Home consumers become visible", async () => {
+		vi.useFakeTimers();
+		const fixture = setup();
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		coordinator.start(undefined, 15_000);
+		await coordinator.reconcile();
+		const initialCalls = fixture.inspect.mock.calls.length;
+
+		const sidebar = coordinator.acquireConsumer(15_000);
+		const home = coordinator.acquireConsumer(15_000);
+		await vi.advanceTimersByTimeAsync(15_000);
+		const visibleCalls = fixture.inspect.mock.calls.length;
+		expect(visibleCalls).toBeGreaterThan(initialCalls);
+
+		sidebar.dispose();
+		await vi.advanceTimersByTimeAsync(15_000);
+		expect(fixture.inspect.mock.calls.length).toBeGreaterThan(visibleCalls);
+
+		home.dispose();
+		const hiddenCalls = fixture.inspect.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(fixture.inspect.mock.calls.length).toBe(hiddenCalls);
+
+		const sidebarVisibleAgain = coordinator.acquireConsumer(15_000);
+		await vi.advanceTimersByTimeAsync(15_000);
+		expect(fixture.inspect.mock.calls.length).toBeGreaterThan(hiddenCalls);
+		sidebarVisibleAgain.dispose();
+		coordinator.dispose();
+	});
+
 	it("notifies only changes, removes deleted entries, and tolerates recreated contexts", async () => {
 		const fixture = setup();
 		const coordinator = new FeatureStateCoordinator(fixture.manager);

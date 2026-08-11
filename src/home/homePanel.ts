@@ -35,7 +35,7 @@ export class HomePanel {
 		| ((state: { active: boolean; visible: boolean }) => void)
 		| undefined;
 	private disposables: vscode.Disposable[] = [];
-	private readonly coordinatorConsumer: { dispose: () => void };
+	private coordinatorConsumer?: { dispose: () => void };
 
 	public static createOrShow(
 		projectManager: ProjectManager,
@@ -149,11 +149,12 @@ export class HomePanel {
 		this.extensionUri = extensionUri;
 		this.globalStore = globalStore;
 		this.terminalController = terminalController;
-		this.coordinatorConsumer = featureStateCoordinator.acquireConsumer();
+		this.setConsumerVisible(panel.visible);
 
 		this.setupMessageHandler();
 		this.panel.onDidChangeViewState(
 			({ webviewPanel }) => {
+				this.setConsumerVisible(webviewPanel.visible);
 				this.onViewStateChangeCallback?.({
 					active: webviewPanel.active,
 					visible: webviewPanel.visible,
@@ -163,6 +164,16 @@ export class HomePanel {
 			this.disposables,
 		);
 		this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+	}
+
+	private setConsumerVisible(visible: boolean): void {
+		if (visible) {
+			this.coordinatorConsumer ??=
+				this.featureStateCoordinator.acquireConsumer();
+			return;
+		}
+		this.coordinatorConsumer?.dispose();
+		this.coordinatorConsumer = undefined;
 	}
 
 	public setTerminalController(controller: TerminalController): void {
@@ -245,7 +256,8 @@ export class HomePanel {
 		for (const d of this.disposables) {
 			d.dispose();
 		}
-		this.coordinatorConsumer.dispose();
+		this.coordinatorConsumer?.dispose();
+		this.coordinatorConsumer = undefined;
 		this.panel.dispose();
 	}
 

@@ -51,7 +51,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this._view = webviewView;
-		this.consumer ??= this.featureStateCoordinator.acquireConsumer();
+		this.setConsumerVisible(webviewView.visible);
 		webviewView.webview.options = {
 			enableScripts: true,
 			localResourceRoots: [
@@ -62,7 +62,10 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 		webviewView.onDidChangeVisibility(() => {
 			if (webviewView.visible) {
+				this.setConsumerVisible(true);
 				this.refreshState();
+			} else {
+				this.setConsumerVisible(false);
 			}
 			this._onVisibilityChange?.(webviewView.visible);
 		});
@@ -147,6 +150,15 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					break;
 			}
 		});
+	}
+
+	private setConsumerVisible(visible: boolean): void {
+		if (visible) {
+			this.consumer ??= this.featureStateCoordinator.acquireConsumer();
+			return;
+		}
+		this.consumer?.dispose();
+		this.consumer = undefined;
 	}
 
 	/** Full HTML rebuild — used for initial load and structural changes (feature create/delete). */

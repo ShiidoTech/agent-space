@@ -184,6 +184,7 @@ export async function activate(
 			sidebarProvider,
 		),
 	);
+	context.subscriptions.push({ dispose: () => sidebarProvider.dispose() });
 
 	const ensureHomePanel = () => {
 		const panel = HomePanel.createOrShow(
