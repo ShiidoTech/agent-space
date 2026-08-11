@@ -1,5 +1,16 @@
 import type { Disposable } from "vscode";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
+import type { FeatureGitObservations } from "../git/featureGitObservations";
+import {
+	type GitHubObservation,
+	githubObservationFromRepository,
+} from "../github/githubObservation";
+import { GitHubObservationService } from "../github/githubObservationService";
+import {
+	HttpGitHubBackend,
+	type PullRequestBackend,
+} from "../github/pullRequestBackend";
+import { PullRequestInspector } from "../github/pullRequestInspector";
 import type {
 	ProjectContext,
 	ProjectManager,
@@ -11,7 +22,10 @@ import {
 	type FeatureSnapshot,
 	type FeatureSnapshotSource,
 } from "./featureSnapshot";
-import { evaluateIntegration } from "./integrationEvaluator";
+import {
+	evaluateIntegration,
+	type MergedHeadGitEvidence,
+} from "./integrationEvaluator";
 import {
 	knownRuntime,
 	observeFeatureRuntime,
@@ -20,6 +34,13 @@ import {
 } from "./runtimeObservation";
 
 const RECONCILE_INTERVAL_MS = 15_000;
+
+export interface FeatureStateCoordinatorOptions {
+	/** Injectable GitHub transport factory (per repository). */
+	readonly createGithubBackend?: (repoRoot: string) => PullRequestBackend;
+	readonly githubTtlMs?: number;
+	readonly githubRepositoryFactTtlMs?: number;
+}
 
 export class FeatureStateCoordinator implements Disposable {
 	private projectManager?: ProjectManager;
@@ -33,8 +54,12 @@ export class FeatureStateCoordinator implements Disposable {
 	private disposed = false;
 	private generation = 0;
 	private consumers = 0;
+	private githubServices = new Map<string, GitHubObservationService>();
 
-	constructor(projectManager?: ProjectManager) {
+	constructor(
+		projectManager?: ProjectManager,
+		private readonly options: FeatureStateCoordinatorOptions = {},
+	) {
 		this.projectManager = projectManager;
 	}
 
@@ -75,6 +100,8 @@ export class FeatureStateCoordinator implements Disposable {
 		this.disposed = true;
 		this.stop();
 		this.projectManager = undefined;
+		for (const service of this.githubServices.values()) service.dispose();
+		this.githubServices.clear();
 		this.listeners.clear();
 		this.snapshots.clear();
 	}
@@ -93,6 +120,7 @@ export class FeatureStateCoordinator implements Disposable {
 		if (this.disposed) return;
 		this.generation += 1;
 		if (featureId) this.snapshots.delete(featureId);
+		for (const service of this.githubServices.values()) service.invalidate();
 		if (this.inFlight) {
 			this.reconcileAfterFlight = true;
 			return;
@@ -237,9 +265,27 @@ export class FeatureStateCoordinator implements Disposable {
 				(service) => service.tmuxSession,
 			),
 		});
-		const integration = evaluateIntegration(git, feature.createdFromSha);
+		const github = await this.observeGithub(ctx, git, feature.branch, baseRef);
+		const mergedHead =
+			github.status === "known" &&
+			github.resolution.outcome === "selected" &&
+			github.resolution.pull.state === "merged" &&
+			git.feature.status === "known"
+				? await observeMergedHead(
+						ctx,
+						github.resolution.pull.headSha,
+						git.feature.value.sha,
+					)
+				: undefined;
+		const integration = evaluateIntegration({
+			git,
+			github,
+			createdFromSha: feature.createdFromSha,
+			mergedHead,
+		});
 		const attention = evaluateAttention({
 			git,
+			github,
 			integration,
 			runtime,
 			source,
@@ -250,12 +296,54 @@ export class FeatureStateCoordinator implements Disposable {
 			projectId: ctx.project.id,
 			feature,
 			git,
+			github,
 			integration,
 			runtime,
 			source,
 			attention,
 			observedAt: new Date().toISOString(),
 		});
+	}
+
+	private async observeGithub(
+		ctx: ProjectContext,
+		git: FeatureGitObservations,
+		branch: string,
+		baseRef: string | undefined,
+	): Promise<GitHubObservation> {
+		try {
+			const service = this.githubServiceFor(ctx);
+			return await service.observe({
+				repoRoot: ctx.project.repoPath,
+				branch,
+				queriedHeadSha:
+					git.feature.status === "known" ? git.feature.value.sha : undefined,
+				expectedBaseRef: baseRef,
+			});
+		} catch {
+			return unavailableGithub(ctx.project.repoPath);
+		}
+	}
+
+	private githubServiceFor(ctx: ProjectContext): GitHubObservationService {
+		let service = this.githubServices.get(ctx.project.repoPath);
+		if (!service) {
+			const backend = this.options.createGithubBackend
+				? this.options.createGithubBackend(ctx.project.repoPath)
+				: new HttpGitHubBackend();
+			const inspector = new PullRequestInspector(ctx.gitClient, backend);
+			service = new GitHubObservationService({
+				createInspector: () => inspector,
+				...(this.options.githubTtlMs !== undefined
+					? { ttlMs: this.options.githubTtlMs }
+					: {}),
+				...(this.options.githubRepositoryFactTtlMs !== undefined
+					? { repositoryFactTtlMs: this.options.githubRepositoryFactTtlMs }
+					: {}),
+			});
+			this.githubServices.set(ctx.project.repoPath, service);
+		}
+		return service;
 	}
 
 	private configurePolling(intervalMs: number): void {
@@ -360,4 +448,35 @@ function unavailableGit(root: string) {
 		worktrees: value,
 		featureInBase: value,
 	};
+}
+
+async function observeMergedHead(
+	ctx: ProjectContext,
+	mergedHeadSha: string,
+	featureHeadSha: string,
+): Promise<MergedHeadGitEvidence> {
+	const ancestor = await ctx.featureGitInspector.isCommitAncestor(
+		mergedHeadSha,
+		featureHeadSha,
+		ctx.project.repoPath,
+	);
+	const commitsAfter = await ctx.featureGitInspector.countCommitsAfter(
+		mergedHeadSha,
+		featureHeadSha,
+		ctx.project.repoPath,
+	);
+	return {
+		mergedHeadSha,
+		relation: ancestor,
+		commitsAfter,
+	};
+}
+
+function unavailableGithub(root: string): GitHubObservation {
+	return githubObservationFromRepository({
+		status: "unavailable",
+		reason: "no_remotes",
+		observedRemotes: [],
+		detail: `No GitHub remote resolved for ${root}.`,
+	});
 }

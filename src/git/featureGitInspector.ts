@@ -319,6 +319,60 @@ export class FeatureGitInspector {
 		);
 	}
 
+	/**
+	 * Read-only proof that one SHA is an ancestor of another in the local
+	 * commit graph. Used to relate a merged PR head to the current feature
+	 * head without ever fetching.
+	 */
+	async isCommitAncestor(
+		ancestorSha: string,
+		descendantSha: string,
+		repoRoot: string,
+	): Promise<GitObservation<AncestryObservation>> {
+		const ancestor = await this.resolveCommit(ancestorSha, repoRoot, "base");
+		const descendant = await this.resolveCommit(
+			descendantSha,
+			repoRoot,
+			"feature",
+		);
+		return this.observeAncestry(ancestor, descendant, repoRoot);
+	}
+
+	/**
+	 * Read-only count of commits reachable from `descendantSha` but not from
+	 * `ancestorSha`, i.e. the amount of work after a known merged head.
+	 */
+	async countCommitsAfter(
+		ancestorSha: string,
+		descendantSha: string,
+		repoRoot: string,
+	): Promise<
+		GitObservation<{
+			readonly ancestorSha: string;
+			readonly descendantSha: string;
+			readonly count: number;
+		}>
+	> {
+		const result = await this.git.read(
+			["rev-list", "--count", `${ancestorSha}..${descendantSha}`],
+			{ cwd: repoRoot },
+		);
+		if (!successful(result)) {
+			return unknown("git_command_failed", message(result), {
+				ancestorSha,
+				descendantSha,
+			});
+		}
+		const count = Number(result.stdout.trim());
+		if (!Number.isSafeInteger(count) || count < 0) {
+			return unknown("git_command_failed", "Invalid rev-list count output", {
+				ancestorSha,
+				descendantSha,
+			});
+		}
+		return known({ ancestorSha, descendantSha, count });
+	}
+
 	private async observeUpstream(
 		branch: string,
 		cwd: string,

@@ -4,10 +4,23 @@ import {
 	featureSnapshotGitStatus,
 } from "../features/featureSnapshot";
 import { known } from "../git/featureGitObservations";
+import type { GitHubObservation } from "../github/githubObservation";
 
 const CREATED = "1".repeat(40);
 const FEATURE = "2".repeat(40);
 const BASE = "3".repeat(40);
+
+const github: GitHubObservation = {
+	provider: "github",
+	status: "unavailable",
+	reason: "repository_unknown",
+	repository: {
+		status: "unavailable",
+		reason: "no_remotes",
+		observedRemotes: [],
+	},
+	observedAt: "2026-08-10T00:00:00.000Z",
+};
 
 function snapshot(
 	mutate?: (value: FeatureSnapshot) => FeatureSnapshot,
@@ -78,9 +91,10 @@ function snapshot(
 		},
 		integration: {
 			status: "known",
-			outcome: "not_integrated_by_ancestry",
+			outcome: "not_integrated",
 			evidence: { feature, base },
 		},
+		github,
 		runtime: {
 			agents: { status: "known", value: [] },
 			services: { status: "known", value: [] },
@@ -120,59 +134,63 @@ describe("featureSnapshotGitStatus", () => {
 		).toBe("merged");
 	});
 
-	it.each(["staged", "unstaged", "untracked", "conflicted"] as const)(
-		"keeps %s working-tree evidence distinct and visible",
-		(kind) => {
-			const value = snapshot((current) => ({
-				...current,
-				git: {
-					...current.git,
-					workingTree: known({
-						staged: kind === "staged" ? ["file"] : [],
-						unstaged: kind === "unstaged" ? ["file"] : [],
-						untracked: kind === "untracked" ? ["file"] : [],
-						conflicted: kind === "conflicted" ? ["file"] : [],
-					}),
-				},
-			}));
-			expect(featureSnapshotGitStatus(value)).toBe("modified");
-		},
-	);
+	it.each([
+		"staged",
+		"unstaged",
+		"untracked",
+		"conflicted",
+	] as const)("keeps %s working-tree evidence distinct and visible", (kind) => {
+		const value = snapshot((current) => ({
+			...current,
+			git: {
+				...current.git,
+				workingTree: known({
+					staged: kind === "staged" ? ["file"] : [],
+					unstaged: kind === "unstaged" ? ["file"] : [],
+					untracked: kind === "untracked" ? ["file"] : [],
+					conflicted: kind === "conflicted" ? ["file"] : [],
+				}),
+			},
+		}));
+		expect(featureSnapshotGitStatus(value)).toBe("modified");
+	});
 
-	it.each(["missing", "mismatch", "detached", "head_mismatch"] as const)(
-		"keeps %s identity evidence unknown instead of reporting merged",
-		(kind) => {
-			const value = snapshot((current) => ({
-				...current,
-				git: {
-					...current.git,
-					worktree:
-						kind === "missing"
-							? known({ path: current.feature.worktreePath, present: false })
-							: current.git.worktree,
-					branch:
-						kind === "mismatch" || kind === "detached"
-							? known({
-									expected: current.feature.branch,
-									actual: kind === "detached" ? null : "other",
-									detached: kind === "detached",
-									matchesExpected: false,
-								})
-							: current.git.branch,
-					head:
-						kind === "head_mismatch"
-							? known({ ref: "HEAD", sha: "9".repeat(40) })
-							: current.git.head,
-				},
-				integration: {
-					status: "known",
-					outcome: "integrated_by_ancestry",
-					evidence: {},
-				},
-			}));
-			expect(featureSnapshotGitStatus(value)).toBe("unknown");
-		},
-	);
+	it.each([
+		"missing",
+		"mismatch",
+		"detached",
+		"head_mismatch",
+	] as const)("keeps %s identity evidence unknown instead of reporting merged", (kind) => {
+		const value = snapshot((current) => ({
+			...current,
+			git: {
+				...current.git,
+				worktree:
+					kind === "missing"
+						? known({ path: current.feature.worktreePath, present: false })
+						: current.git.worktree,
+				branch:
+					kind === "mismatch" || kind === "detached"
+						? known({
+								expected: current.feature.branch,
+								actual: kind === "detached" ? null : "other",
+								detached: kind === "detached",
+								matchesExpected: false,
+							})
+						: current.git.branch,
+				head:
+					kind === "head_mismatch"
+						? known({ ref: "HEAD", sha: "9".repeat(40) })
+						: current.git.head,
+			},
+			integration: {
+				status: "known",
+				outcome: "integrated_by_ancestry",
+				evidence: {},
+			},
+		}));
+		expect(featureSnapshotGitStatus(value)).toBe("unknown");
+	});
 
 	it("keeps an unprovable integration unknown", () => {
 		const value = snapshot((current) => ({

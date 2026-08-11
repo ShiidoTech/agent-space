@@ -1,4 +1,5 @@
 import type { FeatureGitObservations } from "../git/featureGitObservations";
+import type { GitHubObservation } from "../github/githubObservation";
 import type { IntegrationEvaluation } from "./integrationEvaluator";
 import type { FeatureRuntimeObservation } from "./runtimeObservation";
 
@@ -14,6 +15,7 @@ export interface AttentionProblem {
 
 export interface AttentionEvaluationInput {
 	readonly git: FeatureGitObservations;
+	readonly github?: GitHubObservation;
 	readonly integration: IntegrationEvaluation;
 	readonly runtime: FeatureRuntimeObservation;
 	readonly source?: {
@@ -182,6 +184,106 @@ export function evaluateAttention(
 		);
 	}
 
+	// GitHub pull-request problems. "GitHub not configured" is a normal,
+	// informational condition — never a permanent red error the user cannot act
+	// on. Severity follows how concretely the user can fix the state.
+	if (!input.isBaseFeature && input.github) {
+		const github = input.github;
+		const integrationOutcome =
+			input.integration.status === "known"
+				? input.integration.outcome
+				: undefined;
+
+		if (
+			github.status === "unavailable" ||
+			github.status === "error" ||
+			(github.status === "unknown" &&
+				github.reason !== "ambiguous_pull_requests")
+		) {
+			problems.push(
+				problem(
+					"pull_request_observation_unavailable",
+					"info",
+					"Pull request state unavailable",
+					detailFor(github) ??
+						"GitHub pull request evidence is unavailable; integration may not be fully verified.",
+					githubStatusEvidence(github),
+				),
+			);
+		}
+
+		if (github.status === "known" && github.resolution.outcome === "selected") {
+			const pull = github.resolution.pull;
+			const expectedBaseRef = github.expectedBaseRef;
+			if (expectedBaseRef !== undefined && pull.baseRef !== expectedBaseRef) {
+				problems.push(
+					problem(
+						"pull_request_base_mismatch",
+						"warning",
+						"Pull request targets a different base branch",
+						`PR #${pull.number} targets "${pull.baseRef}", but Agent Space's base is "${expectedBaseRef}". The PR does not integrate towards the expected target.`,
+						{
+							number: pull.number,
+							prBase: pull.baseRef,
+							agentSpaceBase: expectedBaseRef,
+						},
+					),
+				);
+			}
+			if (
+				pull.state === "open" &&
+				input.git.feature.status === "known" &&
+				pull.headSha.toLowerCase() !== input.git.feature.value.sha.toLowerCase()
+			) {
+				problems.push(
+					problem(
+						"pull_request_head_mismatch",
+						"info",
+						"Local head differs from PR head",
+						`PR #${pull.number} is at @${pull.headSha.slice(0, 12)}, while the local feature head is @${input.git.feature.value.sha.slice(0, 12)}.`,
+						{
+							number: pull.number,
+							prHeadSha: pull.headSha,
+							localHeadSha: input.git.feature.value.sha,
+						},
+					),
+				);
+			}
+		}
+
+		if (
+			github.status === "unknown" &&
+			github.reason === "ambiguous_pull_requests"
+		) {
+			problems.push(
+				problem(
+					"pull_request_ambiguous",
+					"warning",
+					"Multiple pull request candidates",
+					"Several pull requests match this feature and none was selected automatically.",
+					{
+						numbers: github.pulls?.map((pull) => pull.number) ?? [],
+					},
+				),
+			);
+		}
+
+		if (integrationOutcome === "new_work_after_integration") {
+			const githubEvidence = input.integration.evidence.github;
+			problems.push(
+				problem(
+					"new_work_after_integration",
+					"info",
+					"New work after integration",
+					"The feature branch contains commits that were created after its pull request was merged.",
+					{
+						commitsAfterIntegration: githubEvidence?.commitsAfterIntegration,
+					},
+				),
+			);
+		}
+	}
+
 	if (runtime.agents.status === "unknown") {
 		problems.push(
 			problem(
@@ -288,6 +390,32 @@ function problem(
 	evidence: Readonly<Record<string, unknown>>,
 ): AttentionProblem {
 	return { code, severity, summary, detail, evidence };
+}
+
+function detailFor(observation: GitHubObservation): string | undefined {
+	if (observation.status === "error") return observation.detail;
+	if (observation.status === "unavailable") return observation.detail;
+	if (observation.status === "unknown") return observation.detail;
+	return undefined;
+}
+
+function githubStatusEvidence(
+	observation: GitHubObservation,
+): Readonly<Record<string, unknown>> {
+	switch (observation.status) {
+		case "known":
+			return { status: observation.status };
+		case "unavailable":
+			return { status: observation.status, reason: observation.reason };
+		case "unknown":
+			return { status: observation.status, reason: observation.reason };
+		case "error":
+			return {
+				status: observation.status,
+				reason: observation.reason,
+				detail: observation.detail,
+			};
+	}
 }
 
 export class AttentionEvaluator {
