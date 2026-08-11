@@ -360,12 +360,47 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);
-		this.terminalController.focusOrCreateTerminal(
-			feature,
-			agent,
-			agentIndex,
-			true,
-		);
+
+		// Strict fast path: an already-tracked terminal is revealed with no
+		// shell/process call of any kind before terminal.show(). This is the
+		// hot path for switching between already-running agents.
+		const existing = this.terminalController.getTerminal(agentId);
+		if (existing) {
+			existing.show();
+			this.postAgentFocusState(agentId, "focused");
+			return;
+		}
+
+		// Cold path: the VS Code terminal isn't tracked yet (e.g. right after
+		// a window reload). Surface an immediate "opening" state and let
+		// tmux/session reconciliation run asynchronously — it must never run
+		// synchronously on this interactive click path.
+		this.postAgentFocusState(agentId, "opening");
+		void this.terminalController
+			.focusOrCreateTerminalAsync(feature, agent, agentIndex, true)
+			.then((terminal) => {
+				this.postAgentFocusState(agentId, terminal ? "focused" : "failed");
+				this.refreshState();
+			})
+			.catch((error) => {
+				console.warn(
+					`[FeatureSidebarProvider] focusAgent reconciliation failed: ${error}`,
+				);
+				this.postAgentFocusState(agentId, "failed");
+				this.refreshState();
+			});
+	}
+
+	/** Best-effort UI hint for the sidebar's optimistic click feedback. */
+	private postAgentFocusState(
+		agentId: string,
+		state: "opening" | "focused" | "failed",
+	): void {
+		void this._view?.webview.postMessage({
+			type: "agentFocusState",
+			agentId,
+			state,
+		});
 	}
 
 	private handleFocusService(featureId: string, serviceId: string): void {

@@ -266,6 +266,50 @@ export function execAsync(
 	return getExecPromise()(cmd, mergedOpts);
 }
 
+type ExecFileAsyncFn = (
+	file: string,
+	args: readonly string[],
+	opts?: Record<string, unknown>,
+) => Promise<{ stdout: string; stderr: string }>;
+let _execFileAsync: ExecFileAsyncFn | undefined;
+
+function getExecFileAsync(): ExecFileAsyncFn {
+	if (!_execFileAsync) {
+		// Lazy init to avoid breaking test mocks that don't include exec
+		const { execFile: cpExecFile } = require("node:child_process");
+		const { promisify } = require("node:util");
+		_execFileAsync = promisify(cpExecFile) as ExecFileAsyncFn;
+	}
+	return _execFileAsync;
+}
+
+/**
+ * Non-blocking twin of {@link execFile}. Spawns the process asynchronously
+ * so the extension host event loop stays free while it waits — this is the
+ * variant reconciliation work must use anywhere it can run off an
+ * interactive click path (see `TerminalController.focusOrCreateTerminalAsync`).
+ */
+export function execFileAsync(
+	file: string,
+	args: readonly string[],
+	opts?: { cwd?: string },
+): Promise<ExecAsyncResult> {
+	const bashPath = isWindows() ? findGitBash() : null;
+	if (bashPath) {
+		return getExecFileAsync()(
+			bashPath,
+			["-lc", 'exec "$0" "$@"', file, ...args],
+			getExecAsyncOptions(opts?.cwd),
+		);
+	}
+
+	return getExecFileAsync()(
+		file,
+		args as string[],
+		getExecAsyncOptions(opts?.cwd),
+	);
+}
+
 export async function execAsyncSilent(
 	cmd: string,
 	opts?: { cwd?: string },

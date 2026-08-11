@@ -15,6 +15,7 @@ const {
 
 vi.mock("../utils/platform", () => ({
 	exec: vi.fn(),
+	execAsync: vi.fn(),
 	getTerminalShellArgs: vi.fn(() => ({
 		shellPath: "tmux",
 		shellArgs: ["attach-session", "-t", "session"],
@@ -45,7 +46,7 @@ vi.mock("vscode", () => ({
 
 import { TerminalController } from "../agents/terminalController";
 import type { Agent, Feature, Service } from "../types";
-import { exec } from "../utils/platform";
+import { exec, execAsync } from "../utils/platform";
 
 describe("TerminalController", () => {
 	const feature: Feature = {
@@ -416,6 +417,187 @@ describe("TerminalController", () => {
 			"agent-space-svc-f1-svc1",
 		);
 		expect(createTerminalMock).toHaveBeenCalled();
+	});
+
+	// -----------------------------------------------------------------------
+	// focusOrCreateTerminal / focusOrCreateTerminalAsync — the interactive
+	// sidebar click path (issue #69). A tracked/warm terminal must resolve
+	// with zero shell/process calls, sync or async. Only cold reattachment
+	// (terminal not tracked) may touch tmux, and it must do so via the async
+	// helpers only, never the synchronous ones.
+	// -----------------------------------------------------------------------
+	describe("focusOrCreateTerminal (warm path)", () => {
+		it("shows an already-tracked terminal with no exec of any kind", () => {
+			const controller = new TerminalController(
+				{ findContextByFeatureId, notifyChange } as never,
+				{
+					sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+					legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+					adoptSession,
+					createCommand,
+					configureSession,
+					isSessionAlive,
+					getPaneStatus,
+				} as never,
+				{
+					resolveAgentTool,
+					buildLaunchCommand,
+					buildResumeLaunchCommand,
+				} as never,
+			);
+
+			// Warm the terminal via a normal (mocked-away) create, then clear
+			// the exec spy so only the focus call itself is under test.
+			controller.createTerminal(feature, agent, 0);
+			vi.mocked(exec).mockClear();
+			vi.mocked(execAsync).mockClear();
+			adoptSession.mockClear();
+			isSessionAlive.mockClear();
+
+			const terminal = controller.focusOrCreateTerminal(feature, agent, 0);
+
+			expect(terminal).toBe(terminalInstance);
+			expect(terminalInstance.show).toHaveBeenCalled();
+			expect(vi.mocked(exec)).not.toHaveBeenCalled();
+			expect(vi.mocked(execAsync)).not.toHaveBeenCalled();
+			expect(adoptSession).not.toHaveBeenCalled();
+			expect(isSessionAlive).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("focusOrCreateTerminalAsync", () => {
+		it("resolves an already-tracked terminal synchronously in effect, with no exec/tmux call", async () => {
+			const isSessionAliveAsync = vi.fn();
+			const adoptSessionAsync = vi.fn();
+			const controller = new TerminalController(
+				{ findContextByFeatureId, notifyChange } as never,
+				{
+					sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+					legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+					adoptSession,
+					createCommand,
+					configureSession,
+					isSessionAlive,
+					isSessionAliveAsync,
+					adoptSessionAsync,
+					getPaneStatus,
+				} as never,
+				{
+					resolveAgentTool,
+					buildLaunchCommand,
+					buildResumeLaunchCommand,
+				} as never,
+			);
+
+			controller.createTerminal(feature, agent, 0);
+			vi.mocked(exec).mockClear();
+			vi.mocked(execAsync).mockClear();
+			adoptSession.mockClear();
+			isSessionAlive.mockClear();
+
+			const terminal = await controller.focusOrCreateTerminalAsync(
+				feature,
+				agent,
+				0,
+			);
+
+			expect(terminal).toBe(terminalInstance);
+			expect(terminalInstance.show).toHaveBeenCalled();
+			expect(vi.mocked(exec)).not.toHaveBeenCalled();
+			expect(vi.mocked(execAsync)).not.toHaveBeenCalled();
+			expect(adoptSession).not.toHaveBeenCalled();
+			expect(isSessionAlive).not.toHaveBeenCalled();
+			expect(adoptSessionAsync).not.toHaveBeenCalled();
+			expect(isSessionAliveAsync).not.toHaveBeenCalled();
+		});
+
+		it("reattaches a cold agent using only the async tmux helpers, never the sync ones", async () => {
+			const isSessionAliveAsync = vi.fn().mockResolvedValue(true);
+			const adoptSessionAsync = vi.fn().mockResolvedValue(true);
+			const controller = new TerminalController(
+				{ findContextByFeatureId, notifyChange } as never,
+				{
+					sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+					legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+					adoptSession,
+					createCommand,
+					configureSession,
+					isSessionAlive,
+					isSessionAliveAsync,
+					adoptSessionAsync,
+					getPaneStatus,
+				} as never,
+				{
+					resolveAgentTool,
+					buildLaunchCommand,
+					buildResumeLaunchCommand,
+				} as never,
+			);
+
+			const terminal = await controller.focusOrCreateTerminalAsync(
+				feature,
+				agent,
+				0,
+				true,
+			);
+
+			expect(terminal).toBe(terminalInstance);
+			expect(adoptSessionAsync).toHaveBeenCalledWith(
+				"agent-space-f1-a1",
+				"companion-f1-a1",
+			);
+			// The cold path must never fall back to the synchronous discovery
+			// helpers — that is exactly the extension-host-blocking behaviour
+			// issue #69 removes from the interactive click path.
+			expect(adoptSession).not.toHaveBeenCalled();
+			expect(isSessionAlive).not.toHaveBeenCalled();
+			expect(vi.mocked(exec)).not.toHaveBeenCalled();
+			expect(markAgentStarted).not.toHaveBeenCalled();
+			openedTerminalHandler?.(terminalInstance);
+			expect(markAgentStarted).toHaveBeenCalledWith("a1", "f1");
+		});
+
+		it("spawns a fresh session via async exec only when no tmux session can be adopted", async () => {
+			const isSessionAliveAsync = vi.fn().mockResolvedValue(true);
+			const adoptSessionAsync = vi.fn().mockResolvedValue(false);
+			const controller = new TerminalController(
+				{ findContextByFeatureId, notifyChange } as never,
+				{
+					sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+					legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+					adoptSession,
+					createCommand,
+					configureSession,
+					isSessionAlive,
+					isSessionAliveAsync,
+					adoptSessionAsync,
+					getPaneStatus,
+				} as never,
+				{
+					resolveAgentTool,
+					buildLaunchCommand,
+					buildResumeLaunchCommand,
+				} as never,
+			);
+
+			vi.mocked(execAsync).mockResolvedValue({ stdout: "", stderr: "" });
+
+			const terminal = await controller.focusOrCreateTerminalAsync(
+				feature,
+				{ ...agent, hasStarted: false },
+				0,
+				true,
+			);
+
+			expect(terminal).toBe(terminalInstance);
+			expect(vi.mocked(execAsync)).toHaveBeenCalledWith(
+				'tmux new-session -d -s "session" "claude"',
+				{ cwd: feature.worktreePath },
+			);
+			expect(vi.mocked(exec)).not.toHaveBeenCalled();
+			expect(adoptSession).not.toHaveBeenCalled();
+			expect(isSessionAlive).not.toHaveBeenCalled();
+		});
 	});
 
 	it("does not create a terminal when service tmux session fails to start", () => {
