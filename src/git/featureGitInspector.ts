@@ -27,6 +27,11 @@ export interface FeatureGitInspectionInput {
 	readonly createdFromSha?: string;
 }
 
+export interface FeatureGitProjectObservation {
+	readonly repository: GitObservation<{ readonly root: string }>;
+	readonly worktrees: GitObservation<readonly GitWorktreeObservation[]>;
+}
+
 const CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 
 function successful(result: GitReadResult): boolean {
@@ -117,29 +122,46 @@ function completeWorktree(value: {
 export class FeatureGitInspector {
 	constructor(private readonly git: GitReader = defaultGitClient) {}
 
-	async inspect(
-		input: FeatureGitInspectionInput,
-	): Promise<FeatureGitObservations> {
+	async observeProject(
+		repoRoot: string,
+	): Promise<FeatureGitProjectObservation> {
 		const repositoryResult = await this.git.read(
 			["rev-parse", "--show-toplevel"],
-			{ cwd: input.repoRoot },
+			{ cwd: repoRoot },
 		);
-		if (!successful(repositoryResult)) {
-			return this.unavailable(
-				input,
-				"not_a_repository",
-				message(repositoryResult),
-			);
-		}
-
-		const repository = known({ root: repositoryResult.stdout.trim() });
+		const repository = successful(repositoryResult)
+			? known({ root: repositoryResult.stdout.trim() })
+			: unknown("not_a_repository", message(repositoryResult), {
+					root: repoRoot,
+				});
 		const worktreesResult = await this.git.read(
 			["worktree", "list", "--porcelain"],
-			{ cwd: input.repoRoot },
+			{ cwd: repoRoot },
 		);
 		const worktrees = successful(worktreesResult)
 			? known(parseWorktrees(worktreesResult.stdout))
 			: unknown("git_command_failed", message(worktreesResult));
+		return { repository, worktrees };
+	}
+
+	async inspect(
+		input: FeatureGitInspectionInput,
+		projectObservation?: FeatureGitProjectObservation,
+	): Promise<FeatureGitObservations> {
+		const project =
+			projectObservation ?? (await this.observeProject(input.repoRoot));
+		if (project.repository.status === "unknown") {
+			return this.unavailable(
+				input,
+				project.repository.reason === "not_a_repository"
+					? "not_a_repository"
+					: "repository_unavailable",
+				project.repository.message,
+			);
+		}
+
+		const repository = project.repository;
+		const worktrees = project.worktrees;
 		const targetPath = path.resolve(input.worktreePath);
 		const worktree =
 			worktrees.status === "known"

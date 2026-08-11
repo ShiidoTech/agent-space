@@ -1,11 +1,16 @@
 import type { Disposable } from "vscode";
+import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
 import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
 import type { Agent, Feature, Service } from "../types";
 import { evaluateAttention } from "./attentionEvaluator";
-import { createFeatureSnapshot, type FeatureSnapshot } from "./featureSnapshot";
+import {
+	createFeatureSnapshot,
+	type FeatureSnapshot,
+	type FeatureSnapshotSource,
+} from "./featureSnapshot";
 import { evaluateIntegration } from "./integrationEvaluator";
 import {
 	knownRuntime,
@@ -27,6 +32,7 @@ export class FeatureStateCoordinator implements Disposable {
 	private reconcileAfterFlight = false;
 	private disposed = false;
 	private generation = 0;
+	private consumers = 0;
 
 	constructor(projectManager?: ProjectManager) {
 		this.projectManager = projectManager;
@@ -41,14 +47,28 @@ export class FeatureStateCoordinator implements Disposable {
 		if (projectManager) this.projectManager = projectManager;
 		this.stop();
 		void this.reconcile();
-		if (intervalMs <= 0) return;
-		this.timer = setInterval(() => void this.reconcile(), intervalMs);
-		this.timer.unref?.();
+		this.configurePolling(intervalMs);
 	}
 
 	stop(): void {
 		if (this.timer) clearInterval(this.timer);
 		this.timer = undefined;
+	}
+
+	acquireConsumer(intervalMs = RECONCILE_INTERVAL_MS): { dispose: () => void } {
+		if (this.disposed) return { dispose: () => {} };
+		this.consumers += 1;
+		this.configurePolling(intervalMs);
+		void this.reconcile();
+		let released = false;
+		return {
+			dispose: () => {
+				if (released) return;
+				released = true;
+				this.consumers = Math.max(0, this.consumers - 1);
+				if (this.consumers === 0) this.stop();
+			},
+		};
 	}
 
 	dispose(): void {
@@ -117,9 +137,15 @@ export class FeatureStateCoordinator implements Disposable {
 			const baseRef = await observeBaseRef(ctx);
 			const base = createBaseFeature(ctx, baseRef);
 			let features: Feature[];
+			let source: FeatureSnapshotSource = { status: "known" };
 			try {
 				features = [base, ...ctx.store.loadFeatures()];
-			} catch {
+			} catch (error) {
+				source = {
+					status: "unknown",
+					reason: "storage_read_failed",
+					detail: error instanceof Error ? error.message : String(error),
+				};
 				features = [
 					base,
 					...this.getProjectSnapshots(ctx.project.id)
@@ -127,6 +153,9 @@ export class FeatureStateCoordinator implements Disposable {
 						.filter((feature) => feature.id !== base.id),
 				];
 			}
+			const projectObservation = await ctx.featureGitInspector.observeProject(
+				ctx.project.repoPath,
+			);
 
 			const observed = await Promise.all(
 				features.map(async (feature) => ({
@@ -137,6 +166,8 @@ export class FeatureStateCoordinator implements Disposable {
 						feature.id === base.id,
 						baseRef,
 						tmuxSessions,
+						projectObservation,
+						source,
 					),
 				})),
 			);
@@ -168,17 +199,22 @@ export class FeatureStateCoordinator implements Disposable {
 		isBaseFeature: boolean,
 		baseRef: string | undefined,
 		tmuxSessions: RuntimeObservation<readonly string[]>,
+		projectObservation: FeatureGitProjectObservation,
+		source: FeatureSnapshotSource,
 	): Promise<FeatureSnapshot> {
 		const git = await ctx.featureGitInspector
-			.inspect({
-				repoRoot: ctx.project.repoPath,
-				worktreePath: feature.worktreePath,
-				featureBranch: feature.branch,
-				baseRef,
-				...(feature.createdFromSha
-					? { createdFromSha: feature.createdFromSha }
-					: {}),
-			})
+			.inspect(
+				{
+					repoRoot: ctx.project.repoPath,
+					worktreePath: feature.worktreePath,
+					featureBranch: feature.branch,
+					baseRef,
+					...(feature.createdFromSha
+						? { createdFromSha: feature.createdFromSha }
+						: {}),
+				},
+				projectObservation,
+			)
 			.catch(() => unavailableGit(ctx.project.repoPath));
 
 		const [agents, services] = [
@@ -206,6 +242,7 @@ export class FeatureStateCoordinator implements Disposable {
 			git,
 			integration,
 			runtime,
+			source,
 			isBaseFeature,
 		});
 
@@ -215,9 +252,16 @@ export class FeatureStateCoordinator implements Disposable {
 			git,
 			integration,
 			runtime,
+			source,
 			attention,
 			observedAt: new Date().toISOString(),
 		});
+	}
+
+	private configurePolling(intervalMs: number): void {
+		if (this.consumers === 0 || intervalMs <= 0 || this.timer) return;
+		this.timer = setInterval(() => void this.reconcile(), intervalMs);
+		this.timer.unref?.();
 	}
 
 	private emit(snapshot: FeatureSnapshot | undefined): void {

@@ -8,12 +8,21 @@ import type { FeatureRuntimeObservation } from "./runtimeObservation";
 export interface FeatureSnapshot {
 	readonly projectId: string;
 	readonly feature: Readonly<Feature>;
+	readonly source: FeatureSnapshotSource;
 	readonly git: FeatureGitObservations;
 	readonly integration: IntegrationEvaluation;
 	readonly runtime: FeatureRuntimeObservation;
 	readonly attention: readonly AttentionProblem[];
 	readonly observedAt: string;
 }
+
+export type FeatureSnapshotSource =
+	| { readonly status: "known" }
+	| {
+			readonly status: "unknown";
+			readonly reason: "storage_read_failed";
+			readonly detail: string;
+	  };
 
 export function createFeatureSnapshot(value: FeatureSnapshot): FeatureSnapshot {
 	return deepFreeze(structuredClone(value));

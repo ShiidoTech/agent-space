@@ -35,6 +35,7 @@ export class HomePanel {
 		| ((state: { active: boolean; visible: boolean }) => void)
 		| undefined;
 	private disposables: vscode.Disposable[] = [];
+	private readonly coordinatorConsumer: { dispose: () => void };
 
 	public static createOrShow(
 		projectManager: ProjectManager,
@@ -148,6 +149,7 @@ export class HomePanel {
 		this.extensionUri = extensionUri;
 		this.globalStore = globalStore;
 		this.terminalController = terminalController;
+		this.coordinatorConsumer = featureStateCoordinator.acquireConsumer();
 
 		this.setupMessageHandler();
 		this.panel.onDidChangeViewState(
@@ -243,6 +245,7 @@ export class HomePanel {
 		for (const d of this.disposables) {
 			d.dispose();
 		}
+		this.coordinatorConsumer.dispose();
 		this.panel.dispose();
 	}
 

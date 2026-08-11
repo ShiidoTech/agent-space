@@ -29,6 +29,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "agentSpace.features";
 	private _view?: vscode.WebviewView;
 	private _onVisibilityChange?: (visible: boolean) => void;
+	private consumer?: { dispose: () => void };
 
 	private terminalController?: TerminalController;
 
@@ -50,6 +51,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	resolveWebviewView(webviewView: vscode.WebviewView): void {
 		this._view = webviewView;
+		this.consumer ??= this.featureStateCoordinator.acquireConsumer();
 		webviewView.webview.options = {
 			enableScripts: true,
 			localResourceRoots: [
@@ -471,6 +473,11 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				${featureCards || '<div class="empty-placeholder">No features yet</div>'}
 			</div>
 		</div>`;
+	}
+
+	dispose(): void {
+		this.consumer?.dispose();
+		this.consumer = undefined;
 	}
 
 	private renderBaseCard(snapshot: FeatureSnapshot): string {

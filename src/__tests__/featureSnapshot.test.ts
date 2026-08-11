@@ -16,6 +16,7 @@ function snapshot(
 	const base = { ref: "main", sha: BASE };
 	const value: FeatureSnapshot = {
 		projectId: "p1",
+		source: { status: "known" },
 		feature: {
 			id: "f1",
 			name: "Feature",

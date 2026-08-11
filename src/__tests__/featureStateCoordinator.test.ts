@@ -107,7 +107,13 @@ function setup(
 				throw new Error("must not be called");
 			}),
 		},
-		featureGitInspector: { inspect },
+		featureGitInspector: {
+			inspect,
+			observeProject: vi.fn(async () => ({
+				repository: known({ root: "/repo" }),
+				worktrees: known([]),
+			})),
+		},
 		gitClient: {
 			read: vi.fn(async () => ({
 				argv: [],
@@ -167,12 +173,33 @@ describe("FeatureStateCoordinator", () => {
 		coordinator.start(undefined, 15_000);
 		await coordinator.reconcile();
 		expect(coordinator.getProjectSnapshots("p1")).toHaveLength(2);
+		expect(
+			fixture.context.featureGitInspector.observeProject,
+		).toHaveBeenCalledTimes(1);
 		expect(fixture.saves.every((save) => save.mock.calls.length === 0)).toBe(
 			true,
 		);
 		coordinator.stop();
 		coordinator.dispose();
 		expect(coordinator.getProjectSnapshots("p1")).toEqual([]);
+	});
+
+	it("does not poll without an active consumer", async () => {
+		vi.useFakeTimers();
+		const fixture = setup();
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		coordinator.start(undefined, 15_000);
+		await coordinator.reconcile();
+		const callsWithoutConsumer = fixture.inspect.mock.calls.length;
+		await vi.advanceTimersByTimeAsync(15_000);
+		expect(fixture.inspect).toHaveBeenCalledTimes(callsWithoutConsumer);
+		const consumer = coordinator.acquireConsumer(15_000);
+		await vi.advanceTimersByTimeAsync(15_000);
+		expect(fixture.inspect.mock.calls.length).toBeGreaterThan(
+			callsWithoutConsumer,
+		);
+		consumer.dispose();
+		coordinator.dispose();
 	});
 
 	it("notifies only changes, removes deleted entries, and tolerates recreated contexts", async () => {
@@ -217,6 +244,25 @@ describe("FeatureStateCoordinator", () => {
 			status: "unknown",
 			reason: "read_failed",
 		});
+	});
+
+	it("marks retained membership stale when features storage cannot be read", async () => {
+		const fixture = setup();
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcile();
+		fixture.context.store.loadFeatures = vi.fn(() => {
+			throw new Error("features.json unavailable");
+		});
+		await coordinator.reconcile();
+		const snapshot = coordinator.getSnapshot("f1");
+		expect(snapshot?.source).toEqual({
+			status: "unknown",
+			reason: "storage_read_failed",
+			detail: "features.json unavailable",
+		});
+		expect(snapshot?.attention.map((entry) => entry.code)).toContain(
+			"feature_source_unknown",
+		);
 	});
 
 	it("shares one in-flight reconciliation across concurrent callers", async () => {
@@ -337,8 +383,10 @@ describe("FeatureStateCoordinator", () => {
 		}));
 		const coordinator = new FeatureStateCoordinator(fixture.manager);
 		await coordinator.reconcile();
-		expect(fixture.inspect).toHaveBeenCalledWith(
+		expect(fixture.inspect).toHaveBeenNthCalledWith(
+			2,
 			expect.objectContaining({ baseRef: undefined }),
+			expect.anything(),
 		);
 		expect(coordinator.getSnapshot("base:p1")?.feature.branch).toBe(
 			"(unknown base)",

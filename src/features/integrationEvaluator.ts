@@ -7,6 +7,7 @@ export interface IntegrationEvidence {
 	readonly createdFromSha?: string;
 	readonly feature?: ObservedCommit;
 	readonly base?: ObservedCommit;
+	readonly creationPoint?: ObservedCommit;
 	readonly ancestor?: ObservedCommit;
 	readonly descendant?: ObservedCommit;
 	readonly observed?: Readonly<Record<string, unknown>>;
@@ -102,6 +103,13 @@ export function evaluateIntegration(
 			observations.base.value.sha
 	) {
 		return { status: "unknown", reason: "evidence_mismatch", evidence };
+	}
+	if (
+		observations.feature.value.sha === observations.base.value.sha &&
+		observations.feature.value.sha.toLowerCase() !==
+			createdFromSha?.toLowerCase()
+	) {
+		return { status: "unknown", reason: "ancestry_unknown", evidence };
 	}
 
 	if (!observations.featureInBase.value.isAncestor) {

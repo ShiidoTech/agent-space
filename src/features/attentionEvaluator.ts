@@ -16,6 +16,11 @@ export interface AttentionEvaluationInput {
 	readonly git: FeatureGitObservations;
 	readonly integration: IntegrationEvaluation;
 	readonly runtime: FeatureRuntimeObservation;
+	readonly source?: {
+		readonly status: "known" | "unknown";
+		readonly reason?: string;
+		readonly detail?: string;
+	};
 	readonly isBaseFeature?: boolean;
 }
 
@@ -24,6 +29,18 @@ export function evaluateAttention(
 ): readonly AttentionProblem[] {
 	const problems: AttentionProblem[] = [];
 	const { git, runtime } = input;
+	if (input.source?.status === "unknown") {
+		problems.push(
+			problem(
+				"feature_source_unknown",
+				"error",
+				"Feature source state unavailable",
+				input.source.detail ??
+					"The persisted feature list could not be read; membership may be stale.",
+				{ reason: input.source.reason },
+			),
+		);
+	}
 
 	if (git.repository.status === "unknown") {
 		problems.push(
