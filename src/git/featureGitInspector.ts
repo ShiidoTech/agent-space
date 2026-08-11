@@ -2,6 +2,7 @@ import * as path from "node:path";
 import {
 	type AncestryObservation,
 	type CommitComparison,
+	type FeatureDiffFile,
 	type FeatureDiffObservation,
 	type FeatureGitObservations,
 	type GitObservation,
@@ -214,15 +215,23 @@ export class FeatureGitInspector {
 			["symbolic-ref", "--quiet", "--short", "HEAD"],
 			{ cwd: input.worktreePath },
 		);
-		const actualBranch = successful(branchResult)
-			? branchResult.stdout.trim()
-			: null;
-		const branch = known({
-			expected: input.featureBranch,
-			actual: actualBranch,
-			detached: actualBranch === null,
-			matchesExpected: actualBranch === input.featureBranch,
-		});
+		const branch = successful(branchResult)
+			? known({
+					expected: input.featureBranch,
+					actual: branchResult.stdout.trim(),
+					detached: false,
+					matchesExpected: branchResult.stdout.trim() === input.featureBranch,
+				})
+			: branchResult.exitCode === 1 && branchResult.signal === null
+				? known({
+						expected: input.featureBranch,
+						actual: null,
+						detached: true,
+						matchesExpected: false,
+					})
+				: unknown("git_command_failed", message(branchResult), {
+						expected: input.featureBranch,
+					});
 		const head = await this.resolveCommit("HEAD", input.worktreePath, "head");
 		const statusResult = await this.git.read(
 			["status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -412,7 +421,7 @@ export class FeatureGitInspector {
 		}
 		const range = `${base.value.sha}...${feature.value.sha}`;
 		const [numstat, stat] = await Promise.all([
-			this.git.read(["diff", "--numstat", range], { cwd }),
+			this.git.read(["diff", "--numstat", "-z", range], { cwd }),
 			this.git.read(["diff", "--stat", range], { cwd }),
 		]);
 		if (!successful(numstat) || !successful(stat)) {
@@ -421,17 +430,7 @@ export class FeatureGitInspector {
 				feature: feature.value,
 			});
 		}
-		const files = numstat.stdout
-			.split(/\r?\n/)
-			.filter(Boolean)
-			.map((line) => {
-				const [insertions, deletions, ...pathParts] = line.split("\t");
-				return {
-					path: pathParts.join("\t"),
-					insertions: insertions === "-" ? null : Number(insertions),
-					deletions: deletions === "-" ? null : Number(deletions),
-				};
-			});
+		const files = parseNumstat(numstat.stdout);
 		return known({
 			base: base.value,
 			feature: feature.value,
@@ -471,6 +470,35 @@ export class FeatureGitInspector {
 			featureInBase: unavailable,
 		};
 	}
+}
+
+function parseNumstat(output: string): FeatureDiffFile[] {
+	const tokens = output.split("\0");
+	const files: FeatureDiffFile[] = [];
+	for (let index = 0; index < tokens.length; ) {
+		const record = tokens[index++];
+		if (!record) continue;
+		const [insertions, deletions, path] = record.split("\t");
+		if (path === undefined) continue;
+		const stats = {
+			insertions: insertions === "-" ? null : Number(insertions),
+			deletions: deletions === "-" ? null : Number(deletions),
+		};
+		if (path !== "") {
+			files.push({ path, ...stats });
+			continue;
+		}
+		const oldPath = tokens[index++];
+		const newPath = tokens[index++];
+		if (!oldPath || !newPath) continue;
+		files.push({
+			path: newPath,
+			oldPath,
+			newPath,
+			...stats,
+		});
+	}
+	return files;
 }
 
 function observationEvidence<T>(

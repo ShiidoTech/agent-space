@@ -77,6 +77,8 @@ export interface AncestryObservation {
 
 export interface FeatureDiffFile {
 	readonly path: string;
+	readonly oldPath?: string;
+	readonly newPath?: string;
 	readonly insertions: number | null;
 	readonly deletions: number | null;
 }

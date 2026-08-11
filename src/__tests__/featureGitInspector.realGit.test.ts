@@ -11,6 +11,7 @@ import type {
 	FeatureGitObservations,
 	GitObservation,
 } from "../git/featureGitObservations";
+import { GitClient, type GitReader } from "../git/gitClient";
 
 const temporaryDirectories: string[] = [];
 
@@ -229,6 +230,54 @@ describe("FeatureGitInspector against real repositories", () => {
 			matchesExpected: false,
 		});
 		expect(git(repo, "rev-parse", "HEAD")).toBe(sha);
+	});
+
+	it("keeps an unexpected symbolic-ref failure unknown", async () => {
+		const repo = repository();
+		commit(repo, "file.txt", "content\n", "initial");
+		git(repo, "switch", "-c", "feature/test");
+		const client = new GitClient();
+		const reader: GitReader = {
+			readSync: (argv, options) => client.readSync(argv, options),
+			read: (argv, options) =>
+				argv[0] === "symbolic-ref"
+					? Promise.resolve({
+							argv,
+							cwd: options.cwd,
+							exitCode: 128,
+							signal: null,
+							stdout: "",
+							stderr: "permission denied",
+							error: new Error("permission denied"),
+						})
+					: client.read(argv, options),
+		};
+
+		const observation = await new FeatureGitInspector(reader).inspect(
+			input(repo),
+		);
+		expect(observation.branch).toMatchObject({
+			status: "unknown",
+			reason: "git_command_failed",
+		});
+	});
+
+	it("exposes canonical old and new paths for a real rename", async () => {
+		const repo = repository();
+		commit(repo, "old.ts", "const value = 1;\n", "initial");
+		git(repo, "switch", "-c", "feature/test");
+		git(repo, "mv", "old.ts", "new.ts");
+		git(repo, "commit", "-m", "rename file");
+
+		const observation = await inspect(repo);
+		const diff = value(observation.featureDiff);
+		expect(diff.files).toEqual([
+			expect.objectContaining({
+				path: "new.ts",
+				oldPath: "old.ts",
+				newPath: "new.ts",
+			}),
+		]);
 	});
 
 	it("reports a missing worktree and unknown base explicitly", async () => {
