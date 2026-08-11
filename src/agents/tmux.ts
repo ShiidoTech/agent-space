@@ -1,4 +1,10 @@
-import { commandExists, exec, execFile } from "../utils/platform";
+import {
+	commandExists,
+	exec,
+	execAsync,
+	execFile,
+	execFileAsync,
+} from "../utils/platform";
 
 export const TMUX_SESSION_PREFIX = "agent-space";
 export const LEGACY_TMUX_SESSION_PREFIX = "companion";
@@ -50,6 +56,58 @@ export class TmuxIntegration {
 	isSessionAlive(sessionName: string): boolean {
 		try {
 			execFile("tmux", ["has-session", "-t", sessionName]);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Non-blocking twin of {@link isSessionAlive}. Used by reconciliation
+	 * paths that must not run synchronous tmux discovery on the interactive
+	 * click path (see `TerminalController.focusOrCreateTerminalAsync`).
+	 */
+	async isSessionAliveAsync(sessionName: string): Promise<boolean> {
+		try {
+			await execFileAsync("tmux", ["has-session", "-t", sessionName]);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Non-blocking twin of {@link adoptSession}. Preserves the exact same
+	 * fail-closed ownership semantics — it never adopts a session unless the
+	 * preferred name is free and the legacy/current name is the only live
+	 * candidate — it just performs the discovery asynchronously.
+	 */
+	async adoptSessionAsync(
+		preferredName: string,
+		currentName: string,
+	): Promise<boolean> {
+		if (preferredName === currentName) {
+			return this.isSessionAliveAsync(preferredName);
+		}
+
+		const preferredAlive = await this.isSessionAliveAsync(preferredName);
+		const currentAlive = await this.isSessionAliveAsync(currentName);
+
+		if (preferredAlive) {
+			if (currentAlive) {
+				return false;
+			}
+			return true;
+		}
+
+		if (!currentAlive) {
+			return false;
+		}
+
+		try {
+			await execAsync(
+				`tmux rename-session -t "${currentName}" "${preferredName}"`,
+			);
 			return true;
 		} catch {
 			return false;

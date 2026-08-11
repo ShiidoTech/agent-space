@@ -537,6 +537,25 @@ button {
 	);
 }
 
+/* Immediate click feedback — applied client-side before any round trip to
+ * the extension host, so selection never appears to wait on tmux/session
+ * work. */
+.agent-card.agent-focused {
+	border-left-color: var(--vscode-focusBorder);
+	background-color: var(--vscode-list-activeSelectionBackground);
+}
+
+.agent-card.opening {
+	opacity: 0.75;
+}
+
+.agent-card.opening .agent-name::after {
+	content: " Opening…";
+	color: var(--vscode-descriptionForeground);
+	font-size: 0.85em;
+	font-weight: normal;
+}
+
 .agent-card.done:hover {
 	opacity: 1;
 }

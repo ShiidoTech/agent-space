@@ -6,7 +6,7 @@ import {
 } from "../projects/projectKnowledge";
 import type { ProjectManager } from "../projects/projectManager";
 import type { Agent, Feature, Service } from "../types";
-import { exec, getTerminalShellArgs } from "../utils/platform";
+import { exec, execAsync, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import type { TmuxIntegration } from "./tmux";
 
@@ -202,6 +202,126 @@ export class TerminalController implements vscode.Disposable {
 			return existing;
 		}
 		return this.createTerminal(feature, agent, agentIndex, resume);
+	}
+
+	/**
+	 * Async twin of {@link focusOrCreateTerminal} for the interactive sidebar
+	 * click path. A warm/tracked terminal resolves exactly like the sync
+	 * path — `terminals.get -> show() -> return`, no exec of any kind.
+	 * Only cold reattachment (terminal not tracked, e.g. after a window
+	 * reload) falls through to async tmux/session reconciliation, so a click
+	 * on an untracked agent never blocks the extension host.
+	 */
+	async focusOrCreateTerminalAsync(
+		feature: Feature,
+		agent: Agent,
+		agentIndex: number,
+		resume = false,
+	): Promise<vscode.Terminal | undefined> {
+		const existing = this.terminals.get(agent.id);
+		if (existing) {
+			existing.show();
+			return existing;
+		}
+		return this.createTerminalAsync(feature, agent, agentIndex, resume);
+	}
+
+	/**
+	 * Non-blocking twin of {@link createTerminal}, used only for cold
+	 * reattachment off the interactive click path (see
+	 * `focusOrCreateTerminalAsync`). Every other caller keeps using the
+	 * synchronous `createTerminal`; the fail-closed session-ownership
+	 * ordering (snapshot existing sessions before spawning) is unchanged —
+	 * only the discovery calls themselves run asynchronously.
+	 */
+	private async createTerminalAsync(
+		feature: Feature,
+		agent: Agent,
+		agentIndex: number,
+		resume = false,
+	): Promise<vscode.Terminal | undefined> {
+		const name = `[${feature.name}] ${agent.name}`;
+		const color = AGENT_COLORS[agentIndex % AGENT_COLORS.length];
+		const cwd = agent.worktreePath ?? feature.worktreePath;
+
+		const sessionName =
+			agent.tmuxSession ?? this.tmux.sessionName(feature.id, agent.id);
+		const legacySessionName = this.tmux.legacySessionName(feature.id, agent.id);
+		let sessionReady = await this.tmux.adoptSessionAsync(
+			sessionName,
+			legacySessionName,
+		);
+
+		let justLaunched = false;
+		if (!sessionReady) {
+			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+			const shouldResume = resume && agent.hasStarted === true;
+			try {
+				const baseCommand = shouldResume
+					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
+					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
+				const launchContextNote = shouldResume
+					? undefined
+					: this.buildAgentLaunchNote(feature);
+				const launchCommand = this.withLaunchContextNote(
+					baseCommand,
+					launchContextNote,
+				);
+				// Snapshot the provider's existing sessions for this directory
+				// before the CLI starts — identical ordering to the sync path —
+				// so a session created by THIS launch is the only one that can
+				// later be attributed to the agent.
+				this.beforeLaunchCallback?.(feature, agent, cwd);
+				await execAsync(this.tmux.createCommand(sessionName, launchCommand), {
+					cwd,
+				});
+				this.tmux.configureSession(sessionName);
+				sessionReady = await this.tmux.isSessionAliveAsync(sessionName);
+				justLaunched = sessionReady;
+			} catch (err) {
+				console.warn(`[TerminalController] tmux session create failed: ${err}`);
+				sessionReady = false;
+			}
+		}
+
+		if (!sessionReady) {
+			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+			const message = this.buildStartupFailureMessage(
+				agent.name,
+				tool.name,
+				cwd,
+			);
+			this.recordAgentFailure(feature.id, agent.id, message);
+			void vscode.window.showErrorMessage(message);
+			return undefined;
+		}
+
+		const { shellPath, shellArgs } = getTerminalShellArgs(sessionName);
+
+		const terminal = vscode.window.createTerminal({
+			name,
+			shellPath,
+			shellArgs,
+			cwd,
+			color,
+			iconPath: new vscode.ThemeIcon("hubot"),
+			location: vscode.TerminalLocation.Editor,
+			isTransient: true,
+		});
+
+		this.terminals.set(agent.id, terminal);
+		this.terminalMetadata.set(terminal, {
+			id: agent.id,
+			kind: "agent",
+			featureId: feature.id,
+			sessionName,
+			feature,
+			agent,
+			justLaunched,
+		});
+		terminal.show(true);
+
+		return terminal;
 	}
 
 	focusOrCreateServiceTerminal(

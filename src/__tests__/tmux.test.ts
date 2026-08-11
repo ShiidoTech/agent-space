@@ -4,15 +4,25 @@ import { TmuxIntegration } from "../agents/tmux";
 vi.mock("../utils/platform", () => ({
 	commandExists: vi.fn(),
 	exec: vi.fn(),
+	execAsync: vi.fn(),
 	execFile: vi.fn(),
+	execFileAsync: vi.fn(),
 	execSilent: vi.fn(),
 }));
 
-import { commandExists, exec, execFile } from "../utils/platform";
+import {
+	commandExists,
+	exec,
+	execAsync,
+	execFile,
+	execFileAsync,
+} from "../utils/platform";
 
 const mockCommandExists = vi.mocked(commandExists);
 const mockExec = vi.mocked(exec);
+const mockExecAsync = vi.mocked(execAsync);
 const mockExecFile = vi.mocked(execFile);
+const mockExecFileAsync = vi.mocked(execFileAsync);
 describe("TmuxIntegration", () => {
 	const tmux = new TmuxIntegration();
 
@@ -394,6 +404,81 @@ describe("TmuxIntegration", () => {
 				false,
 			);
 			expect(mockExec).not.toHaveBeenCalled();
+		});
+	});
+
+	// -------------------------------------------------------------------
+	// isSessionAliveAsync / adoptSessionAsync — the non-blocking twins used
+	// off the interactive click path (see TerminalController.focusOrCreateTerminalAsync).
+	// They must never touch the synchronous exec/execFile helpers.
+	// -------------------------------------------------------------------
+	describe("isSessionAliveAsync", () => {
+		it("returns true for an existing session using the async exec path only", async () => {
+			mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
+			await expect(tmux.isSessionAliveAsync("agent-space-f1-a1")).resolves.toBe(
+				true,
+			);
+			expect(mockExecFileAsync).toHaveBeenCalledWith("tmux", [
+				"has-session",
+				"-t",
+				"agent-space-f1-a1",
+			]);
+			expect(mockExecFile).not.toHaveBeenCalled();
+			expect(mockExec).not.toHaveBeenCalled();
+		});
+
+		it("returns false for a missing session", async () => {
+			mockExecFileAsync.mockRejectedValue(new Error("missing"));
+			await expect(tmux.isSessionAliveAsync("agent-space-f1-a1")).resolves.toBe(
+				false,
+			);
+			expect(mockExecFile).not.toHaveBeenCalled();
+			expect(mockExec).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("adoptSessionAsync", () => {
+		it("returns true when the preferred session already exists, using only async exec", async () => {
+			mockExecFileAsync
+				.mockResolvedValueOnce({ stdout: "", stderr: "" })
+				.mockRejectedValueOnce(new Error("missing"));
+			await expect(
+				tmux.adoptSessionAsync("agent-space-f1-a1", "companion-f1-a1"),
+			).resolves.toBe(true);
+			expect(mockExecAsync).not.toHaveBeenCalled();
+			expect(mockExecFile).not.toHaveBeenCalled();
+			expect(mockExec).not.toHaveBeenCalled();
+		});
+
+		it("reports ambiguity without killing either session when both exist", async () => {
+			mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
+			await expect(
+				tmux.adoptSessionAsync("agent-space-f1-a1", "companion-f1-a1"),
+			).resolves.toBe(false);
+			expect(mockExecAsync).not.toHaveBeenCalled();
+		});
+
+		it("renames the current session asynchronously when only the legacy session exists", async () => {
+			mockExecFileAsync
+				.mockRejectedValueOnce(new Error("missing"))
+				.mockResolvedValueOnce({ stdout: "", stderr: "" });
+			mockExecAsync.mockResolvedValue({ stdout: "", stderr: "" });
+			await expect(
+				tmux.adoptSessionAsync("agent-space-f1-a1", "companion-f1-a1"),
+			).resolves.toBe(true);
+			expect(mockExecAsync).toHaveBeenCalledWith(
+				'tmux rename-session -t "companion-f1-a1" "agent-space-f1-a1"',
+			);
+			expect(mockExec).not.toHaveBeenCalled();
+			expect(mockExecFile).not.toHaveBeenCalled();
+		});
+
+		it("returns false when neither session exists", async () => {
+			mockExecFileAsync.mockRejectedValue(new Error("missing"));
+			await expect(
+				tmux.adoptSessionAsync("agent-space-f1-a1", "companion-f1-a1"),
+			).resolves.toBe(false);
+			expect(mockExecAsync).not.toHaveBeenCalled();
 		});
 	});
 });
