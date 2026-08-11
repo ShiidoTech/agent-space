@@ -4,18 +4,25 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { TERMINAL_COLOR_KEYS } from "../constants/colors";
+import {
+	type FeatureGitInspectionInput,
+	FeatureGitInspector,
+} from "../git/featureGitInspector";
+import type { FeatureGitObservations } from "../git/featureGitObservations";
 import { checkWorktreeDeletionSafety } from "../git/worktreeSafety";
 import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
 import type {
 	Feature,
-	FeatureProvisioning,
 	FeatureStatus,
 	GitAwareStatus,
 	IsolationMode,
 } from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
-import { computeGitStatus, computeGitStatusAsync } from "./featureGitStatus";
+import {
+	computeGitStatus,
+	gitStatusFromObservations,
+} from "./featureGitStatus";
 import { normalizeFeatureName } from "./featureName";
 
 const execFileAsync = promisify(execFile);
@@ -50,6 +57,7 @@ export class FeatureManager {
 		private readonly repoRoot: string,
 		private readonly worktreeBase: string,
 		private config: ProjectConfig = {},
+		private readonly featureGitInspector: FeatureGitInspector = new FeatureGitInspector(),
 	) {
 		this.features = store.loadFeatures();
 	}
@@ -310,7 +318,11 @@ export class FeatureManager {
 				state: "provisioning",
 				steps: [
 					{ id: "resolve-base", label: "Preparing feature", status: "pending" },
-					{ id: "create-worktree", label: "Creating branch and worktree", status: "pending" },
+					{
+						id: "create-worktree",
+						label: "Creating branch and worktree",
+						status: "pending",
+					},
 				],
 			},
 		};
@@ -331,9 +343,14 @@ export class FeatureManager {
 			const feature = this.features.find((candidate) => candidate.id === id);
 			const progress = feature?.provisioning;
 			if (progress) {
-				const step = progress.steps.find((candidate) => candidate.status === "running");
+				const step = progress.steps.find(
+					(candidate) => candidate.status === "running",
+				);
 				const message = error instanceof Error ? error.message : String(error);
-				if (step) { step.status = "failed"; step.error = message; }
+				if (step) {
+					step.status = "failed";
+					step.error = message;
+				}
 				progress.state = "failed";
 				progress.error = message;
 				this.saveAndNotify();
@@ -380,29 +397,22 @@ export class FeatureManager {
 		const baseBranch = this.getBaseBranch();
 		feature.provisioning.steps[0].status = "running";
 		this.saveAndNotify();
-		feature.createdFromSha = String(execSync(`git rev-parse "${baseBranch}"`, { cwd: this.repoRoot, encoding: "utf-8" })).trim();
+		feature.createdFromSha = String(
+			execSync(`git rev-parse "${baseBranch}"`, {
+				cwd: this.repoRoot,
+				encoding: "utf-8",
+			}),
+		).trim();
 		feature.provisioning.steps[0].status = "completed";
 		feature.provisioning.steps[1].status = "running";
 		this.saveAndNotify();
-		execSync(`git worktree add "${feature.worktreePath}" -b "${feature.branch}" "${baseBranch}"`, { cwd: this.repoRoot });
+		execSync(
+			`git worktree add "${feature.worktreePath}" -b "${feature.branch}" "${baseBranch}"`,
+			{ cwd: this.repoRoot },
+		);
 		feature.provisioning.state = "ready";
 		feature.provisioning.currentStepId = undefined;
 		for (const step of feature.provisioning.steps) step.status = "completed";
-		this.saveAndNotify();
-	}
-
-	private startStep(progress: FeatureProvisioning, id: string): void {
-		const step = progress.steps.find((candidate) => candidate.id === id);
-		if (!step) throw new Error(`Unknown provisioning step: ${id}`);
-		step.status = "running";
-		progress.currentStepId = id;
-		this.saveAndNotify();
-	}
-
-	private completeStep(progress: FeatureProvisioning, id: string): void {
-		const step = progress.steps.find((candidate) => candidate.id === id);
-		if (!step) throw new Error(`Unknown provisioning step: ${id}`);
-		step.status = "completed";
 		this.saveAndNotify();
 	}
 
@@ -513,15 +523,23 @@ export class FeatureManager {
 
 	async getFeatureGitStatusAsync(feature: Feature): Promise<GitAwareStatus> {
 		this.reconcileFeatureBranch(feature);
-		return computeGitStatusAsync({
-			featureBranch: feature.branch,
-			baseBranch: this.getBaseBranch(),
-			worktreePath: feature.worktreePath,
+		const observations = await this.getFeatureGitObservationsAsync(feature);
+		return gitStatusFromObservations(observations, feature.createdFromSha);
+	}
+
+	getFeatureGitObservationsAsync(
+		feature: Feature,
+	): Promise<FeatureGitObservations> {
+		const input: FeatureGitInspectionInput = {
 			repoRoot: this.repoRoot,
+			worktreePath: feature.worktreePath,
+			featureBranch: feature.branch,
+			baseRef: this.getBaseBranch(),
 			...(feature.createdFromSha
 				? { createdFromSha: feature.createdFromSha }
 				: {}),
-		});
+		};
+		return this.featureGitInspector.inspect(input);
 	}
 
 	private pickColor(name: string): string {

@@ -6,13 +6,13 @@ import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_GIT } from "../constants/icons";
-import type { ProjectManager } from "../projects/projectManager";
-import type { GlobalStore } from "../storage/globalStore";
-import type { Agent, Feature, Service } from "../types";
 import {
 	computeBaseBranchGitState,
 	gitStatusLabel,
 } from "../features/featureGitStatus";
+import type { ProjectManager } from "../projects/projectManager";
+import type { GlobalStore } from "../storage/globalStore";
+import type { Agent, Feature, Service } from "../types";
 
 export class HomePanel {
 	public static readonly viewType = "agentSpace.home";
@@ -227,10 +227,6 @@ export class HomePanel {
 
 	public getCurrentFeatureId(): string | null {
 		return this.currentFeatureId;
-	}
-
-	private isFeatureValid(featureId: string): boolean {
-		return this.projectManager.resolveFeature(featureId) !== undefined;
 	}
 
 	private dispose(): void {
@@ -632,68 +628,17 @@ export class HomePanel {
 	private async getGitDiffStatsAsync(
 		feature: Feature,
 	): Promise<GitStats | null> {
-		const { execAsync } = await import("../utils/platform");
-		try {
-			let diffStat: string;
-			try {
-				const result = await execAsync(
-					`git diff --stat HEAD...${feature.branch}`,
-					{
-						cwd: feature.worktreePath,
-					},
-				);
-				diffStat = result.stdout.trim();
-			} catch {
-				const result = await execAsync("git diff --stat HEAD", {
-					cwd: feature.worktreePath,
-				});
-				diffStat = result.stdout.trim();
-			}
-
-			return this.parseDiffStat(diffStat);
-		} catch {
-			return null;
-		}
-	}
-
-	private getGitDiffStats(feature: Feature): GitStats | null {
-		const { execSync } = require("node:child_process");
-		try {
-			let diffStat: string;
-			try {
-				diffStat = (
-					execSync(`git diff --stat HEAD...${feature.branch}`, {
-						cwd: feature.worktreePath,
-						encoding: "utf-8",
-						stdio: ["ignore", "pipe", "ignore"],
-					}) as string
-				).trim();
-			} catch {
-				diffStat = (
-					execSync("git diff --stat HEAD", {
-						cwd: feature.worktreePath,
-						encoding: "utf-8",
-						stdio: ["ignore", "pipe", "ignore"],
-					}) as string
-				).trim();
-			}
-
-			return this.parseDiffStat(diffStat);
-		} catch {
-			return null;
-		}
-	}
-
-	private parseDiffStat(diffStat: string): GitStats {
-		const summaryMatch = diffStat.match(
-			/(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?/,
-		);
-
+		const context = this.projectManager.findContextByFeatureId(feature.id);
+		if (!context) return null;
+		const observation =
+			await context.featureManager.getFeatureGitObservationsAsync(feature);
+		if (observation.featureDiff.status === "unknown") return null;
+		const diff = observation.featureDiff.value;
 		return {
-			filesChanged: summaryMatch ? Number(summaryMatch[1]) : 0,
-			insertions: summaryMatch ? Number(summaryMatch[2] ?? 0) : 0,
-			deletions: summaryMatch ? Number(summaryMatch[3] ?? 0) : 0,
-			raw: diffStat,
+			filesChanged: diff.filesChanged,
+			insertions: diff.insertions,
+			deletions: diff.deletions,
+			raw: diff.raw,
 		};
 	}
 
@@ -907,7 +852,10 @@ export class HomePanel {
 		);
 
 		const activeAgents = agents.filter(
-			(a) => a.status === "running" || a.status === "idle" || (a.startup && a.startup.state !== "ready"),
+			(a) =>
+				a.status === "running" ||
+				a.status === "idle" ||
+				(a.startup && a.startup.state !== "ready"),
 		);
 		const erroredAgents = agents.filter((a) => a.status === "errored");
 		const doneAgents = agents.filter((a) => a.status === "done");
@@ -1019,10 +967,15 @@ export class HomePanel {
 		const effectiveBaseBranch = context.featureManager.getBaseBranchName();
 		const branchKinds = context.featureManager.getBranchKinds();
 		const defaultBranchKind = context.featureManager.getDefaultBranchKind();
-		const baseFeature = context.featureManager.getBaseFeature(context.project.id);
+		const baseFeature = context.featureManager.getBaseFeature(
+			context.project.id,
+		);
 		const features = context.featureManager.getFeatures();
 		const projectFeatures = [
-			...(context.agentManager.getAgents(baseFeature.id).length > 0 || context.serviceManager.getServices(baseFeature.id).length > 0 ? [baseFeature] : []),
+			...(context.agentManager.getAgents(baseFeature.id).length > 0 ||
+			context.serviceManager.getServices(baseFeature.id).length > 0
+				? [baseFeature]
+				: []),
 			...features,
 		];
 
@@ -1047,18 +1000,23 @@ export class HomePanel {
 						const agents = context.agentManager.getAgents(feature.id);
 						const services = context.serviceManager.getServices(feature.id);
 						const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
-						const gitStatus =
-							feature.id.startsWith("base:")
-								? null
-								: context.featureManager.getFeatureGitStatus(feature);
+						const gitStatus = feature.id.startsWith("base:")
+							? null
+							: context.featureManager.getFeatureGitStatus(feature);
 						const statusBadge = gitStatus
 							? `<span class="project-status-badge status-${gitStatus}">${gitStatusLabel(gitStatus)}</span>`
 							: '<span class="project-base-label">base</span>';
 						const agentCount = agents.filter((a) => a.status !== "done").length;
-						const serviceCount = services.filter((s) => s.status === "running").length;
+						const serviceCount = services.filter(
+							(s) => s.status === "running",
+						).length;
 						const counts = [
-							agentCount > 0 ? `${agentCount} agent${agentCount > 1 ? "s" : ""}` : "",
-							serviceCount > 0 ? `${serviceCount} script${serviceCount > 1 ? "s" : ""}` : "",
+							agentCount > 0
+								? `${agentCount} agent${agentCount > 1 ? "s" : ""}`
+								: "",
+							serviceCount > 0
+								? `${serviceCount} script${serviceCount > 1 ? "s" : ""}`
+								: "",
 						]
 							.filter(Boolean)
 							.join(" &middot; ");
@@ -1176,7 +1134,10 @@ export class HomePanel {
 		const services = context.serviceManager.getServices(feature.id);
 
 		const activeAgents = agents.filter(
-			(a) => a.status === "running" || a.status === "idle" || (a.startup && a.startup.state !== "ready"),
+			(a) =>
+				a.status === "running" ||
+				a.status === "idle" ||
+				(a.startup && a.startup.state !== "ready"),
 		);
 		const erroredAgents = agents.filter((a) => a.status === "errored");
 		const doneAgents = agents.filter((a) => a.status === "done");
@@ -1230,7 +1191,14 @@ export class HomePanel {
 		if (!progress || progress.state === "ready") return "";
 		const steps = progress.steps
 			.map((step) => {
-				const icon = step.status === "completed" ? "✓" : step.status === "failed" ? "!" : step.status === "running" ? "…" : "·";
+				const icon =
+					step.status === "completed"
+						? "✓"
+						: step.status === "failed"
+							? "!"
+							: step.status === "running"
+								? "…"
+								: "·";
 				return `<div class="lifecycle-step ${step.status}"><span>${step.status === "running" ? '<i class="lifecycle-spinner"></i>' : icon}</span><span>${this.escapeHtml(step.label)}</span>${step.error ? `<small>${this.escapeHtml(step.error)}</small>` : ""}</div>`;
 			})
 			.join("");
@@ -1349,7 +1317,9 @@ export class HomePanel {
 						agent.lastError ?? "Agent failed to start or exited unexpectedly.",
 					)
 				: "Click to view live terminal output";
-		const startupStep = agent.startup?.steps.find((step) => step.status === "running");
+		const startupStep = agent.startup?.steps.find(
+			(step) => step.status === "running",
+		);
 		const startupBadge = startupStep
 			? `<span class="agent-starting-inline"><i class="lifecycle-spinner"></i>${this.escapeHtml(startupStep.label)}</span>`
 			: "";
@@ -1670,17 +1640,12 @@ export class HomePanel {
 		</div>`;
 	}
 
-	private renderGitStatsSection(feature: Feature): string {
-		const stats = this.getGitDiffStats(feature);
-		const content = stats
-			? this.renderGitStatsContent(stats)
-			: '<div class="activity-empty">No changes yet</div>';
-
+	private renderGitStatsSection(_feature: Feature): string {
 		return `
 		<div>
 			<div class="section-label">Git Changes</div>
 			<div class="git-stats" id="git-stats-content">
-				${content}
+				<div class="activity-empty">Observing Git state...</div>
 			</div>
 		</div>`;
 	}
