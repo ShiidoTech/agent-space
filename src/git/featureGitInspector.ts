@@ -329,11 +329,7 @@ export class FeatureGitInspector {
 		descendantSha: string,
 		repoRoot: string,
 	): Promise<GitObservation<AncestryObservation>> {
-		const ancestor = await this.resolveCommit(
-			ancestorSha,
-			repoRoot,
-			"base",
-		);
+		const ancestor = await this.resolveCommit(ancestorSha, repoRoot, "base");
 		const descendant = await this.resolveCommit(
 			descendantSha,
 			repoRoot,
