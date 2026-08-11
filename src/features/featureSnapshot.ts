@@ -1,4 +1,5 @@
 import type { FeatureGitObservations } from "../git/featureGitObservations";
+import type { GitHubObservation } from "../github/githubObservation";
 import type { Feature, GitAwareStatus } from "../types";
 import type { AttentionProblem } from "./attentionEvaluator";
 import type { IntegrationEvaluation } from "./integrationEvaluator";
@@ -10,6 +11,7 @@ export interface FeatureSnapshot {
 	readonly feature: Readonly<Feature>;
 	readonly source: FeatureSnapshotSource;
 	readonly git: FeatureGitObservations;
+	readonly github: GitHubObservation;
 	readonly integration: IntegrationEvaluation;
 	readonly runtime: FeatureRuntimeObservation;
 	readonly attention: readonly AttentionProblem[];
@@ -28,6 +30,12 @@ export function createFeatureSnapshot(value: FeatureSnapshot): FeatureSnapshot {
 	return deepFreeze(structuredClone(value));
 }
 
+/**
+ * Legacy badge projection for screens that predate FeatureSnapshot semantics.
+ * Deliberately a projection: FeatureSnapshot / IntegrationEvaluation /
+ * GitHubObservation remain the source of truth and no new logic ever derives
+ * state from GitAwareStatus.
+ */
 export function featureSnapshotGitStatus(
 	snapshot: FeatureSnapshot,
 ): GitAwareStatus {
@@ -53,9 +61,18 @@ export function featureSnapshotGitStatus(
 		return "unknown";
 	}
 	if (snapshot.integration.status === "unknown") return "unknown";
-	if (snapshot.integration.outcome === "integrated_by_ancestry")
-		return "merged";
-	if (snapshot.integration.outcome === "no_feature_commits") return "new";
+	switch (snapshot.integration.outcome) {
+		case "integrated_by_ancestry":
+		case "integrated_by_pull_request":
+		case "integrated_to_other_base":
+			return "merged";
+		case "no_feature_commits":
+			return "new";
+		case "not_integrated":
+		case "pull_request_open":
+		case "new_work_after_integration":
+			return "ahead";
+	}
 	return snapshot.git.featureDelta.status === "known" &&
 		snapshot.git.featureDelta.value.rightOnly > 0
 		? "ahead"

@@ -369,7 +369,9 @@ describe("FeatureGitInspector against real repositories", () => {
 			createdFromSha,
 		});
 		expect(value(observation.feature).sha).toBe(value(observation.base).sha);
-		expect(evaluateIntegration(observation, createdFromSha)).toMatchObject({
+		expect(
+			evaluateIntegration({ git: observation, createdFromSha }),
+		).toMatchObject({
 			status: "unknown",
 			reason: "ancestry_unknown",
 		});
@@ -452,7 +454,7 @@ describe("FeatureGitInspector against real repositories", () => {
 		expect(value(proven.featureInBase)).toMatchObject({
 			isAncestor: true,
 		});
-		expect(evaluateIntegration(proven, createdFromSha)).toMatchObject({
+		expect(evaluateIntegration({ git: proven, createdFromSha })).toMatchObject({
 			status: "known",
 			outcome: "integrated_by_ancestry",
 		});
@@ -462,7 +464,7 @@ describe("FeatureGitInspector against real repositories", () => {
 			isAncestor: true,
 		});
 		expect(JSON.stringify(impossible)).not.toContain('"kind":"integrated"');
-		expect(evaluateIntegration(impossible)).toMatchObject({
+		expect(evaluateIntegration({ git: impossible })).toMatchObject({
 			status: "unknown",
 			reason: "creation_point_unknown",
 		});

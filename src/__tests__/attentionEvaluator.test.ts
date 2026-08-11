@@ -66,7 +66,7 @@ function git(): FeatureGitObservations {
 
 const integration: IntegrationEvaluation = {
 	status: "known",
-	outcome: "not_integrated_by_ancestry",
+	outcome: "not_integrated",
 	evidence: { feature, base },
 };
 
