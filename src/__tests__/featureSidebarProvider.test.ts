@@ -49,7 +49,7 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 			undefined,
 			{} as never,
 		);
-		postMessage = vi.fn();
+		postMessage = vi.fn().mockResolvedValue(true);
 		existingShow = vi.fn();
 		getTerminal = vi.fn();
 		focusOrCreateTerminalAsync = vi.fn().mockResolvedValue({ show: vi.fn() });
@@ -125,5 +125,86 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 
 		expect(postMessage).not.toHaveBeenCalled();
 		expect(focusOrCreateTerminalAsync).not.toHaveBeenCalled();
+	});
+
+	it("A cold → B warm: a stale cold resolution never steals focus from B", async () => {
+		const agent2 = { ...agent, id: "a2", name: "Agent 2" };
+		getAgents.mockReturnValue([agent, agent2]);
+		const terminalB = { show: vi.fn() };
+		getTerminal.mockImplementation((id: string) =>
+			id === "a2" ? terminalB : undefined,
+		);
+
+		let resolveA!: (terminal: { show: ReturnType<typeof vi.fn> }) => void;
+		const pendingA = new Promise<{ show: ReturnType<typeof vi.fn> }>(
+			(resolve) => {
+				resolveA = resolve;
+			},
+		);
+		focusOrCreateTerminalAsync.mockReturnValue(pendingA);
+
+		// Click A (cold, starts async reconciliation), then B (warm) while A
+		// is still in flight — B must win focus immediately.
+		focusAgent("a1");
+		focusAgent("a2");
+
+		expect(terminalB.show).toHaveBeenCalledTimes(1);
+		expect(focusOrCreateTerminalAsync).toHaveBeenCalledWith(
+			feature,
+			agent,
+			0,
+			true,
+		);
+
+		// A's reconciliation now resolves: its terminal becomes tracked but
+		// must NOT be revealed, and no "focused" claim is made for a stale
+		// request.
+		const terminalA = { show: vi.fn() };
+		resolveA(terminalA);
+		await pendingA;
+
+		expect(terminalA.show).not.toHaveBeenCalled();
+		expect(postMessage).not.toHaveBeenCalledWith({
+			type: "agentFocusState",
+			agentId: "a1",
+			state: "focused",
+		});
+		expect(terminalB.show).toHaveBeenCalledTimes(1);
+	});
+
+	it("double-click on the same cold agent: only the latest request reveals", async () => {
+		getTerminal.mockReturnValue(undefined);
+		let resolveA!: (terminal: { show: ReturnType<typeof vi.fn> }) => void;
+		const pendingA = new Promise<{ show: ReturnType<typeof vi.fn> }>(
+			(resolve) => {
+				resolveA = resolve;
+			},
+		);
+		// The controller coalesces both clicks onto one in-flight
+		// reconciliation; the provider only decides who reveals at resolution.
+		focusOrCreateTerminalAsync.mockReturnValue(pendingA);
+
+		focusAgent("a1");
+		focusAgent("a1");
+
+		expect(focusOrCreateTerminalAsync).toHaveBeenCalledTimes(2);
+		expect(postMessage).toHaveBeenCalledWith({
+			type: "agentFocusState",
+			agentId: "a1",
+			state: "opening",
+		});
+
+		const terminalA = { show: vi.fn() };
+		resolveA(terminalA);
+		await pendingA;
+
+		// Only the latest (second) request is still current → revealed once,
+		// single "focused" claim.
+		expect(terminalA.show).toHaveBeenCalledTimes(1);
+		expect(postMessage).toHaveBeenCalledWith({
+			type: "agentFocusState",
+			agentId: "a1",
+			state: "focused",
+		});
 	});
 });

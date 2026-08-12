@@ -90,8 +90,12 @@ export class TmuxIntegration {
 			return this.isSessionAliveAsync(preferredName);
 		}
 
-		const preferredAlive = await this.isSessionAliveAsync(preferredName);
-		const currentAlive = await this.isSessionAliveAsync(currentName);
+		// Both probes are independent — run them concurrently to halve the
+		// cold-path latency instead of serializing two tmux round trips.
+		const [preferredAlive, currentAlive] = await Promise.all([
+			this.isSessionAliveAsync(preferredName),
+			this.isSessionAliveAsync(currentName),
+		]);
 
 		if (preferredAlive) {
 			if (currentAlive) {

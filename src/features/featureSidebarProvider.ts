@@ -30,6 +30,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView;
 	private _onVisibilityChange?: (visible: boolean) => void;
 	private consumer?: { dispose: () => void };
+	/**
+	 * Monotonic counter stamped on every focus request. A cold reconciliation
+	 * only reveals its terminal (and claims "focused"/"failed") if its stamp
+	 * is still the latest, so a slower cold resolution can never steal focus
+	 * from a newer click (e.g. A cold → B warm).
+	 */
+	private focusSequence = 0;
 
 	private terminalController?: TerminalController;
 
@@ -361,6 +368,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);
 
+		const focusSeq = ++this.focusSequence;
+
 		// Strict fast path: an already-tracked terminal is revealed with no
 		// shell/process call of any kind before terminal.show(). This is the
 		// hot path for switching between already-running agents.
@@ -379,14 +388,27 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		void this.terminalController
 			.focusOrCreateTerminalAsync(feature, agent, agentIndex, true)
 			.then((terminal) => {
-				this.postAgentFocusState(agentId, terminal ? "focused" : "failed");
+				if (focusSeq === this.focusSequence) {
+					if (terminal) {
+						// Still the latest focus request — reveal it. (A cold
+						// terminal that is no longer current stays tracked but
+						// unrevealed, so the next click is an instant warm
+						// switch without ever stealing focus.)
+						terminal.show();
+						this.postAgentFocusState(agentId, "focused");
+					} else {
+						this.postAgentFocusState(agentId, "failed");
+					}
+				}
 				this.refreshState();
 			})
 			.catch((error) => {
 				console.warn(
 					`[FeatureSidebarProvider] focusAgent reconciliation failed: ${error}`,
 				);
-				this.postAgentFocusState(agentId, "failed");
+				if (focusSeq === this.focusSequence) {
+					this.postAgentFocusState(agentId, "failed");
+				}
 				this.refreshState();
 			});
 	}
@@ -396,11 +418,12 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		agentId: string,
 		state: "opening" | "focused" | "failed",
 	): void {
-		void this._view?.webview.postMessage({
-			type: "agentFocusState",
-			agentId,
-			state,
-		});
+		if (!this._view) return;
+		void this._view.webview
+			.postMessage({ type: "agentFocusState", agentId, state })
+			.then(undefined, () => {
+				// Webview may be disposed mid-round-trip; best-effort only.
+			});
 	}
 
 	private handleFocusService(featureId: string, serviceId: string): void {
