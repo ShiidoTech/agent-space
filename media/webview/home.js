@@ -174,9 +174,6 @@ function quickAction(action, featureId) {
 		case "openGitView":
 			send("openGitView", { featureId });
 			break;
-		case "syncNames":
-			send("syncNames");
-			break;
 		case "refresh":
 			send("refresh");
 			break;
@@ -273,22 +270,9 @@ function updateActivityContent(preId, emptyId, content) {
 	}
 }
 
-const ATTENTION_LABELS = {
-	working: "Working",
-	waiting_for_user: "Waiting for you",
-	idle: "Idle",
-	failed: "Failed",
-	done: "Done",
-	unknown: "Unknown",
-};
-
 function updateAttention(agent) {
-	const status = agent.status || "unknown";
-	const presented = agent.presentedState || {
-		label:
-			status === "unsupported" ? "Running" : ATTENTION_LABELS[status] || status,
-		tone: status,
-	};
+	const card = agent.cardPresentation || {};
+	const presented = card.primaryState || { label: "Unknown", tone: "muted" };
 	const dot = document.getElementById(`agent-attention-dot-${agent.id}`);
 	if (dot) {
 		dot.className = `agent-status-dot primary-state-${presented.tone}`;
@@ -303,46 +287,21 @@ function updateAttention(agent) {
 		lifecycleBadge.title = presented.detail || "";
 	}
 
-	updateBindingBadge(agent);
+	updateSessionAction(agent.id, card.sessionAction);
 }
 
-// Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
-// binding at all) renders nothing — it is the quiet, expected state.
-const BINDING_LABELS = {
-	pending: "Session pending",
-	ambiguous: "Ambiguous session",
-	unverified: "Session lost",
-	unsupported: "No session tracking",
-};
-
-function updateBindingBadge(agent) {
-	const badge = document.getElementById(`agent-binding-badge-${agent.id}`);
+function updateSessionAction(agentId, action) {
+	const badge = document.getElementById(`agent-binding-badge-${agentId}`);
 	if (!badge) return;
-	if (agent.lifecycleStatus === "done") {
+	if (!action) {
 		badge.style.display = "none";
-		badge.textContent = "";
 		badge.title = "";
 		return;
 	}
 
-	const state = agent.bindingState;
-	const label = state && state !== "bound" ? BINDING_LABELS[state] : null;
-	if (!label) {
-		badge.style.display = "none";
-		badge.textContent = "";
-		badge.title = "";
-		return;
-	}
-
-	let tooltip = agent.bindingDetail || "";
-	if (state === "ambiguous" && tooltip) {
-		tooltip +=
-			" Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
-	}
-
-	badge.className = `agent-tool-badge binding-badge binding-${state}`;
-	badge.textContent = label;
-	badge.title = tooltip;
+	badge.className = `agent-tool-badge ${action.className}`;
+	badge.textContent = action.label;
+	badge.title = action.tooltip || "";
 	badge.style.display = "";
 }
 

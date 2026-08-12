@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
-import { presentSessionBinding } from "../agents/attention/sessionBindingPresentation";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
-import { presentAgentState } from "../agents/observation/presentAgentState";
+import { presentAgentCard } from "../agents/observation/presentAgentCard";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
@@ -380,9 +379,6 @@ export class HomePanel {
 			case "deleteFeature":
 				run("agentSpace.deleteFeature", message.featureId);
 				break;
-			case "syncNames":
-				run("agentSpace.syncSessionNames");
-				break;
 			case "toggleIsolation":
 				run("agentSpace.toggleIsolation", message.featureId);
 				break;
@@ -668,15 +664,10 @@ export class HomePanel {
 		this.panel.webview.postMessage({
 			type: "agentAttentionUpdate",
 			agents: agents.map((agent) => ({
-				presentedState: presentAgentState(
+				cardPresentation: presentAgentCard(
 					resolved.ctx.agentManager.observe(agent),
 				),
 				id: agent.id,
-				status: agent.attentionStatus ?? "unknown",
-				lifecycleStatus: agent.status,
-				reason: agent.attentionReason ?? "No current attention evidence",
-				bindingState: agent.sessionBinding?.state,
-				bindingDetail: agent.sessionBinding?.detail,
 			})),
 		});
 
@@ -1052,7 +1043,8 @@ export class HomePanel {
 			<div class="header-color-dot" style="background: ${dotColor}"></div>
 			<div class="header-info">
 				<div class="header-title">${this.escapeHtml(feature.name)}</div>
-				<div class="header-branch">${this.escapeHtml(feature.branch)}</div>
+				<div class="header-branch">Checkout · ${this.escapeHtml(feature.branch)}</div>
+				${feature.primaryBranchRef && feature.primaryBranchRef !== feature.branch ? `<div class="header-branch">Delivery · ${this.escapeHtml(feature.primaryBranchRef)}</div>` : ""}
 			</div>
 			<div class="header-actions">
 				<button class="header-action-btn" onclick="quickAction('refresh', '${feature.id}')" title="Refresh">
@@ -1064,7 +1056,10 @@ export class HomePanel {
 			</div>
 		</div>
 			<div class="workspace-content">
-				${this.renderFeatureProvisioning(feature)}
+					${this.renderFeatureProvisioning(
+						feature,
+						ctx.featureManager?.isProvisioningActive?.(feature.id) ?? false,
+					)}
 				${this.renderFeatureCockpit(cockpit, snapshot)}
 				${runtimeNotice}
 			${
@@ -1126,7 +1121,8 @@ export class HomePanel {
 .agent-status-dot.primary-state-working { background: var(--vscode-testing-iconPassed); animation: pulse-green 2s ease-in-out infinite; }
 .agent-status-dot.primary-state-warning { background: var(--vscode-notificationsWarningIcon-foreground); }
 .agent-status-dot.primary-state-error { background: var(--vscode-errorForeground); }
-.agent-status-dot.primary-state-normal, .agent-status-dot.primary-state-muted { background: var(--vscode-disabledForeground); }
+.agent-status-dot.primary-state-normal { background: var(--vscode-charts-blue, var(--vscode-focusBorder)); }
+.agent-status-dot.primary-state-muted { background: var(--vscode-disabledForeground); }
 </style>
 </head>
 <body>
@@ -1182,6 +1178,8 @@ export class HomePanel {
 				</div>${this.renderCommittedFiles(committed)}`
 				: "";
 		const pull = cockpit.delivery.pullRequest;
+		const deliveryBranch =
+			snapshot.feature.primaryBranchRef ?? snapshot.feature.branch;
 		const pullAction = pull.number
 			? `<button class="quick-action-btn subtle" onclick="openPullRequest('${snapshot.feature.id}')">Open</button>`
 			: "";
@@ -1211,6 +1209,7 @@ export class HomePanel {
 				</div>
 				<div class="feature-cockpit-card">
 					<h3>Delivery</h3>
+					<div class="feature-cockpit-row"><span>Branch</span><div class="feature-cockpit-value"><strong>${this.escapeHtml(deliveryBranch)}</strong>${deliveryBranch !== snapshot.feature.branch ? `<div class="feature-cockpit-breakdown">Checkout continues on ${this.escapeHtml(snapshot.feature.branch)}</div>` : ""}</div></div>
 					<div class="feature-cockpit-row"><span>Target</span><div class="feature-cockpit-value"><strong>${this.escapeHtml(cockpit.delivery.target.label)}</strong> ${this.escapeHtml(cockpit.delivery.target.detail ?? "")}${this.renderReferenceHealthChip(snapshot.projectId)}</div></div>
 					<div class="feature-cockpit-row"><span>Tracking</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.tracking.tone}">${this.escapeHtml(cockpit.delivery.tracking.label)}</div></div>
 					<div class="feature-cockpit-row"><span>Pull request</span><div class="feature-cockpit-value feature-cockpit-value--${pull.tone}">${this.escapeHtml(pull.label)} ${pullAction}</div></div>
@@ -1537,9 +1536,15 @@ export class HomePanel {
 	}
 
 	// -- Feature Home render helpers ------------------------------
-	private renderFeatureProvisioning(feature: Feature): string {
+	private renderFeatureProvisioning(
+		feature: Feature,
+		locallyActive = false,
+	): string {
 		const progress = feature.provisioning;
 		if (!progress || progress.state === "ready") return "";
+		const activelyProvisioning =
+			progress.state === "provisioning" && locallyActive;
+		const stateUnknown = progress.state === "provisioning" && !locallyActive;
 		const steps = progress.steps
 			.map((step) => {
 				const icon =
@@ -1548,12 +1553,23 @@ export class HomePanel {
 						: step.status === "failed"
 							? "!"
 							: step.status === "running"
-								? "…"
+								? activelyProvisioning
+									? "…"
+									: "?"
 								: "·";
-				return `<div class="lifecycle-step ${step.status}"><span>${step.status === "running" ? '<i class="lifecycle-spinner"></i>' : icon}</span><span>${this.escapeHtml(step.label)}</span>${step.error ? `<small>${this.escapeHtml(step.error)}</small>` : ""}</div>`;
+				return `<div class="lifecycle-step ${step.status}"><span>${step.status === "running" && activelyProvisioning ? '<i class="lifecycle-spinner"></i>' : icon}</span><span>${this.escapeHtml(step.label)}</span>${step.error ? `<small>${this.escapeHtml(step.error)}</small>` : ""}</div>`;
 			})
 			.join("");
-		return `<section class="lifecycle-card ${progress.state === "failed" ? "failed" : ""}"><strong>${progress.state === "failed" ? "Feature setup failed" : "Setting up feature"}</strong><div class="lifecycle-steps">${steps}</div>${progress.error ? `<p>${this.escapeHtml(progress.error)}</p>` : ""}</section>`;
+		const title =
+			progress.state === "failed"
+				? "Feature setup failed"
+				: stateUnknown
+					? "Feature setup state unknown"
+					: "Setting up feature";
+		const detail = stateUnknown
+			? "<p>No setup operation is active in this window. Git state was left unchanged.</p>"
+			: "";
+		return `<section class="lifecycle-card ${progress.state === "failed" ? "failed" : ""}"><strong>${title}</strong><div class="lifecycle-steps">${steps}</div>${detail}${progress.error ? `<p>${this.escapeHtml(progress.error)}</p>` : ""}</section>`;
 	}
 
 	private renderAgentsSection(
@@ -1630,17 +1646,25 @@ export class HomePanel {
 		const observation = this.projectManager
 			.resolveFeature(feature.id)
 			?.ctx.agentManager.observe(agent);
-		const presented = observation
-			? presentAgentState(observation)
-			: { label: "Unknown", tone: "muted" as const };
-		const isDone = agent.status === "done";
-		const bindingBadgeData = presentSessionBinding(
-			agent.sessionBinding,
-			agent.status,
+		const card = presentAgentCard(
+			observation ?? {
+				identity: {
+					agentName: agent.name,
+					sessionTitle: agent.sessionTitle,
+					providerId: agent.toolId,
+				},
+				lifecycle: { state: "unknown", source: "agentspace" },
+				attention: { state: "unknown" },
+				session: {
+					state: agent.sessionBinding?.state ?? "pending",
+					detail: agent.sessionBinding?.detail,
+				},
+			},
 		);
-		const bindingBadge = bindingBadgeData
-			? `<button id="agent-binding-badge-${agent.id}" class="agent-tool-badge ${bindingBadgeData.className}" title="${this.escapeHtml(bindingBadgeData.tooltip)}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')">⚠</button>`
-			: `<span id="agent-binding-badge-${agent.id}" class="agent-tool-badge" style="display:none"></span>`;
+		const presented = card.primaryState;
+		const isDone = agent.status === "done";
+		const sessionAction = card.sessionAction;
+		const bindingBadge = `<button id="agent-binding-badge-${agent.id}" class="agent-tool-badge ${sessionAction?.className ?? "binding-badge"}" title="${this.escapeHtml(sessionAction?.tooltip ?? "")}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')"${sessionAction ? "" : ' style="display:none"'}>${this.escapeHtml(sessionAction?.label ?? "Choose session")}</button>`;
 		const isErrored = agent.status === "errored";
 		const nameClass = isDone ? "agent-panel-name done" : "agent-panel-name";
 		const emptyState = isDone
@@ -1675,8 +1699,8 @@ export class HomePanel {
 		<div class="agent-panel ${isErrored ? "errored" : ""}" style="border-left: 2px solid ${color}">
 			<div class="agent-panel-header" id="agent-header-${agent.id}" onclick="toggleAgent('${agent.id}')">
 				<div id="agent-attention-dot-${agent.id}" class="agent-status-dot primary-state-${presented.tone}"></div>
-				<span class="${nameClass}" title="${this.escapeHtml(agent.name)}">${this.escapeHtml(agent.name)}</span>
-				${agent.sessionTitle ? `<span class="agent-session-title" title="${this.escapeHtml(agent.sessionTitle)}">${this.escapeHtml(agent.sessionTitle)}</span>` : ""}
+				<span class="${nameClass}" title="${this.escapeHtml(card.name)}">${this.escapeHtml(card.name)}</span>
+				${card.secondaryTitle ? `<span class="agent-session-title" title="${this.escapeHtml(card.secondaryTitle)}">${this.escapeHtml(card.secondaryTitle)}</span>` : ""}
 				<span id="agent-lifecycle-badge-${agent.id}" class="agent-tool-badge agent-lifecycle-badge primary-state-${presented.tone}" title="${this.escapeHtml(presented.detail ?? "")}">${presented.label}</span>
 				${toolBadge}
 				${startupBadge}
@@ -2037,9 +2061,6 @@ export class HomePanel {
 					${ICON_SERVER} Add Service
 				</button>
 				${hasBootstrap ? `<button class="quick-action-btn" onclick="quickAction('bootstrapFeature', '${feature.id}')">Bootstrap Worktree</button>` : ""}
-				<button class="quick-action-btn" onclick="quickAction('syncNames', '${feature.id}')">
-					${ICON_SYNC} Sync Names
-				</button>
 			</div>
 		</div>`;
 	}
@@ -2094,4 +2115,3 @@ const ICON_REFRESH = `<svg width="16" height="16" viewBox="0 0 16 16" fill="curr
 const ICON_PLUS = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>`;
 const ICON_FOLDER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10L14.5 3zm-.51 8.49V13h-12V7h12v4.49zm0-5.49h-12V3h4.29l.85.85.36.15H14v2z"/></svg>`;
 const ICON_SERVER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v1l-.5.5h-9l-.5-.5v-1l.5-.5zM5 4h1V3H5v1zm0 5h1V8H5v1z"/></svg>`;
-const ICON_SYNC = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.006 8.267L.78 9.5 0 8.73l2.09-2.07.76.01 2.09 2.12-.71.71-1.34-1.34c-.04 1.53.5 2.93 1.53 3.96a5.55 5.55 0 0 0 3.92 1.63l.04 1a6.55 6.55 0 0 1-4.63-1.92 6.48 6.48 0 0 1-1.79-4.53zm12.2-.53l-.76-.01-2.09-2.12.71-.71 1.34 1.34c.04-1.53-.5-2.93-1.53-3.96a5.55 5.55 0 0 0-3.92-1.63l-.04-1a6.55 6.55 0 0 1 4.63 1.92 6.47 6.47 0 0 1 1.78 4.53l1.22-1.23.78.77-2.12 2.1z"/></svg>`;

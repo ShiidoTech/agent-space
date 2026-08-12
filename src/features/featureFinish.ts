@@ -59,6 +59,26 @@ export function assessFeatureFinish(
 		);
 	}
 	const registeredPaths = parseRegisteredWorktreePaths(worktrees.stdout);
+	const featurePath = path.resolve(feature.worktreePath);
+	let activeFeatureBranch: string | undefined = feature.branch;
+	if (registeredPaths.has(featurePath)) {
+		const observed = ctx.gitClient.readSync(
+			["symbolic-ref", "--quiet", "--short", "HEAD"],
+			{ cwd: feature.worktreePath },
+		);
+		const branch =
+			observed.exitCode === 0 && !observed.error
+				? observed.stdout.trim() || undefined
+				: undefined;
+		const linked = branch
+			? feature.branchLinks
+				? feature.branchLinks.some((entry) => entry.ref === branch)
+				: branch === feature.branch
+			: false;
+		// A registered worktree is deletable only against its positively observed,
+		// Feature-linked checkout. Unknown or unrelated refs remain fail-closed.
+		activeFeatureBranch = linked ? branch : undefined;
+	}
 
 	const check = (
 		kind: FeatureFinishCheck["kind"],
@@ -114,7 +134,7 @@ export function assessFeatureFinish(
 	check(
 		"feature",
 		feature.worktreePath,
-		feature.branch,
+		activeFeatureBranch,
 		ctx.featureManager.getBaseBranchName(),
 	);
 	for (const agent of ctx.agentManager.getAgents(feature.id)) {
@@ -133,7 +153,7 @@ export function assessFeatureFinish(
 					? branch.stdout.trim() || undefined
 					: undefined
 				: ctx.agentManager.getAgentBranchName(feature, agent.id),
-			feature.branch,
+			activeFeatureBranch ?? feature.branch,
 			agent.id,
 		);
 	}

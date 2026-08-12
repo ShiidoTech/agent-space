@@ -79,10 +79,35 @@ export interface AgentSessionBinding {
 	detail: string;
 }
 
+export type FeatureBranchRole = "primary" | "continuation";
+
+/**
+ * Persisted relationship between the human Feature and one Git branch.
+ *
+ * `primaryBranchRef` is the stable delivery identity. `branch` remains the
+ * active worktree branch for compatibility with local Git operations.
+ */
+export interface FeatureBranchLink {
+	ref: string;
+	role: FeatureBranchRole;
+	linkedAt: string;
+	source: "feature_created" | "legacy_record" | "reflog_checkout";
+	/** Evidence retained when a continuation was proved from the commit graph. */
+	relation?: {
+		kind: "descends_from";
+		ref: string;
+	};
+}
+
 export interface Feature {
 	id: string;
 	name: string;
+	/** Active branch expected in the Feature worktree. */
 	branch: string;
+	/** Stable primary/delivery branch used to discover PR history. */
+	primaryBranchRef?: string;
+	/** Every branch explicitly or conservatively linked to this human Feature. */
+	branchLinks?: FeatureBranchLink[];
 	worktreePath: string;
 	status: FeatureStatus;
 	color: string;

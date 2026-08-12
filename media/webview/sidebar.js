@@ -43,11 +43,6 @@ function openGitView(e, id) {
 	send("openGitView", { featureId: id });
 }
 
-function syncNames(e) {
-	e.stopPropagation();
-	send("syncNames");
-}
-
 function attachProviderSession(e, featureId, agentId) {
 	e.stopPropagation();
 	send("attachProviderSession", { featureId: featureId, agentId: agentId });
@@ -255,64 +250,19 @@ const STATUS_LABELS = {
 	merged: "Merged",
 };
 
-const ATTENTION_LABELS = {
-	working: "Working",
-	waiting_for_user: "Waiting for you",
-	idle: "Idle",
-	failed: "Failed",
-	done: "Done",
-	unknown: "Unknown",
-};
-
-// Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
-// binding at all) renders nothing — it is the quiet, expected state.
-const BINDING_LABELS = {
-	pending: "Session pending",
-	ambiguous: "Ambiguous session",
-	unverified: "Session lost",
-	unsupported: "No session tracking",
-};
-
-const LIFECYCLE_LABELS = {
-	running: "Running",
-	stopped: "Stopped",
-	done: "Done",
-	errored: "Errored",
-	idle: "Idle",
-};
-
-function updateBindingBadge(agentEl, agent) {
-	if (agent.status === "done") {
-		var doneBadge = agentEl.querySelector(
-			'[data-binding-badge="' + agent.id + '"]',
-		);
-		if (doneBadge) doneBadge.remove();
-		return;
-	}
-	var badge = agentEl.querySelector('[data-binding-badge="' + agent.id + '"]');
-	var state = agent.bindingState;
-	var label = state && state !== "bound" ? BINDING_LABELS[state] : null;
-
-	if (!label) {
-		if (badge) badge.remove();
+function updateSessionAction(agentEl, agentId, action) {
+	var badge = agentEl.querySelector('[data-binding-badge="' + agentId + '"]');
+	if (!badge) return;
+	if (!action) {
+		badge.style.display = "none";
+		badge.title = "";
 		return;
 	}
 
-	var tooltip = agent.bindingDetail || "";
-	if (state === "ambiguous" && tooltip) {
-		tooltip +=
-			" Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
-	}
-
-	if (!badge) {
-		badge = document.createElement("span");
-		badge.setAttribute("data-binding-badge", agent.id);
-		var statusEl = agentEl.querySelector(".agent-status");
-		if (statusEl) statusEl.appendChild(badge);
-	}
-	badge.className = "binding-badge binding-" + state;
-	badge.textContent = label;
-	badge.title = tooltip;
+	badge.className = "binding-action " + action.className;
+	badge.textContent = action.label;
+	badge.title = action.tooltip || "";
+	badge.style.display = "";
 }
 
 window.addEventListener("message", function (event) {
@@ -369,13 +319,10 @@ window.addEventListener("message", function (event) {
 					continue;
 				}
 
-				var attention = agent.attentionStatus || "unknown";
-				var presented = agent.presentedState || {
-					label:
-						attention === "unsupported"
-							? "Running"
-							: ATTENTION_LABELS[attention] || attention,
-					tone: attention,
+				var cardPresentation = agent.cardPresentation || {};
+				var presented = cardPresentation.primaryState || {
+					label: "Unknown",
+					tone: "muted",
 				};
 				var dot = agentEl.querySelector(
 					'[data-attention-dot="' + agent.id + '"]',
@@ -384,7 +331,7 @@ window.addEventListener("message", function (event) {
 					dot.className = "status-dot primary-state-" + presented.tone;
 				}
 
-				updateBindingBadge(agentEl, agent);
+				updateSessionAction(agentEl, agent.id, cardPresentation.sessionAction);
 				var lifecycleBadge = agentEl.querySelector(
 					'[data-lifecycle-badge="' + agent.id + '"]',
 				);

@@ -1,6 +1,5 @@
 import type { Disposable } from "vscode";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
-import type { FeatureGitObservations } from "../git/featureGitObservations";
 import {
 	type GitHubObservation,
 	githubObservationFromRepository,
@@ -226,7 +225,11 @@ export class FeatureStateCoordinator implements Disposable {
 			let features: Feature[];
 			let source: FeatureSnapshotSource = { status: "known" };
 			try {
-				features = [base, ...ctx.store.loadFeatures()];
+				// Probe the persisted source so a read failure remains explicit, then use
+				// FeatureManager's read-only Git reconciliation. This ensures legacy
+				// branch recovery happens before the first local/GitHub observation.
+				ctx.store.loadFeatures();
+				features = [base, ...ctx.featureManager.getFeatures()];
 			} catch (error) {
 				source = {
 					status: "unknown",
@@ -300,6 +303,7 @@ export class FeatureStateCoordinator implements Disposable {
 		projectObservation: FeatureGitProjectObservation,
 		source: FeatureSnapshotSource,
 	): Promise<FeatureSnapshot> {
+		const deliveryBranch = deliveryBranchRef(feature);
 		const git = await ctx.featureGitInspector
 			.inspect(
 				{
@@ -335,7 +339,16 @@ export class FeatureStateCoordinator implements Disposable {
 				(service) => service.tmuxSession,
 			),
 		});
-		const github = await this.observeGithub(ctx, git, feature.branch, baseRef);
+		const deliveryHeadSha =
+			deliveryBranch === feature.branch && git.feature.status === "known"
+				? git.feature.value.sha
+				: await resolveBranchHead(ctx, deliveryBranch);
+		const github = await this.observeGithub(
+			ctx,
+			deliveryBranch,
+			deliveryHeadSha,
+			baseRef,
+		);
 		const mergedHead =
 			github.status === "known" &&
 			github.resolution.outcome === "selected" &&
@@ -377,8 +390,8 @@ export class FeatureStateCoordinator implements Disposable {
 
 	private async observeGithub(
 		ctx: ProjectContext,
-		git: FeatureGitObservations,
 		branch: string,
+		queriedHeadSha: string | undefined,
 		baseRef: string | undefined,
 	): Promise<GitHubObservation> {
 		try {
@@ -386,8 +399,7 @@ export class FeatureStateCoordinator implements Disposable {
 			return await service.observe({
 				repoRoot: ctx.project.repoPath,
 				branch,
-				queriedHeadSha:
-					git.feature.status === "known" ? git.feature.value.sha : undefined,
+				queriedHeadSha,
 				expectedBaseRef: baseRef,
 			});
 		} catch {
@@ -450,6 +462,30 @@ export class FeatureStateCoordinator implements Disposable {
 	private emit(snapshot: FeatureSnapshot | undefined): void {
 		for (const listener of this.listeners) listener(snapshot);
 	}
+}
+
+function deliveryBranchRef(feature: Feature): string {
+	return (
+		feature.primaryBranchRef ??
+		feature.branchLinks?.find((link) => link.role === "primary")?.ref ??
+		feature.branch
+	);
+}
+
+async function resolveBranchHead(
+	ctx: ProjectContext,
+	branch: string,
+): Promise<string | undefined> {
+	const result = await ctx.gitClient.read(
+		["rev-parse", "--verify", `${branch}^{commit}`],
+		{ cwd: ctx.project.repoPath },
+	);
+	const sha = result.stdout.trim();
+	return result.exitCode === 0 &&
+		!result.error &&
+		/^[0-9a-f]{40,64}$/iu.test(sha)
+		? sha
+		: undefined;
 }
 
 function readRuntime<T>(read: () => T) {

@@ -7,7 +7,12 @@ import { TERMINAL_COLOR_KEYS } from "../constants/colors";
 import { checkWorktreeDeletionSafety } from "../git/worktreeSafety";
 import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
-import type { Feature, FeatureStatus, IsolationMode } from "../types";
+import type {
+	Feature,
+	FeatureBranchLink,
+	FeatureStatus,
+	IsolationMode,
+} from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { normalizeFeatureName } from "./featureName";
 
@@ -33,10 +38,66 @@ export interface FeatureLifecycleDiagnostic {
 	status: FeatureLifecycleStatus;
 }
 
+export type FeatureBranchCheckoutObservation =
+	| {
+			readonly status: "known";
+			readonly ref: string;
+			readonly linked: boolean;
+			readonly role?: FeatureBranchLink["role"];
+	  }
+	| { readonly status: "detached"; readonly headSha: string }
+	| { readonly status: "unknown"; readonly reason: string };
+
+/** Read model for a Feature's delivery identity and current checkout. */
+export interface FeatureBranchState {
+	readonly primary: string;
+	readonly links: readonly Readonly<FeatureBranchLink>[];
+	readonly checkout: FeatureBranchCheckoutObservation;
+}
+
+interface RegisteredWorktree {
+	path: string;
+	headSha?: string;
+	branchRef?: string;
+	detached: boolean;
+	bare: boolean;
+	prunable: boolean;
+}
+
+function parseRegisteredWorktrees(output: string): RegisteredWorktree[] {
+	const worktrees: RegisteredWorktree[] = [];
+	let current: RegisteredWorktree | undefined;
+
+	for (const line of output.split(/\r?\n/)) {
+		if (!line) continue;
+		const separator = line.indexOf(" ");
+		const key = separator < 0 ? line : line.slice(0, separator);
+		const value = separator < 0 ? "" : line.slice(separator + 1);
+		if (key === "worktree") {
+			if (current) worktrees.push(current);
+			current = {
+				path: value,
+				detached: false,
+				bare: false,
+				prunable: false,
+			};
+		} else if (current) {
+			if (key === "HEAD") current.headSha = value;
+			if (key === "branch") current.branchRef = value;
+			if (key === "detached") current.detached = true;
+			if (key === "bare") current.bare = true;
+			if (key === "prunable") current.prunable = true;
+		}
+	}
+	if (current) worktrees.push(current);
+	return worktrees;
+}
+
 export class FeatureManager {
 	private features: Feature[];
 	private cachedBaseBranch: string | undefined;
 	private onChangeCallback?: () => void;
+	private readonly activeProvisioningIds = new Set<string>();
 
 	constructor(
 		private readonly store: Store,
@@ -45,6 +106,7 @@ export class FeatureManager {
 		private config: ProjectConfig = {},
 	) {
 		this.features = store.loadFeatures();
+		this.recoverCompletedProvisioning();
 	}
 
 	setOnChange(callback: () => void): void {
@@ -212,48 +274,327 @@ export class FeatureManager {
 	}
 
 	/**
-	 * A feature is represented by a dedicated worktree. Git therefore owns the
-	 * authoritative branch identity. If that branch is renamed or changed
-	 * outside Agent Space, reconcile the persisted metadata before any status,
-	 * PR, deletion-safety, or per-agent operation consumes `feature.branch`.
-	 *
-	 * Detached/missing worktrees deliberately keep the persisted value: there is
-	 * no trustworthy replacement branch to invent in that state.
+	 * Migrate the branch model without treating the worktree checkout as the
+	 * delivery identity. A continuation is linked only when both the worktree
+	 * reflog and commit ancestry prove its relationship to an existing link.
+	 * No Git ref is created, moved, fetched, checked out, or deleted here.
 	 */
-	private reconcileFeatureBranch(feature: Feature): void {
-		try {
-			const branch = String(
-				execSync("git symbolic-ref --quiet --short HEAD", {
-					cwd: feature.worktreePath,
-					encoding: "utf-8",
-					stdio: ["ignore", "pipe", "pipe"],
-				}),
-			).trim();
-			if (!branch || branch === feature.branch) return;
+	private reconcileFeatureBranches(feature: Feature): FeatureBranchState {
+		const checkout = this.observeFeatureCheckout(feature);
+		let changed = false;
+		const hadLinks = Array.isArray(feature.branchLinks);
 
-			feature.branch = branch;
-			this.store.saveFeatures(this.features);
-		} catch {
-			// Detached HEAD, missing worktree, or unavailable Git: retain the
-			// persisted branch instead of guessing.
+		if (!hadLinks) {
+			const recovered = this.recoverLegacyPrimary(feature, checkout);
+			if (recovered) {
+				feature.primaryBranchRef = recovered.primary;
+				feature.branchLinks = [
+					this.branchLink(recovered.primary, "primary", "reflog_checkout"),
+					this.branchLink(
+						recovered.continuation,
+						"continuation",
+						"reflog_checkout",
+						recovered.primary,
+					),
+				];
+				changed = true;
+			} else {
+				feature.primaryBranchRef = feature.branch;
+				feature.branchLinks = [
+					this.branchLink(feature.branch, "primary", "legacy_record"),
+				];
+				changed = true;
+			}
+		}
+
+		const links = feature.branchLinks ?? [];
+		const linkedPrimary = links.find((link) => link.role === "primary")?.ref;
+		if (!feature.primaryBranchRef) {
+			feature.primaryBranchRef = linkedPrimary ?? feature.branch;
+			changed = true;
+		}
+		if (!links.some((link) => link.role === "primary")) {
+			links.unshift(
+				this.branchLink(feature.primaryBranchRef, "primary", "legacy_record"),
+			);
+			changed = true;
+		}
+		let primary = feature.primaryBranchRef;
+		if (linkedPrimary && linkedPrimary !== primary) {
+			feature.primaryBranchRef = linkedPrimary;
+			primary = linkedPrimary;
+			changed = true;
+		}
+
+		if (
+			checkout.status === "known" &&
+			!links.some((link) => link.ref === checkout.ref) &&
+			this.isProvedContinuation(feature, checkout.ref, links)
+		) {
+			links.push(
+				this.branchLink(
+					checkout.ref,
+					"continuation",
+					"reflog_checkout",
+					primary,
+				),
+			);
+			changed = true;
+		}
+		if (
+			checkout.status === "known" &&
+			links.some((link) => link.ref === checkout.ref) &&
+			feature.branch !== checkout.ref
+		) {
+			feature.branch = checkout.ref;
+			changed = true;
+		}
+
+		if (changed) this.store.saveFeatures(this.features);
+		return this.branchState(feature, checkout);
+	}
+
+	private observeFeatureCheckout(
+		feature: Feature,
+	): FeatureBranchCheckoutObservation {
+		try {
+			const branch = this.git(
+				"git symbolic-ref --quiet --short HEAD",
+				feature.worktreePath,
+			);
+			if (!branch) {
+				return { status: "unknown", reason: "Git returned an empty branch." };
+			}
+			const link = feature.branchLinks?.find(
+				(candidate) => candidate.ref === branch,
+			);
+			return {
+				status: "known",
+				ref: branch,
+				linked: Boolean(link),
+				...(link ? { role: link.role } : {}),
+			};
+		} catch (branchError) {
+			try {
+				const headSha = this.git(
+					"git rev-parse --verify HEAD^{commit}",
+					feature.worktreePath,
+				);
+				if (isCommitSha(headSha)) return { status: "detached", headSha };
+			} catch {
+				// The worktree or Git state is unavailable, not proven detached.
+			}
+			return {
+				status: "unknown",
+				reason:
+					branchError instanceof Error
+						? branchError.message
+						: "The worktree branch could not be observed.",
+			};
 		}
 	}
 
+	private recoverLegacyPrimary(
+		feature: Feature,
+		checkout: FeatureBranchCheckoutObservation,
+	): { primary: string; continuation: string } | undefined {
+		if (checkout.status !== "known" || checkout.ref !== feature.branch) {
+			return undefined;
+		}
+		const transition = this.recentCheckoutInto(feature, checkout.ref);
+		if (!transition) return undefined;
+		if (
+			!branchMatchesFeatureName(transition.from, feature.name) ||
+			branchMatchesFeatureName(checkout.ref, feature.name)
+		) {
+			return undefined;
+		}
+		const previousSha = this.resolveBranch(transition.from);
+		const currentSha = this.resolveBranch(checkout.ref);
+		const previousUpstreamSha = this.resolveUpstream(transition.from);
+		if (
+			!previousSha ||
+			!currentSha ||
+			previousUpstreamSha !== previousSha ||
+			!this.isAncestor(previousSha, currentSha)
+		) {
+			return undefined;
+		}
+		return { primary: transition.from, continuation: checkout.ref };
+	}
+
+	private isProvedContinuation(
+		feature: Feature,
+		checkoutRef: string,
+		links: readonly FeatureBranchLink[],
+	): boolean {
+		const transition = this.recentCheckoutInto(feature, checkoutRef);
+		if (!transition || !links.some((link) => link.ref === transition.from)) {
+			return false;
+		}
+		const primary =
+			feature.primaryBranchRef ??
+			links.find((link) => link.role === "primary")?.ref;
+		if (!primary) return false;
+		const primarySha = this.resolveBranch(primary);
+		const checkoutSha = this.resolveBranch(checkoutRef);
+		return Boolean(
+			primarySha && checkoutSha && this.isAncestor(primarySha, checkoutSha),
+		);
+	}
+
+	private recentCheckoutInto(
+		feature: Feature,
+		toRef: string,
+	): { from: string; to: string } | undefined {
+		try {
+			const messages = this.git(
+				"git reflog --format=%gs -n 25 HEAD",
+				feature.worktreePath,
+			);
+			for (const message of messages.split(/\r?\n/u)) {
+				const match = /^checkout: moving from (.+) to (.+)$/u.exec(
+					message.trim(),
+				);
+				if (!match || match[2] !== toRef) continue;
+				if (!isSafeBranchName(match[1]) || !isSafeBranchName(match[2])) {
+					return undefined;
+				}
+				return { from: match[1], to: match[2] };
+			}
+		} catch {
+			// Reflog absence is insufficient proof, so no branch is linked.
+		}
+		return undefined;
+	}
+
+	private resolveBranch(branch: string): string | undefined {
+		if (!isSafeBranchName(branch)) return undefined;
+		try {
+			const sha = this.git(
+				`git rev-parse --verify "refs/heads/${branch}^{commit}"`,
+				this.repoRoot,
+			);
+			return isCommitSha(sha) ? sha.toLowerCase() : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private resolveUpstream(branch: string): string | undefined {
+		if (!isSafeBranchName(branch)) return undefined;
+		try {
+			const sha = this.git(
+				`git rev-parse --verify "${branch}@{upstream}^{commit}"`,
+				this.repoRoot,
+			);
+			return isCommitSha(sha) ? sha.toLowerCase() : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	private isAncestor(ancestorSha: string, descendantSha: string): boolean {
+		try {
+			this.git(
+				`git merge-base --is-ancestor "${ancestorSha}" "${descendantSha}"`,
+				this.repoRoot,
+			);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
+	private branchLink(
+		ref: string,
+		role: FeatureBranchLink["role"],
+		source: FeatureBranchLink["source"],
+		relationRef?: string,
+	): FeatureBranchLink {
+		return {
+			ref,
+			role,
+			linkedAt: new Date().toISOString(),
+			source,
+			...(relationRef
+				? { relation: { kind: "descends_from" as const, ref: relationRef } }
+				: {}),
+		};
+	}
+
+	private branchState(
+		feature: Feature,
+		checkout: FeatureBranchCheckoutObservation,
+	): FeatureBranchState {
+		const links = (feature.branchLinks ?? []).map((link) => ({ ...link }));
+		if (checkout.status !== "known") {
+			return {
+				primary: feature.primaryBranchRef ?? feature.branch,
+				links,
+				checkout,
+			};
+		}
+		const link = links.find((candidate) => candidate.ref === checkout.ref);
+		return {
+			primary: feature.primaryBranchRef ?? feature.branch,
+			links,
+			checkout: {
+				status: "known",
+				ref: checkout.ref,
+				linked: Boolean(link),
+				...(link ? { role: link.role } : {}),
+			},
+		};
+	}
+
+	private git(command: string, cwd: string): string {
+		return String(
+			execSync(command, {
+				cwd,
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "pipe"],
+			}),
+		).trim();
+	}
+
 	reload(): void {
-		this.features = this.store.loadFeatures();
+		const loaded = this.store.loadFeatures();
+		// The storage watcher also observes this extension host's own atomic writes.
+		// Keep locally-owned objects alive across those events: an async Git step may
+		// still hold one until it reacquires the record by id after its await.
+		for (const current of this.features) {
+			if (!this.activeProvisioningIds.has(current.id)) continue;
+			const index = loaded.findIndex((feature) => feature.id === current.id);
+			if (index >= 0) loaded[index] = current;
+			else loaded.push(current);
+		}
+		this.features = loaded;
+		this.recoverCompletedProvisioning();
+	}
+
+	/** A spinner is honest only while this extension host owns the operation. */
+	isProvisioningActive(id: string): boolean {
+		return this.activeProvisioningIds.has(id);
 	}
 
 	getFeatures(): Feature[] {
 		for (const feature of this.features) {
-			this.reconcileFeatureBranch(feature);
+			this.reconcileFeatureBranches(feature);
 		}
 		return [...this.features];
 	}
 
 	getFeature(id: string): Feature | undefined {
 		const feature = this.features.find((f) => f.id === id);
-		if (feature) this.reconcileFeatureBranch(feature);
+		if (feature) this.reconcileFeatureBranches(feature);
 		return feature;
+	}
+
+	/** Observe linked branches without conflating checkout and delivery identity. */
+	getFeatureBranchState(id: string): FeatureBranchState | undefined {
+		const feature = this.features.find((candidate) => candidate.id === id);
+		return feature ? this.reconcileFeatureBranches(feature) : undefined;
 	}
 
 	/**
@@ -271,7 +612,11 @@ export class FeatureManager {
 		branchKind?: string,
 	): Feature {
 		const feature = this.createFeatureRecord(name, isolation, branchKind);
-		this.provisionFeatureSync(feature.id);
+		try {
+			this.provisionFeatureSync(feature.id);
+		} finally {
+			this.activeProvisioningIds.delete(feature.id);
+		}
 		return feature;
 	}
 
@@ -311,6 +656,15 @@ export class FeatureManager {
 			id,
 			name: displayName,
 			branch,
+			primaryBranchRef: branch,
+			branchLinks: [
+				{
+					ref: branch,
+					role: "primary",
+					linkedAt: new Date().toISOString(),
+					source: "feature_created",
+				},
+			],
 			worktreePath,
 			status: "active",
 			color: this.pickColor(displayName),
@@ -330,11 +684,13 @@ export class FeatureManager {
 		};
 
 		this.features.push(feature);
+		this.activeProvisioningIds.add(feature.id);
 		this.store.saveFeatures(this.features);
 		return feature;
 	}
 
 	async provisionFeature(id: string): Promise<Feature | undefined> {
+		this.activeProvisioningIds.add(id);
 		// Yield once so the cockpit paints its pending state, then keep Git off
 		// the extension host thread while the worktree is being created.
 		await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -358,39 +714,133 @@ export class FeatureManager {
 				this.saveAndNotify();
 			}
 			throw error;
+		} finally {
+			this.activeProvisioningIds.delete(id);
 		}
 	}
 
 	private async provisionFeatureAsync(id: string): Promise<void> {
-		const feature = this.features.find((candidate) => candidate.id === id);
-		if (!feature?.provisioning) return;
+		const initial = this.features.find((candidate) => candidate.id === id);
+		if (!initial?.provisioning) return;
+		const expectedBranch = initial.branch;
+		const expectedWorktreePath = initial.worktreePath;
 		const baseBranch = this.getBaseBranch();
-		feature.provisioning.steps[0].status = "running";
+		initial.provisioning.steps[0].status = "running";
 		this.saveAndNotify();
 		const baseResult = await execFileAsync("git", ["rev-parse", baseBranch], {
 			cwd: this.repoRoot,
 			encoding: "utf8",
 		});
-		feature.createdFromSha = String(baseResult.stdout).trim();
-		feature.provisioning.steps[0].status = "completed";
-		feature.provisioning.steps[1].status = "running";
+		const afterBase = this.getProvisioningFeature(
+			id,
+			expectedBranch,
+			expectedWorktreePath,
+		);
+		afterBase.createdFromSha = String(baseResult.stdout).trim();
+		afterBase.provisioning.steps[0].status = "completed";
+		afterBase.provisioning.steps[1].status = "running";
 		this.saveAndNotify();
 		await execFileAsync(
 			"git",
 			[
 				"worktree",
 				"add",
-				feature.worktreePath,
+				expectedWorktreePath,
 				"-b",
-				feature.branch,
+				expectedBranch,
 				baseBranch,
 			],
 			{ cwd: this.repoRoot, encoding: "utf8" },
 		);
-		feature.provisioning.state = "ready";
-		feature.provisioning.currentStepId = undefined;
-		for (const step of feature.provisioning.steps) step.status = "completed";
+		const completed = this.getProvisioningFeature(
+			id,
+			expectedBranch,
+			expectedWorktreePath,
+		);
+		completed.provisioning.state = "ready";
+		completed.provisioning.currentStepId = undefined;
+		for (const step of completed.provisioning.steps) step.status = "completed";
 		this.saveAndNotify();
+	}
+
+	private getProvisioningFeature(
+		id: string,
+		expectedBranch: string,
+		expectedWorktreePath: string,
+	): Feature & { provisioning: NonNullable<Feature["provisioning"]> } {
+		const feature = this.features.find((candidate) => candidate.id === id);
+		if (!feature?.provisioning) {
+			throw new Error(
+				"Feature setup metadata disappeared while Git was running",
+			);
+		}
+		if (
+			feature.branch !== expectedBranch ||
+			path.resolve(feature.worktreePath) !== path.resolve(expectedWorktreePath)
+		) {
+			throw new Error("Feature setup metadata changed while Git was running");
+		}
+		return feature as Feature & {
+			provisioning: NonNullable<Feature["provisioning"]>;
+		};
+	}
+
+	/**
+	 * Recover only from positive, repository-owned Git evidence. Missing,
+	 * partial, detached or unreadable state remains provisioning-but-unowned;
+	 * the UI presents that as unknown and never starts a destructive retry.
+	 */
+	private recoverCompletedProvisioning(): void {
+		const orphaned = this.features.filter(
+			(feature) =>
+				feature.provisioning?.state === "provisioning" &&
+				!this.activeProvisioningIds.has(feature.id),
+		);
+		if (orphaned.length === 0) return;
+
+		let registered: RegisteredWorktree[];
+		try {
+			registered = parseRegisteredWorktrees(
+				String(
+					execSync("git worktree list --porcelain", {
+						cwd: this.repoRoot,
+						encoding: "utf-8",
+						stdio: ["ignore", "pipe", "pipe"],
+					}),
+				),
+			);
+		} catch {
+			return;
+		}
+
+		let changed = false;
+		for (const feature of orphaned) {
+			const worktree = registered.find(
+				(candidate) =>
+					path.resolve(candidate.path) === path.resolve(feature.worktreePath),
+			);
+			if (
+				!worktree?.headSha ||
+				worktree.branchRef !== `refs/heads/${feature.branch}` ||
+				worktree.detached ||
+				worktree.bare ||
+				worktree.prunable
+			) {
+				continue;
+			}
+
+			const progress = feature.provisioning;
+			if (!progress) continue;
+			progress.state = "ready";
+			progress.currentStepId = undefined;
+			progress.error = undefined;
+			for (const step of progress.steps) {
+				step.status = "completed";
+				step.error = undefined;
+			}
+			changed = true;
+		}
+		if (changed) this.store.saveFeatures(this.features);
 	}
 
 	private provisionFeatureSync(id: string): void {
@@ -429,12 +879,16 @@ export class FeatureManager {
 	 * any destructive step.
 	 */
 	getDeletionSafety(feature: Feature) {
-		this.reconcileFeatureBranch(feature);
+		const branches = this.reconcileFeatureBranches(feature);
+		const checkedOutBranch =
+			branches.checkout.status === "known" && branches.checkout.linked
+				? branches.checkout.ref
+				: undefined;
 		return checkWorktreeDeletionSafety({
 			repoRoot: this.repoRoot,
 			worktreeBase: this.worktreeBase,
 			worktreePath: feature.worktreePath,
-			branch: feature.branch,
+			branch: checkedOutBranch,
 			baseBranch: this.getBaseBranch(),
 		});
 	}
@@ -561,4 +1015,24 @@ export class FeatureManager {
 		}
 		return TERMINAL_COLOR_KEYS[Math.abs(hash) % TERMINAL_COLOR_KEYS.length];
 	}
+}
+
+function isCommitSha(value: string): boolean {
+	return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value);
+}
+
+/** Restrictive by design: an unusual ref remains unlinked until explicit UI. */
+function isSafeBranchName(value: string): boolean {
+	return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value) && !value.includes("..");
+}
+
+function branchMatchesFeatureName(
+	branch: string,
+	featureName: string,
+): boolean {
+	const leaf = branch.slice(branch.lastIndexOf("/") + 1);
+	return (
+		normalizeFeatureName(leaf).toLowerCase() ===
+		normalizeFeatureName(featureName).toLowerCase()
+	);
 }

@@ -260,4 +260,37 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(refreshProjectReferenceHealth).toHaveBeenCalledTimes(1);
 		expect(reconcile).toHaveBeenCalledTimes(1);
 	});
+
+	it("renders a setup spinner only for a locally-owned provisioning attempt", () => {
+		const panel = buildPanel();
+		const provisioningFeature: Feature = {
+			...feature,
+			provisioning: {
+				state: "provisioning",
+				steps: [
+					{
+						id: "resolve-base",
+						label: "Preparing feature",
+						status: "running",
+					},
+				],
+			},
+		};
+		const render = (
+			panel as unknown as {
+				renderFeatureProvisioning: (
+					feature: Feature,
+					locallyActive: boolean,
+				) => string;
+			}
+		).renderFeatureProvisioning.bind(panel);
+
+		const local = render(provisioningFeature, true);
+		const orphaned = render(provisioningFeature, false);
+
+		expect(local).toContain("Setting up feature");
+		expect(local).toContain("lifecycle-spinner");
+		expect(orphaned).toContain("Feature setup state unknown");
+		expect(orphaned).not.toContain("lifecycle-spinner");
+	});
 });

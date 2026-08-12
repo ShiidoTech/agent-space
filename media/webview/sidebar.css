@@ -542,7 +542,23 @@ button {
  * work. */
 .agent-card.agent-focused {
 	border-left-color: var(--vscode-focusBorder);
-	background-color: var(--vscode-list-activeSelectionBackground);
+	background: color-mix(
+		in srgb,
+		var(--vscode-list-activeSelectionBackground) 82%,
+		var(--vscode-focusBorder)
+	);
+	box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+	color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+
+.agent-card.agent-focused .agent-name {
+	font-weight: 600;
+}
+
+.agent-card.agent-focused .agent-tool,
+.agent-card.agent-focused .agent-session-title {
+	color: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+	opacity: 0.82;
 }
 
 .agent-card.opening {
