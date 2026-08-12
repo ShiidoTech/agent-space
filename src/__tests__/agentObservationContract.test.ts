@@ -63,6 +63,24 @@ describe("Agent observation contract", () => {
 		).toMatchObject({ label: "Unknown", detail: "Read failed" });
 	});
 
+	it("presents lifecycle observation failures as unknown, not stopped", () => {
+		expect(
+			presentAgentState(
+				observation({
+					lifecycle: {
+						state: "unknown",
+						source: "tmux",
+						reason: "tmux observation failed: unavailable",
+					},
+				}),
+			),
+		).toMatchObject({
+			label: "Unknown",
+			tone: "warning",
+			detail: "tmux observation failed: unavailable",
+		});
+	});
+
 	it("exposes tones consumed by the Sidebar primary-state dot classes", () => {
 		const cases = [
 			["working", "working"],

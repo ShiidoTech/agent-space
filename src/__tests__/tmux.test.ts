@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TmuxIntegration } from "../agents/tmux";
+import { verifySessionsStopped } from "../features/featureFinish";
 
 vi.mock("../utils/platform", () => ({
 	commandExists: vi.fn(),
@@ -139,6 +140,37 @@ describe("TmuxIntegration", () => {
 				"-t",
 				"agent-space-safe; touch /tmp/pwned",
 			]);
+		});
+	});
+
+	describe("observeSessions", () => {
+		it("proves an empty session set when tmux reports that no server is running", () => {
+			mockCommandExists.mockReturnValue(true);
+			mockExecFile.mockImplementation(() => {
+				throw Object.assign(new Error("tmux exited"), {
+					status: 1,
+					stderr: "no server running on /tmp/tmux-1000/default",
+				});
+			});
+
+			const observation = tmux.observeSessions();
+
+			expect(observation).toEqual({ status: "known", sessions: [] });
+			expect(
+				verifySessionsStopped(new Set(["agent-space-f1-a1"]), observation),
+			).toEqual({ status: "verified" });
+		});
+
+		it("keeps permission and arbitrary tmux failures unknown", () => {
+			mockCommandExists.mockReturnValue(true);
+			mockExecFile.mockImplementation(() => {
+				throw Object.assign(new Error("tmux exited"), {
+					status: 1,
+					stderr: "permission denied",
+				});
+			});
+
+			expect(tmux.observeSessions()).toMatchObject({ status: "unknown" });
 		});
 	});
 

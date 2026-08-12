@@ -607,7 +607,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
 				<span class="status-badge status-${gitStatus}" data-status-badge="${feature.id}">${gitStatusLabel(gitStatus)}</span>
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
-				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Delete Feature">${ICON_DELETE}</button>
+				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Finish Feature">${ICON_DELETE}</button>
 			</div>
 			<div class="feature-card-body" id="card-body-${feature.id}">
 				${bodyHtml}

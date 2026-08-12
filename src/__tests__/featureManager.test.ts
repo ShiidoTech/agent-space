@@ -21,6 +21,39 @@ describe("FeatureManager", () => {
 	let store: Store;
 	let manager: FeatureManager;
 	const repoRoot = "/fake/repo";
+	const featureSha = "a".repeat(40);
+	const baseSha = "b".repeat(40);
+
+	function mockCleanMergedDeletion(remove?: () => string): void {
+		mockExecSync.mockImplementation((command: string) => {
+			const value = String(command);
+			if (value.includes("git status --porcelain")) return "";
+			if (value.includes('rev-parse --verify "feat/')) return featureSha;
+			if (value.includes('rev-parse --verify "feature/')) return featureSha;
+			if (value.includes('rev-parse --verify "main')) return baseSha;
+			if (value.includes("merge-base --is-ancestor")) return "";
+			if (value.includes("rev-list --count")) return "0";
+			if (value.includes("git worktree remove")) return remove?.() ?? "";
+			return "";
+		});
+	}
+
+	function mockCleanSquashMergedDeletion(remove?: () => string): void {
+		mockExecSync.mockImplementation((command: string) => {
+			const value = String(command);
+			if (value.includes("symbolic-ref")) return "";
+			if (value.includes("git status --porcelain")) return "";
+			if (value.includes('rev-parse --verify "feat/')) return featureSha;
+			if (value.includes('rev-parse --verify "feature/')) return featureSha;
+			if (value.includes('rev-parse --verify "main')) return baseSha;
+			if (value.includes("merge-base --is-ancestor")) {
+				throw Object.assign(new Error("not ancestor"), { status: 1 });
+			}
+			if (value.includes("rev-list --count")) return "1";
+			if (value.includes("git worktree remove")) return remove?.() ?? "";
+			return "";
+		});
+	}
 
 	beforeEach(() => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-test-"));
@@ -29,6 +62,7 @@ describe("FeatureManager", () => {
 			store,
 			repoRoot,
 			path.join(repoRoot, ".worktrees"),
+			{ baseBranch: "main" },
 		);
 		mockExecSync.mockReset();
 		mockExecFile.mockReset();
@@ -241,10 +275,26 @@ describe("FeatureManager", () => {
 	});
 
 	describe("deleteFeature", () => {
+		it("can remove the worktree while preserving records for a resumable finish", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = manager.createFeature("resumable", "shared");
+			mockCleanMergedDeletion();
+
+			expect(manager.removeFeatureWorktreeForFinish(feature.id)).toMatchObject({
+				deleted: true,
+			});
+			expect(manager.getFeature(feature.id)).toBeDefined();
+			expect(store.loadFeatures()).toHaveLength(1);
+
+			manager.forgetFinishedFeature(feature.id);
+			expect(manager.getFeature(feature.id)).toBeUndefined();
+		});
+
 		it("removes feature and worktree", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const feature = manager.createFeature("to-delete", "shared");
 
+			mockCleanMergedDeletion();
 			manager.deleteFeature(feature.id);
 
 			expect(manager.getFeatures()).toHaveLength(0);
@@ -257,17 +307,16 @@ describe("FeatureManager", () => {
 		it("keeps the feature record when git refuses to remove the worktree", () => {
 			// Real worktree base inside the tmp dir so fs.existsSync sees the
 			// worktree still on disk after the (simulated) git failure.
-			const fm = new FeatureManager(store, tmpDir, tmpDir);
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const feature = fm.createFeature("sticky", "shared");
 			fs.mkdirSync(feature.worktreePath, { recursive: true });
 
 			mockExecSync.mockReset();
-			mockExecSync.mockImplementation((command: string) => {
-				if (String(command).includes("git worktree remove")) {
-					throw new Error("git worktree remove failed");
-				}
-				return Buffer.from("");
+			mockCleanMergedDeletion(() => {
+				throw new Error("git worktree remove failed");
 			});
 
 			const result = fm.deleteFeature(feature.id);
@@ -277,6 +326,53 @@ describe("FeatureManager", () => {
 			// Fail-closed: the feature must remain visible so the worktree is
 			// not orphaned into an invisible residue.
 			expect(fm.getFeatures()).toHaveLength(1);
+		});
+
+		it("uses exact merged-PR evidence without weakening Git worktree protection", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = manager.createFeature("squash-merged", "shared");
+			mockExecSync.mockReset();
+			mockCleanSquashMergedDeletion();
+
+			expect(
+				manager.removeFeatureWorktreeForFinish(feature.id, {
+					acceptedPullRequestHeadSha: featureSha,
+				}),
+			).toMatchObject({ deleted: true, reasons: [] });
+			const removeCall = mockExecSync.mock.calls.find(([command]) =>
+				String(command).includes("git worktree remove"),
+			);
+			expect(String(removeCall?.[0])).not.toContain("--force");
+		});
+
+		it("rejects stale merged-PR evidence when the working tree becomes dirty", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = manager.createFeature("dirty-after-review", "shared");
+			mockExecSync.mockReset();
+			mockCleanSquashMergedDeletion();
+			mockExecSync.mockImplementation((command: string) => {
+				const value = String(command);
+				if (value.includes("symbolic-ref")) return "";
+				if (value.includes("git status --porcelain")) return " M changed.ts";
+				if (value.includes('rev-parse --verify "feat/')) return featureSha;
+				if (value.includes('rev-parse --verify "main')) return baseSha;
+				if (value.includes("merge-base --is-ancestor")) {
+					throw Object.assign(new Error("not ancestor"), { status: 1 });
+				}
+				if (value.includes("rev-list --count")) return "1";
+				return "";
+			});
+
+			expect(() =>
+				manager.removeFeatureWorktreeForFinish(feature.id, {
+					acceptedPullRequestHeadSha: featureSha,
+				}),
+			).toThrow("no longer matches");
+			expect(
+				mockExecSync.mock.calls.some(([command]) =>
+					String(command).includes("git worktree remove"),
+				),
+			).toBe(false);
 		});
 	});
 
@@ -311,10 +407,18 @@ describe("FeatureManager", () => {
 	});
 
 	describe("getBaseFeature", () => {
+		function unconfiguredManager() {
+			return new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+			);
+		}
+
 		it("returns a feature with base:<projectId> id", () => {
 			const projectId = "test-project-123";
 			mockExecSync.mockReturnValue("main\n");
-			const base = manager.getBaseFeature(projectId);
+			const base = unconfiguredManager().getBaseFeature(projectId);
 			expect(base.id).toBe(`base:${projectId}`);
 			expect(base.branch).toBe("main");
 			expect(base.worktreePath).toBe(repoRoot);
@@ -324,20 +428,22 @@ describe("FeatureManager", () => {
 
 		it("caches the git branch result", () => {
 			mockExecSync.mockReturnValue("develop\n");
-			const base1 = manager.getBaseFeature("p1");
-			const base2 = manager.getBaseFeature("p2");
+			const unconfigured = unconfiguredManager();
+			const base1 = unconfigured.getBaseFeature("p1");
+			const base2 = unconfigured.getBaseFeature("p2");
 			expect(base1.branch).toBe("develop");
 			expect(base2.branch).toBe("develop");
 			// execSync should only be called once for branch detection
 			expect(mockExecSync).toHaveBeenCalledTimes(1);
 		});
 
-		it("falls back to main when git fails", () => {
+		it("keeps the synthetic base observable without inventing a branch", () => {
 			mockExecSync.mockImplementation(() => {
 				throw new Error("not a git repo");
 			});
-			const base = manager.getBaseFeature("p1");
-			expect(base.branch).toBe("main");
+			expect(unconfiguredManager().getBaseFeature("p1").branch).toBe(
+				"(unknown base)",
+			);
 		});
 	});
 
@@ -390,6 +496,17 @@ describe("FeatureManager", () => {
 			expect(mockExecSync).not.toHaveBeenCalled();
 		});
 
+		it("does not invent main when the base branch cannot be observed", () => {
+			mockExecSync.mockImplementation(() => {
+				throw new Error("git unavailable");
+			});
+			const fm = configManager({});
+
+			expect(() => fm.getBaseBranchName()).toThrow(
+				"Unable to determine the project base branch",
+			);
+		});
+
 		it("creates the worktree from the configured base branch", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const fm = configManager({ baseBranch: "v2_ia_first" });
@@ -404,14 +521,17 @@ describe("FeatureManager", () => {
 
 		it("uses the selected branch kind as the branch prefix", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const fm = configManager({});
+			const fm = configManager({ baseBranch: "main" });
 			const feature = fm.createFeature("READ-891", "shared", "fix");
 			expect(feature.branch).toBe("fix/READ-891");
 		});
 
 		it("uses defaultBranchKind when no kind is passed", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const fm = configManager({ defaultBranchKind: "feature" });
+			const fm = configManager({
+				baseBranch: "main",
+				defaultBranchKind: "feature",
+			});
 			const feature = fm.createFeature("READ-891", "shared");
 			expect(feature.branch).toBe("feature/READ-891");
 		});
@@ -421,7 +541,7 @@ describe("FeatureManager", () => {
 			mockExecSync.mockReturnValueOnce("");
 			// createFeature worktree add
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const fm = configManager({});
+			const fm = configManager({ baseBranch: "main" });
 			const feature = fm.createFeature("dirty-one", "shared", "feature");
 
 			mockExecSync.mockReset();
@@ -433,12 +553,11 @@ describe("FeatureManager", () => {
 
 		it("deletes clean features without --force", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const fm = configManager({});
+			const fm = configManager({ baseBranch: "main" });
 			const feature = fm.createFeature("clean-one", "shared", "feature");
 
 			mockExecSync.mockReset();
-			// deletion safety: clean status, no local commits
-			mockExecSync.mockReturnValue("");
+			mockCleanMergedDeletion();
 
 			const result = fm.deleteFeature(feature.id);
 			expect(result.deleted).toBe(true);

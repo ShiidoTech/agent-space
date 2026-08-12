@@ -284,6 +284,42 @@ describe("AgentManager", () => {
 		});
 	});
 
+	describe("removeAgentWorktreeForFinish", () => {
+		it("keeps the agent record while removing its worktree", () => {
+			const perAgentFeature: Feature = {
+				...feature,
+				isolation: "per-agent",
+			};
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const agent = manager.createAgent(perAgentFeature);
+
+			expect(
+				manager.removeAgentWorktreeForFinish(agent.id, "f1"),
+			).toMatchObject({ removed: true, worktreePath: agent.worktreePath });
+			expect(manager.getAgents("f1")).toHaveLength(1);
+		});
+
+		it("keeps Git protection for a clean assessment when the agent worktree becomes dirty", () => {
+			const perAgentFeature: Feature = {
+				...feature,
+				isolation: "per-agent",
+			};
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const agent = manager.createAgent(perAgentFeature);
+			fs.mkdirSync(agent.worktreePath as string, { recursive: true });
+			mockExecSync.mockReset();
+			mockExecSync.mockImplementation(() => {
+				throw new Error("contains modified files");
+			});
+
+			expect(
+				manager.removeAgentWorktreeForFinish(agent.id, "f1", false),
+			).toMatchObject({ removed: false });
+			expect(String(mockExecSync.mock.calls[0]?.[0])).not.toContain("--force");
+			expect(manager.getAgents("f1")).toHaveLength(1);
+		});
+	});
+
 	describe("deleteAllAgents", () => {
 		it("removes all agents for a feature", () => {
 			manager.createAgent(feature);

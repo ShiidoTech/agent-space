@@ -13,6 +13,23 @@ export type TmuxSessionsObservation =
 	| { readonly status: "known"; readonly sessions: readonly string[] }
 	| { readonly status: "unknown"; readonly detail: string };
 
+function noTmuxSessionsAreRunning(error: unknown): boolean {
+	if (typeof error !== "object" || error === null) return false;
+	const candidate = error as {
+		status?: unknown;
+		stderr?: unknown;
+		message?: unknown;
+	};
+	if (candidate.status !== 1) return false;
+	const stderr = Buffer.isBuffer(candidate.stderr)
+		? candidate.stderr.toString("utf8")
+		: typeof candidate.stderr === "string"
+			? candidate.stderr
+			: "";
+	const evidence = `${stderr}\n${typeof candidate.message === "string" ? candidate.message : ""}`;
+	return /\b(?:no server running|no sessions)\b/iu.test(evidence);
+}
+
 /**
  * Replace characters that tmux interprets as target-specification separators.
  * `:` delimits session:window and `.` delimits window.pane — both break
@@ -217,6 +234,9 @@ export class TmuxIntegration {
 				.filter(Boolean);
 			return { status: "known", sessions };
 		} catch (error) {
+			if (noTmuxSessionsAreRunning(error)) {
+				return { status: "known", sessions: [] };
+			}
 			return {
 				status: "unknown",
 				detail: error instanceof Error ? error.message : String(error),
