@@ -43,11 +43,6 @@ function openGitView(e, id) {
 	send("openGitView", { featureId: id });
 }
 
-function syncNames(e) {
-	e.stopPropagation();
-	send("syncNames");
-}
-
 function attachProviderSession(e, featureId, agentId) {
 	e.stopPropagation();
 	send("attachProviderSession", { featureId: featureId, agentId: agentId });
@@ -248,73 +243,6 @@ function toggleProject(id) {
 }
 
 // -- Incremental sidebar updates via postMessage ----------------------------
-const STATUS_LABELS = {
-	"new": "New",
-	modified: "Modified",
-	ahead: "Ahead",
-	merged: "Merged",
-};
-
-const ATTENTION_LABELS = {
-	working: "Working",
-	waiting_for_user: "Waiting for you",
-	idle: "Idle",
-	failed: "Failed",
-	done: "Done",
-	unknown: "Unknown",
-};
-
-// Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
-// binding at all) renders nothing — it is the quiet, expected state.
-const BINDING_LABELS = {
-	pending: "Session pending",
-	ambiguous: "Ambiguous session",
-	unverified: "Session lost",
-	unsupported: "No session tracking",
-};
-
-const LIFECYCLE_LABELS = {
-	running: "Running",
-	stopped: "Stopped",
-	done: "Done",
-	errored: "Errored",
-	idle: "Idle",
-};
-
-function updateBindingBadge(agentEl, agent) {
-	if (agent.status === "done") {
-		var doneBadge = agentEl.querySelector(
-			'[data-binding-badge="' + agent.id + '"]',
-		);
-		if (doneBadge) doneBadge.remove();
-		return;
-	}
-	var badge = agentEl.querySelector('[data-binding-badge="' + agent.id + '"]');
-	var state = agent.bindingState;
-	var label = state && state !== "bound" ? BINDING_LABELS[state] : null;
-
-	if (!label) {
-		if (badge) badge.remove();
-		return;
-	}
-
-	var tooltip = agent.bindingDetail || "";
-	if (state === "ambiguous" && tooltip) {
-		tooltip +=
-			" Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
-	}
-
-	if (!badge) {
-		badge = document.createElement("span");
-		badge.setAttribute("data-binding-badge", agent.id);
-		var statusEl = agentEl.querySelector(".agent-status");
-		if (statusEl) statusEl.appendChild(badge);
-	}
-	badge.className = "binding-badge binding-" + state;
-	badge.textContent = label;
-	badge.title = tooltip;
-}
-
 window.addEventListener("message", function (event) {
 	var msg = event.data;
 
@@ -345,12 +273,13 @@ window.addEventListener("message", function (event) {
 				continue;
 			}
 
-			// Update git status badge
-			if (!feat.isBase && feat.gitStatus) {
+			// Update the same human-facing Feature summary used by the full page.
+			if (!feat.isBase && feat.statusLabel && feat.statusTone) {
 				var badge = card.querySelector('[data-status-badge="' + feat.id + '"]');
 				if (badge) {
-					badge.className = "status-badge status-" + feat.gitStatus;
-					badge.textContent = STATUS_LABELS[feat.gitStatus] || feat.gitStatus;
+					badge.className = "status-badge status-" + feat.statusTone;
+					badge.textContent = feat.statusLabel;
+					badge.title = feat.statusDetail || feat.statusLabel;
 				}
 			}
 
@@ -369,13 +298,10 @@ window.addEventListener("message", function (event) {
 					continue;
 				}
 
-				var attention = agent.attentionStatus || "unknown";
-				var presented = agent.presentedState || {
-					label:
-						attention === "unsupported"
-							? "Running"
-							: ATTENTION_LABELS[attention] || attention,
-					tone: attention,
+				var cardPresentation = agent.cardPresentation || {};
+				var presented = cardPresentation.primaryState || {
+					label: "Unknown",
+					tone: "muted",
 				};
 				var dot = agentEl.querySelector(
 					'[data-attention-dot="' + agent.id + '"]',
@@ -384,7 +310,6 @@ window.addEventListener("message", function (event) {
 					dot.className = "status-dot primary-state-" + presented.tone;
 				}
 
-				updateBindingBadge(agentEl, agent);
 				var lifecycleBadge = agentEl.querySelector(
 					'[data-lifecycle-badge="' + agent.id + '"]',
 				);

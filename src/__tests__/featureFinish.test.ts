@@ -61,7 +61,12 @@ function context(
 ): ProjectContext {
 	return {
 		project: { id: "p1", name: "Project", repoPath: "/repo" },
-		gitClient: { readSync: () => gitResult(worktreeOutput) },
+		gitClient: {
+			readSync: (args: readonly string[]) =>
+				args[0] === "symbolic-ref"
+					? gitResult("feat/f1\n")
+					: gitResult(worktreeOutput),
+		},
 		featureManager: {
 			getBaseBranchName: () => "main",
 			getWorktreeBase: () => "/worktrees",
@@ -75,14 +80,75 @@ function context(
 }
 
 describe("Feature Finish", () => {
+	it("assesses deletion against the positively linked active checkout", () => {
+		const continued: Feature = {
+			...feature(),
+			branch: "feat/feature_cockpit",
+			primaryBranchRef: "feat/f1",
+			branchLinks: [
+				{
+					ref: "feat/f1",
+					role: "primary",
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "legacy_record",
+				},
+				{
+					ref: "feat/feature_cockpit",
+					role: "continuation",
+					linkedAt: "2026-08-12T09:35:00.000Z",
+					source: "reflog_checkout",
+				},
+			],
+		};
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockReturnValue({
+				worktreePath: "/worktrees/f1",
+				safe: true,
+				forceable: true,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: true,
+				integrationObserved: true,
+				localCommitsObserved: true,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				workingTreeStatus: "",
+				localCommitCount: 0,
+				featureSha: "1".repeat(40),
+				baseSha: "2".repeat(40),
+				reasons: [],
+			});
+		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
+		ctx.gitClient.readSync = (args: readonly string[]) =>
+			args[0] === "symbolic-ref"
+				? gitResult("feat/feature_cockpit\n")
+				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
+
+		const assessment = assessFeatureFinish(ctx, continued, finishEvidence());
+
+		expect(assessment.checks[0]).toMatchObject({
+			kind: "feature",
+			branch: "feat/feature_cockpit",
+		});
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: "feat/feature_cockpit" }),
+		);
+	});
+
 	it("resumes after earlier worktrees were removed while records were preserved", () => {
 		const agents = [agent("a1"), agent("a2")];
-		const readSync = vi.fn((args: readonly string[]) => {
-			if (args[0] === "worktree") {
-				return gitResult("worktree /repo\n\nworktree /worktrees/a2\n");
-			}
-			return gitResult("feat/f1/agent-a2\n");
-		});
+		const readSync = vi.fn(
+			(args: readonly string[], options?: { readonly cwd?: string }) => {
+				if (args[0] === "worktree") {
+					return gitResult("worktree /repo\n\nworktree /worktrees/a2\n");
+				}
+				return gitResult(
+					options?.cwd === "/worktrees/f1" ? "feat/f1\n" : "feat/f1/agent-a2\n",
+				);
+			},
+		);
 		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
 			worktreePath: "/worktrees/a2",
 			safe: true,

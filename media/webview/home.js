@@ -97,7 +97,10 @@ function killProjectSessions(projectId) {
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
-function markAgentDone(featureId, agentId, agentName) {
+function markAgentDone(featureId, agentId) {
+	const agentName =
+		document.getElementById(`agent-name-${agentId}`)?.textContent?.trim() ||
+		"this agent";
 	showConfirmation(
 		`Mark "${agentName}" as done?`,
 		"This will stop the agent session.",
@@ -113,6 +116,13 @@ function reopenAgent(featureId, agentId) {
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function deleteFeature(featureId) {
 	send("deleteFeature", { featureId });
+}
+
+// The extension host resolves the observed PR URL from the Feature snapshot;
+// the webview supplies only the Feature identity.
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function openPullRequest(featureId) {
+	send("openPullRequest", { featureId });
 }
 
 // -- Inline Confirmation Banner ------------------------------
@@ -167,8 +177,8 @@ function quickAction(action, featureId) {
 		case "openGitView":
 			send("openGitView", { featureId });
 			break;
-		case "syncNames":
-			send("syncNames");
+		case "bootstrapFeature":
+			send("bootstrapFeature", { featureId });
 			break;
 		case "refresh":
 			send("refresh");
@@ -212,6 +222,7 @@ function togglePanel(prefix, id, expandedSet, requestCmd, requestPayload) {
 	const panel = document.getElementById(`${prefix}-activity-${id}`);
 	const chevron = document.getElementById(`${prefix}-chevron-${id}`);
 	const header = document.getElementById(`${prefix}-header-${id}`);
+	const toggle = document.getElementById(`${prefix}-toggle-${id}`);
 	if (!panel || !chevron || !header) return;
 
 	if (expandedSet.has(id)) {
@@ -219,11 +230,13 @@ function togglePanel(prefix, id, expandedSet, requestCmd, requestPayload) {
 		panel.classList.remove("expanded");
 		chevron.classList.remove("expanded");
 		header.classList.remove("expanded");
+		if (toggle) toggle.setAttribute("aria-expanded", "false");
 	} else {
 		expandedSet.add(id);
 		panel.classList.add("expanded");
 		chevron.classList.add("expanded");
 		header.classList.add("expanded");
+		if (toggle) toggle.setAttribute("aria-expanded", "true");
 		send(requestCmd, requestPayload);
 	}
 }
@@ -266,22 +279,9 @@ function updateActivityContent(preId, emptyId, content) {
 	}
 }
 
-const ATTENTION_LABELS = {
-	working: "Working",
-	waiting_for_user: "Waiting for you",
-	idle: "Idle",
-	failed: "Failed",
-	done: "Done",
-	unknown: "Unknown",
-};
-
 function updateAttention(agent) {
-	const status = agent.status || "unknown";
-	const presented = agent.presentedState || {
-		label:
-			status === "unsupported" ? "Running" : ATTENTION_LABELS[status] || status,
-		tone: status,
-	};
+	const card = agent.cardPresentation || {};
+	const presented = card.primaryState || { label: "Unknown", tone: "muted" };
 	const dot = document.getElementById(`agent-attention-dot-${agent.id}`);
 	if (dot) {
 		dot.className = `agent-status-dot primary-state-${presented.tone}`;
@@ -292,51 +292,9 @@ function updateAttention(agent) {
 	);
 	if (lifecycleBadge) {
 		lifecycleBadge.textContent = presented.label;
-		lifecycleBadge.className = `agent-tool-badge agent-lifecycle-badge primary-state-${presented.tone}`;
+		lifecycleBadge.className = `agent-primary-state primary-state-${presented.tone}`;
 		lifecycleBadge.title = presented.detail || "";
 	}
-
-	updateBindingBadge(agent);
-}
-
-// Mirrors src/agents/attention/sessionBindingPresentation.ts. `bound` (and no
-// binding at all) renders nothing — it is the quiet, expected state.
-const BINDING_LABELS = {
-	pending: "Session pending",
-	ambiguous: "Ambiguous session",
-	unverified: "Session lost",
-	unsupported: "No session tracking",
-};
-
-function updateBindingBadge(agent) {
-	const badge = document.getElementById(`agent-binding-badge-${agent.id}`);
-	if (!badge) return;
-	if (agent.lifecycleStatus === "done") {
-		badge.style.display = "none";
-		badge.textContent = "";
-		badge.title = "";
-		return;
-	}
-
-	const state = agent.bindingState;
-	const label = state && state !== "bound" ? BINDING_LABELS[state] : null;
-	if (!label) {
-		badge.style.display = "none";
-		badge.textContent = "";
-		badge.title = "";
-		return;
-	}
-
-	let tooltip = agent.bindingDetail || "";
-	if (state === "ambiguous" && tooltip) {
-		tooltip +=
-			" Automatic attachment is refused: explicit attachment or strong provider correlation is required.";
-	}
-
-	badge.className = `agent-tool-badge binding-badge binding-${state}`;
-	badge.textContent = label;
-	badge.title = tooltip;
-	badge.style.display = "";
 }
 
 window.addEventListener("message", (event) => {

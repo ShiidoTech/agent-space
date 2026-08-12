@@ -12,14 +12,16 @@ real VS Code dogfood scenario, not a unit-test substitute.
 3. Restart the extension host / VS Code and repeat the checks. Confirm that a
    bound provider session keeps its name and that no agent silently adopts its
    neighbour's session.
-4. If a provider cannot prove ownership, select the compact ⚠ indicator and
-   explicitly attach the intended provider session. Confirm that the provider
-   title appears automatically afterward.
+4. If a provider cannot prove ownership, select `Choose session` and explicitly
+	attach the intended provider session. Confirm that the provider title appears
+	automatically afterward without duplicating the stable agent name.
 
 Expected result: the main row is always `name · primary state`; binding health
-is secondary. `Unknown` is exceptional, and `Ambiguous session` is never shown
-as the main agent state. The Project page must show the repository base,
-features, agents/states and services; the sidebar remains the compact navigator.
+is secondary. A proven live runtime remains `Running` when only provider
+activity is unknown; an unknown lifecycle remains `Unknown`. `Ambiguous
+session` is never shown as the main agent state. The Project page must show the
+repository base, features, agents/states and services; the sidebar remains the
+compact navigator.
 
 Evidence to attach to the PR: screenshots at each checkpoint, provider/version,
 feature/project ids, and whether the result is PASS, FAIL_PRODUCT, FAIL_ENV or

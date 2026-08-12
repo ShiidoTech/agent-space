@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
@@ -42,6 +43,10 @@ const FULL_ATTENTION_CAPABILITIES = {
 export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	{
 		id: "claude",
+		conversationIdentity: {
+			ownership: "preassigned",
+			createId: () => crypto.randomUUID(),
+		},
 		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
 		getAttentionSignal: (sessionId) =>
 			claudeSessionAdapter.readAttention(sessionId),
@@ -49,6 +54,7 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	},
 	{
 		id: "codex",
+		conversationIdentity: { ownership: "provider_assigned" },
 		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
 		getAttentionSignal: (sessionId) =>
 			codexSessionAdapter.readAttention(sessionId),
@@ -56,6 +62,7 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	},
 	{
 		id: "opencode",
+		conversationIdentity: { ownership: "provider_assigned" },
 		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
 		launchArgs: () => [],
 		resumeArgs: (sessionId) =>
@@ -66,6 +73,7 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	},
 	{
 		id: "copilot",
+		conversationIdentity: { ownership: "unsupported" },
 		capabilities: {
 			launch: true,
 			resume: false,
@@ -76,6 +84,7 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	},
 	{
 		id: "hermes",
+		conversationIdentity: { ownership: "unsupported" },
 		capabilities: {
 			launch: true,
 			resume: false,
@@ -182,6 +191,15 @@ function providerForTool(
 	const sessionCapable = Boolean(sessionAdapter) && storeReachable;
 	return {
 		id,
+		conversationIdentity:
+			family === "claude"
+				? {
+						ownership: "preassigned",
+						createId: () => crypto.randomUUID(),
+					}
+				: sessionFamily
+					? { ownership: "provider_assigned" }
+					: { ownership: "unsupported" },
 		capabilities: {
 			launch: true,
 			resume: Boolean(sessionFamily),
@@ -465,6 +483,17 @@ export class CodingToolRegistry {
 	 */
 	isClaudeFamilyTool(toolId?: string): boolean {
 		return isClaudeFamily(this.resolveAgentTool(toolId));
+	}
+
+	/**
+	 * Ask the resolved provider for the conversation identity to persist before
+	 * launch. Provider-assigned and unsupported identities deliberately stay
+	 * null until the provider supplies direct ownership evidence.
+	 */
+	createInitialConversationId(toolId?: string): string | null {
+		const tool = this.resolveAgentTool(toolId);
+		const identity = this.getProvider(tool).conversationIdentity;
+		return identity.ownership === "preassigned" ? identity.createId() : null;
 	}
 
 	/**

@@ -106,7 +106,7 @@ function snapshot(
 }
 
 describe("featureSnapshotGitStatus", () => {
-	it("derives new, ahead, and ancestry-merged only from known evidence", () => {
+	it("distinguishes local integration from a proven pull-request merge", () => {
 		expect(
 			featureSnapshotGitStatus(
 				snapshot((value) => ({
@@ -127,6 +127,18 @@ describe("featureSnapshotGitStatus", () => {
 					integration: {
 						status: "known",
 						outcome: "integrated_by_ancestry",
+						evidence: {},
+					},
+				})),
+			),
+		).toBe("integrated");
+		expect(
+			featureSnapshotGitStatus(
+				snapshot((value) => ({
+					...value,
+					integration: {
+						status: "known",
+						outcome: "integrated_by_pull_request",
 						evidence: {},
 					},
 				})),

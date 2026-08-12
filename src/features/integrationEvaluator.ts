@@ -9,6 +9,7 @@ import type {
 	GitHubObservationStatus,
 } from "../github/githubObservation";
 import type { PullRequestObservation } from "../github/pullRequest";
+import type { FeatureDeliveryObservation } from "./featureSnapshot";
 
 export interface IntegrationEvidence {
 	readonly createdFromSha?: string;
@@ -18,11 +19,21 @@ export interface IntegrationEvidence {
 	readonly ancestor?: ObservedCommit;
 	readonly descendant?: ObservedCommit;
 	readonly observed?: Readonly<Record<string, unknown>>;
+	readonly delivery?: IntegrationDeliveryEvidence;
 	/**
 	 * GitHub-side proof kept distinct from the local Git SHAs. Local Git and
 	 * GitHub never silently fuse: each SHA's provenance is preserved here.
 	 */
 	readonly github?: IntegrationGithubEvidence;
+}
+
+export interface IntegrationDeliveryEvidence {
+	readonly branchRef: string;
+	readonly head?: ObservedCommit;
+	readonly headStatus: "known" | "unknown";
+	readonly activeRelation?: AncestryObservation;
+	readonly activeRelationStatus: "known" | "unknown";
+	readonly commitsAfter?: number;
 }
 
 export interface IntegrationGithubEvidence {
@@ -91,6 +102,7 @@ export interface IntegrationEvaluationInput {
 	readonly github?: GitHubObservation;
 	readonly createdFromSha?: string;
 	readonly mergedHead?: MergedHeadGitEvidence;
+	readonly delivery?: FeatureDeliveryObservation;
 }
 
 const FULL_SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
@@ -111,7 +123,7 @@ export function evaluateIntegration(
 	input: IntegrationEvaluationInput,
 ): IntegrationEvaluation {
 	const { git, github, createdFromSha } = input;
-	const evidence = buildBaseEvidence(git, createdFromSha);
+	const evidence = buildBaseEvidence(git, createdFromSha, input.delivery);
 
 	const inputError = checkAncestryInput(git, createdFromSha, evidence);
 	if (inputError) return inputError;
@@ -122,7 +134,13 @@ export function evaluateIntegration(
 	) {
 		return evaluateByAncestry(git, createdFromSha, evidence);
 	}
-	return evaluateByRemote(git, github, input.mergedHead, evidence);
+	return evaluateByRemote(
+		git,
+		github,
+		input.mergedHead,
+		input.delivery,
+		evidence,
+	);
 }
 
 export class IntegrationEvaluator {
@@ -191,9 +209,10 @@ function evaluateByRemote(
 	git: FeatureGitObservations,
 	github: GitHubObservation | undefined,
 	mergedHead: MergedHeadGitEvidence | undefined,
+	delivery: FeatureDeliveryObservation | undefined,
 	evidence: IntegrationEvidence,
 ): IntegrationEvaluation {
-	if (!github || github.status !== "known") {
+	if (github?.status !== "known") {
 		const info = githubObservationInfo(github);
 		return {
 			status: "unknown",
@@ -273,6 +292,55 @@ function evaluateByRemote(
 
 	const featureHead =
 		git.feature.status === "known" ? git.feature.value.sha : undefined;
+	const deliveryHead =
+		delivery?.head.status === "known" ? delivery.head.value.sha : featureHead;
+	if (delivery && delivery.head.status === "unknown") {
+		return {
+			status: "unknown",
+			reason: "integration_unknown",
+			detail: "The delivery branch head could not be resolved locally.",
+			evidence: withGithubEvidence(evidence, githubEvidence),
+		};
+	}
+	if (deliveryHead && sameSha(pull.headSha, deliveryHead)) {
+		if (!delivery || !featureHead || sameSha(deliveryHead, featureHead)) {
+			return {
+				status: "known",
+				outcome: "integrated_by_pull_request",
+				evidence: withGithubEvidence(evidence, githubEvidence),
+			};
+		}
+		if (delivery.activeRelation.status === "unknown") {
+			return {
+				status: "unknown",
+				reason: "integration_unknown",
+				detail:
+					delivery.activeRelation.message ??
+					"The active branch relation to the delivered branch is unknown.",
+				evidence: withGithubEvidence(evidence, githubEvidence),
+			};
+		}
+		if (!delivery.activeRelation.value.isAncestor) {
+			return {
+				status: "unknown",
+				reason: "integrated_head_rewritten",
+				detail: "The active branch does not descend from the delivered branch.",
+				evidence: withGithubEvidence(evidence, githubEvidence),
+			};
+		}
+		return {
+			status: "known",
+			outcome: "new_work_after_integration",
+			evidence: withGithubEvidence(evidence, {
+				...githubEvidence,
+				mergedHead: { ref: delivery.branchRef, sha: deliveryHead },
+				mergedHeadIsAncestor: true,
+				...(delivery.commitsAfter.status === "known"
+					? { commitsAfterIntegration: delivery.commitsAfter.value.count }
+					: {}),
+			}),
+		};
+	}
 	if (featureHead && sameSha(pull.headSha, featureHead)) {
 		return {
 			status: "known",
@@ -374,6 +442,7 @@ function checkAncestryInput(
 function buildBaseEvidence(
 	observations: FeatureGitObservations,
 	createdFromSha?: string,
+	delivery?: FeatureDeliveryObservation,
 ): IntegrationEvidence {
 	const partialEvidence = {
 		...(observations.feature.status === "unknown" &&
@@ -407,6 +476,24 @@ function buildBaseEvidence(
 			: {}),
 		...(Object.keys(partialEvidence).length > 0
 			? { observed: partialEvidence }
+			: {}),
+		...(delivery ? { delivery: deliveryEvidence(delivery) } : {}),
+	};
+}
+
+function deliveryEvidence(
+	delivery: FeatureDeliveryObservation,
+): IntegrationDeliveryEvidence {
+	return {
+		branchRef: delivery.branchRef,
+		headStatus: delivery.head.status,
+		...(delivery.head.status === "known" ? { head: delivery.head.value } : {}),
+		activeRelationStatus: delivery.activeRelation.status,
+		...(delivery.activeRelation.status === "known"
+			? { activeRelation: delivery.activeRelation.value }
+			: {}),
+		...(delivery.commitsAfter.status === "known"
+			? { commitsAfter: delivery.commitsAfter.value.count }
 			: {}),
 	};
 }

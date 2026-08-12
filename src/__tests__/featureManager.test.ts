@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -25,8 +26,10 @@ describe("FeatureManager", () => {
 	const baseSha = "b".repeat(40);
 
 	function mockCleanMergedDeletion(remove?: () => string): void {
+		const activeBranch = store.loadFeatures()[0]?.branch ?? "feat/unknown";
 		mockExecSync.mockImplementation((command: string) => {
 			const value = String(command);
+			if (value.includes("symbolic-ref")) return `${activeBranch}\n`;
 			if (value.includes("git status --porcelain")) return "";
 			if (value.includes('rev-parse --verify "feat/')) return featureSha;
 			if (value.includes('rev-parse --verify "feature/')) return featureSha;
@@ -39,9 +42,10 @@ describe("FeatureManager", () => {
 	}
 
 	function mockCleanSquashMergedDeletion(remove?: () => string): void {
+		const activeBranch = store.loadFeatures()[0]?.branch ?? "feat/unknown";
 		mockExecSync.mockImplementation((command: string) => {
 			const value = String(command);
-			if (value.includes("symbolic-ref")) return "";
+			if (value.includes("symbolic-ref")) return `${activeBranch}\n`;
 			if (value.includes("git status --porcelain")) return "";
 			if (value.includes('rev-parse --verify "feat/')) return featureSha;
 			if (value.includes('rev-parse --verify "feature/')) return featureSha;
@@ -118,6 +122,169 @@ describe("FeatureManager", () => {
 				expect.any(Function),
 			);
 			expect(feature.provisioning?.state).toBe("ready");
+		});
+
+		it("persists completion when the storage watcher reloads between Git steps", async () => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				_args: readonly string[],
+				_options: unknown,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
+			) => {
+				// This is what the global-storage watcher does after each atomic save.
+				asyncManager.reload();
+				callback(null, { stdout: "abc123\n", stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord("reload-safe", "shared");
+			const provisioning = asyncManager.provisionFeature(feature.id);
+			expect(asyncManager.isProvisioningActive(feature.id)).toBe(true);
+			await expect(provisioning).resolves.toBeDefined();
+
+			const persisted = store.loadFeatures()[0];
+			expect(persisted.createdFromSha).toBe("abc123");
+			expect(persisted.provisioning).toMatchObject({
+				state: "ready",
+				steps: [{ status: "completed" }, { status: "completed" }],
+			});
+			expect(asyncManager.isProvisioningActive(feature.id)).toBe(false);
+		});
+
+		it("recovers an orphaned setup only from an exact registered worktree", () => {
+			const worktreePath = path.join(repoRoot, ".worktrees", "feat-recovered");
+			store.saveFeatures([
+				{
+					id: "recovered",
+					name: "recovered",
+					branch: "feat/recovered",
+					worktreePath,
+					status: "active",
+					color: "terminal.ansiBlue",
+					isolation: "shared",
+					createdAt: new Date(0).toISOString(),
+					provisioning: {
+						state: "provisioning",
+						steps: [
+							{
+								id: "resolve-base",
+								label: "Preparing feature",
+								status: "running",
+							},
+							{
+								id: "create-worktree",
+								label: "Creating branch and worktree",
+								status: "pending",
+							},
+						],
+					},
+				},
+			]);
+			mockExecSync.mockReturnValue(
+				`worktree ${worktreePath}\nHEAD ${"c".repeat(40)}\nbranch refs/heads/feat/recovered\n\n`,
+			);
+
+			const recovered = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+
+			expect(store.loadFeatures()[0].provisioning).toMatchObject({
+				state: "ready",
+				steps: [{ status: "completed" }, { status: "completed" }],
+			});
+			expect(store.loadFeatures()[0].createdFromSha).toBeUndefined();
+			expect(recovered.isProvisioningActive("recovered")).toBe(false);
+			expect(mockExecSync).toHaveBeenCalledTimes(1);
+			expect(mockExecSync).toHaveBeenNthCalledWith(
+				1,
+				"git worktree list --porcelain",
+				expect.objectContaining({ cwd: repoRoot }),
+			);
+			expect(
+				mockExecSync.mock.calls.some(([command]) =>
+					String(command).includes("worktree add"),
+				),
+			).toBe(false);
+		});
+
+		it.each([
+			{
+				name: "the branch is registered at another path",
+				output: `worktree /other/path\nHEAD ${"d".repeat(40)}\nbranch refs/heads/feat/orphaned\n\n`,
+			},
+			{
+				name: "the expected worktree is detached",
+				output: `worktree ${path.join(repoRoot, ".worktrees", "feat-orphaned")}\nHEAD ${"d".repeat(40)}\ndetached\n\n`,
+			},
+			{
+				name: "Git observation is unavailable",
+				output: "__THROW__",
+			},
+		])("keeps orphaned setup unknown when $name", ({ output }) => {
+			const caseStore = new Store(path.join(tmpDir, crypto.randomUUID()));
+			const worktreePath = path.join(repoRoot, ".worktrees", "feat-orphaned");
+			caseStore.saveFeatures([
+				{
+					id: "orphaned",
+					name: "orphaned",
+					branch: "feat/orphaned",
+					worktreePath,
+					status: "active",
+					color: "terminal.ansiBlue",
+					isolation: "shared",
+					createdAt: new Date(0).toISOString(),
+					provisioning: {
+						state: "provisioning",
+						steps: [
+							{
+								id: "resolve-base",
+								label: "Preparing feature",
+								status: "running",
+							},
+							{
+								id: "create-worktree",
+								label: "Creating branch and worktree",
+								status: "pending",
+							},
+						],
+					},
+				},
+			]);
+			if (output === "__THROW__") {
+				mockExecSync.mockImplementation(() => {
+					throw new Error("Git unavailable");
+				});
+			} else {
+				mockExecSync.mockReturnValue(output);
+			}
+
+			const orphaned = new FeatureManager(
+				caseStore,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+
+			expect(caseStore.loadFeatures()[0].provisioning?.state).toBe(
+				"provisioning",
+			);
+			expect(orphaned.isProvisioningActive("orphaned")).toBe(false);
+			expect(
+				mockExecSync.mock.calls.some(([command]) =>
+					String(command).includes("worktree add"),
+				),
+			).toBe(false);
 		});
 
 		it("creates a feature with worktree", () => {
@@ -352,7 +519,7 @@ describe("FeatureManager", () => {
 			mockCleanSquashMergedDeletion();
 			mockExecSync.mockImplementation((command: string) => {
 				const value = String(command);
-				if (value.includes("symbolic-ref")) return "";
+				if (value.includes("symbolic-ref")) return `${feature.branch}\n`;
 				if (value.includes("git status --porcelain")) return " M changed.ts";
 				if (value.includes('rev-parse --verify "feat/')) return featureSha;
 				if (value.includes('rev-parse --verify "main')) return baseSha;
@@ -545,8 +712,12 @@ describe("FeatureManager", () => {
 			const feature = fm.createFeature("dirty-one", "shared", "feature");
 
 			mockExecSync.mockReset();
-			// deletion safety: git status --porcelain dirty
-			mockExecSync.mockReturnValue(" M x.ts\n");
+			// deletion safety: observe the linked checkout, then its dirty status.
+			mockExecSync.mockImplementation((command: string) =>
+				String(command).includes("symbolic-ref")
+					? `${feature.branch}\n`
+					: " M x.ts\n",
+			);
 
 			expect(() => fm.deleteFeature(feature.id)).toThrow("Uncommitted changes");
 		});

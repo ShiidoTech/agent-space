@@ -436,7 +436,7 @@ export async function activate(
 				);
 				if (sessions.length === 0) {
 					vscode.window.showInformationMessage(
-						"No provider sessions are available for this agent's worktree yet.",
+						"No CLI conversation is available in this agent's worktree yet. Start or prompt the agent, then refresh and try again.",
 					);
 					return;
 				}
@@ -446,7 +446,11 @@ export async function activate(
 						description: `${session.sessionId} · ${session.created || "unknown time"}`,
 						sessionId: session.sessionId,
 					})),
-					{ placeHolder: "Attach this agent to an existing provider session" },
+					{
+						title: "Link this agent's CLI conversation",
+						placeHolder:
+							"Choose the conversation opened for this agent; Agent Space will use it for activity and naming",
+					},
 				);
 				if (
 					!choice ||

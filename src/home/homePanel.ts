@@ -1,16 +1,15 @@
 import * as vscode from "vscode";
-import { presentSessionBinding } from "../agents/attention/sessionBindingPresentation";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
-import { presentAgentState } from "../agents/observation/presentAgentState";
+import { presentAgentCard } from "../agents/observation/presentAgentCard";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
-import { ICON_GIT } from "../constants/icons";
-import { gitStatusLabel } from "../features/featureGitStatus";
 import {
-	type FeatureSnapshot,
-	featureSnapshotGitStatus,
-} from "../features/featureSnapshot";
+	type FeatureCockpitPresentation,
+	type FeatureCockpitPrimaryAction,
+	presentFeatureCockpit,
+} from "../features/featureCockpitPresentation";
+import type { FeatureSnapshot } from "../features/featureSnapshot";
 import type { FeatureStateCoordinator } from "../features/featureStateCoordinator";
 import type { ProjectManager } from "../projects/projectManager";
 import type { GlobalStore } from "../storage/globalStore";
@@ -316,6 +315,13 @@ export class HomePanel {
 			case "reopenAgent":
 				run("agentSpace.reopenAgent", message.featureId, message.agentId);
 				break;
+			case "attachProviderSession":
+				run(
+					"agentSpace.attachProviderSession",
+					message.featureId,
+					message.agentId,
+				);
+				break;
 			case "focusAgent":
 				this.focusAgentTerminal(message.agentId as string);
 				break;
@@ -369,11 +375,11 @@ export class HomePanel {
 			case "openGitView":
 				run("agentSpace.openFeatureGitView", message.featureId);
 				break;
+			case "openPullRequest":
+				this.openSelectedPullRequest(message.featureId as string);
+				break;
 			case "deleteFeature":
 				run("agentSpace.deleteFeature", message.featureId);
-				break;
-			case "syncNames":
-				run("agentSpace.syncSessionNames");
 				break;
 			case "toggleIsolation":
 				run("agentSpace.toggleIsolation", message.featureId);
@@ -402,11 +408,28 @@ export class HomePanel {
 				this.sendActivityForServices((message.serviceIds as string[]) ?? []);
 				break;
 			case "refresh":
+				if (typeof message.featureId === "string" && message.featureId) {
+					this.featureStateCoordinator.invalidate(message.featureId);
+				}
 				this.featureStateCoordinator.refreshProjectReferenceHealth();
 				void this.featureStateCoordinator
 					.reconcile()
 					.then(() => this.refresh());
 				break;
+		}
+	}
+
+	private openSelectedPullRequest(featureId: string): void {
+		const github = this.featureStateCoordinator.getSnapshot(featureId)?.github;
+		if (github?.status !== "known") return;
+		if (github.resolution.outcome !== "selected") return;
+		const url = github.resolution.pull.url;
+		try {
+			const uri = vscode.Uri.parse(url);
+			if (uri.scheme !== "https" || uri.authority !== "github.com") return;
+			void vscode.env.openExternal(uri);
+		} catch {
+			// The observed PR URL is invalid. Keep the action fail-closed.
 		}
 	}
 
@@ -643,15 +666,10 @@ export class HomePanel {
 		this.panel.webview.postMessage({
 			type: "agentAttentionUpdate",
 			agents: agents.map((agent) => ({
-				presentedState: presentAgentState(
+				cardPresentation: presentAgentCard(
 					resolved.ctx.agentManager.observe(agent),
 				),
 				id: agent.id,
-				status: agent.attentionStatus ?? "unknown",
-				lifecycleStatus: agent.status,
-				reason: agent.attentionReason ?? "No current attention evidence",
-				bindingState: agent.sessionBinding?.state,
-				bindingDetail: agent.sessionBinding?.detail,
 			})),
 		});
 
@@ -998,6 +1016,12 @@ export class HomePanel {
 				? '<div class="activity-empty">Runtime state unavailable</div>'
 				: "";
 		const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
+		const cockpit = presentFeatureCockpit(
+			snapshot,
+			this.featureStateCoordinator.getProjectReferenceHealth(
+				snapshot.projectId,
+			),
+		);
 
 		const cssUri = this.panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.css"),
@@ -1015,35 +1039,32 @@ export class HomePanel {
 		const erroredAgents = agents.filter((a) => a.status === "errored");
 		const doneAgents = agents.filter((a) => a.status === "done");
 		const stoppedAgents = agents.filter((a) => a.status === "stopped");
-		const totalAgents =
-			activeAgents.length + erroredAgents.length + doneAgents.length;
-		const doneCount = doneAgents.length;
-		const progressPct =
-			totalAgents > 0 ? Math.round((doneCount / totalAgents) * 100) : 0;
-
 		const body = `
 		<button class="home-nav-bar" onclick="goHome()" title="Back to Agent Space">&#8592; Agent Space</button>
 		<div class="workspace-header">
 			<div class="header-color-dot" style="background: ${dotColor}"></div>
 			<div class="header-info">
 				<div class="header-title">${this.escapeHtml(feature.name)}</div>
-				<div class="header-branch">${this.escapeHtml(feature.branch)}</div>
+				<div class="header-branch">Checkout · ${this.escapeHtml(feature.branch)}</div>
+				${feature.primaryBranchRef && feature.primaryBranchRef !== feature.branch ? `<div class="header-branch">Delivery · ${this.escapeHtml(feature.primaryBranchRef)}</div>` : ""}
 			</div>
-			<span class="header-status ${feature.status}">${feature.status === "done" ? "Done" : "Active"}</span>
 			<div class="header-actions">
-				<button class="header-action-btn" onclick="quickAction('refresh', '${feature.id}')" title="Refresh">
+				${
+					cockpit.primaryAction.kind === "refresh_evidence"
+						? ""
+						: `<button class="header-action-btn" onclick="quickAction('refresh', '${feature.id}')" title="Refresh evidence">
 					${ICON_REFRESH}
-				</button>
-				<button class="header-action-btn" onclick="quickAction('openGitView', '${feature.id}')" title="Open Workspace">
-					${ICON_GIT}
-				</button>
+				</button>`
+				}
 			</div>
 		</div>
 			<div class="workspace-content">
-				${this.renderFeatureProvisioning(feature)}
-				${this.renderFeatureAttention(snapshot)}
+					${this.renderFeatureProvisioning(
+						feature,
+						ctx.featureManager?.isProvisioningActive?.(feature.id) ?? false,
+					)}
+				${this.renderFeatureCockpit(cockpit, snapshot)}
 				${runtimeNotice}
-			${agentsKnown ? this.renderProgressSection(progressPct, doneCount, totalAgents) : ""}
 			${
 				agentsKnown
 					? this.renderAgentsSection(
@@ -1057,13 +1078,12 @@ export class HomePanel {
 					: ""
 			}
 			${servicesKnown ? this.renderServicesSection(services, feature) : ""}
-			${this.renderFeatureTmuxSection(snapshot)}
-			${this.renderGitStatsSection(snapshot)}
+			${this.renderFeatureDiagnostics(snapshot)}
 			${this.renderQuickActions(
 				feature,
 				ctx.featureManager.getBootstrapCommands().length > 0,
 			)}
-			${this.renderFeatureActions(feature)}
+			${cockpit.primaryAction.kind === "review_finish" ? "" : this.renderFeatureActions(feature)}
 		</div>`;
 
 		return `<!DOCTYPE html>
@@ -1094,17 +1114,11 @@ export class HomePanel {
 .agent-status-dot.attention-waiting_for_user { background: var(--vscode-notificationsWarningIcon-foreground); box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 18%, transparent); }
 .agent-status-dot.attention-failed { background: var(--vscode-errorForeground); }
 .agent-status-dot.attention-idle, .agent-status-dot.attention-unknown, .agent-status-dot.attention-done { background: var(--vscode-disabledForeground); }
-.binding-badge { white-space: nowrap; }
-.binding-badge.binding-pending { opacity: .75; }
-.binding-badge.binding-ambiguous { color: var(--vscode-notificationsWarningIcon-foreground); background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent); }
-.binding-badge.binding-unverified { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); }
-.binding-badge.binding-unsupported { opacity: .6; }
-.agent-lifecycle-badge { color: var(--vscode-descriptionForeground); white-space: nowrap; }
-.agent-session-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 9px; }
 .agent-status-dot.primary-state-working { background: var(--vscode-testing-iconPassed); animation: pulse-green 2s ease-in-out infinite; }
 .agent-status-dot.primary-state-warning { background: var(--vscode-notificationsWarningIcon-foreground); }
 .agent-status-dot.primary-state-error { background: var(--vscode-errorForeground); }
-.agent-status-dot.primary-state-normal, .agent-status-dot.primary-state-muted { background: var(--vscode-disabledForeground); }
+.agent-status-dot.primary-state-normal { background: var(--vscode-charts-blue, var(--vscode-focusBorder)); }
+.agent-status-dot.primary-state-muted { background: var(--vscode-disabledForeground); }
 </style>
 </head>
 <body>
@@ -1112,6 +1126,164 @@ export class HomePanel {
 	<script src="${jsUri}"></script>
 </body>
 </html>`;
+	}
+
+	private renderFeatureCockpit(
+		cockpit: FeatureCockpitPresentation,
+		snapshot: FeatureSnapshot,
+	): string {
+		const primary = this.renderCockpitPrimaryAction(
+			cockpit.primaryAction,
+			snapshot.feature.id,
+		);
+		const headline = cockpit.summary.label;
+		const summaryDetail = cockpit.summary.detail;
+		const remainingAlerts = cockpit.alerts.slice(1);
+		const remainingAlertCount =
+			remainingAlerts.length + cockpit.hiddenAlertCount;
+		const alerts =
+			remainingAlertCount === 0
+				? ""
+				: `<details class="feature-attention-card">
+					<summary>${remainingAlertCount} more item${remainingAlertCount === 1 ? "" : "s"} need attention</summary>
+					${remainingAlerts
+						.map(
+							(
+								problem,
+							) => `<div class="feature-attention-row feature-attention-row--${problem.severity}">
+								<strong>${this.escapeHtml(problem.summary)}</strong>
+								<span>${this.escapeHtml(problem.detail)}</span>
+							</div>`,
+						)
+						.join("")}
+					${cockpit.hiddenAlertCount > 0 ? `<div class="feature-cockpit-observed">${cockpit.hiddenAlertCount} additional item${cockpit.hiddenAlertCount === 1 ? "" : "s"} available after refresh</div>` : ""}
+				</details>`;
+		const working = cockpit.work.workingTree;
+		const workingBreakdown =
+			working.status === "known"
+				? `<div class="feature-cockpit-breakdown">
+					<span>${working.staged.length} staged</span>
+					<span>${working.unstaged.length} unstaged</span>
+					<span>${working.untracked.length} untracked</span>
+					<span>${working.conflicted.length} conflicts</span>
+				</div>${this.renderWorkingTreeFiles(working)}`
+				: "";
+		const committed = cockpit.work.committed;
+		const committedBreakdown =
+			committed.status === "known"
+				? `<div class="feature-cockpit-breakdown">
+					${committed.baseCommits > 0 ? `<span>${committed.baseCommits} base-only commit${committed.baseCommits === 1 ? "" : "s"}</span>` : ""}
+					${committed.filesChanged === undefined ? "<span>File diff Unknown</span>" : `<span>${committed.filesChanged} files</span><span class="git-additions">+${committed.insertions ?? 0}</span><span class="git-deletions">-${committed.deletions ?? 0}</span>`}
+				</div>${this.renderCommittedFiles(committed)}`
+				: "";
+		const pull = cockpit.delivery.pullRequest;
+		const pullAction =
+			pull.number && cockpit.primaryAction.kind !== "open_pull_request"
+				? `<button class="quick-action-btn subtle" onclick="openPullRequest('${snapshot.feature.id}')">Open</button>`
+				: "";
+
+		return `<section class="feature-cockpit">
+			<div class="feature-cockpit-summary">
+				<div class="feature-cockpit-summary-copy">
+					<strong>${this.escapeHtml(headline)}</strong>
+					${summaryDetail ? `<span class="feature-cockpit-summary-detail">${this.escapeHtml(summaryDetail)}</span>` : ""}
+					<span class="feature-cockpit-summary-meta">${this.escapeHtml(cockpit.runtime.label)}</span>
+				</div>
+				${primary}
+			</div>
+			${alerts}
+			<div class="feature-cockpit-grid">
+				<div class="feature-cockpit-card">
+					<h3>Work</h3>
+					<div class="feature-cockpit-row">
+						<span>Working tree</span>
+						<div class="feature-cockpit-value feature-cockpit-value--${working.status === "known" ? working.tone : "warning"}">
+							<strong>${this.escapeHtml(working.label)}</strong>${workingBreakdown}
+						</div>
+					</div>
+					<div class="feature-cockpit-row">
+						<span>Committed</span>
+						<div class="feature-cockpit-value"><strong>${this.escapeHtml(committed.label)}</strong>${committedBreakdown}</div>
+					</div>
+				</div>
+				<div class="feature-cockpit-card">
+					<h3>Delivery</h3>
+					<div class="feature-cockpit-row"><span>Delivery branch</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.source.tone}"><strong>${this.escapeHtml(cockpit.delivery.source.label)}</strong>${cockpit.delivery.source.detail ? `<div class="feature-cockpit-breakdown">${this.escapeHtml(cockpit.delivery.source.detail)}</div>` : ""}</div></div>
+					<div class="feature-cockpit-row"><span>Target</span><div class="feature-cockpit-value"><strong>${this.escapeHtml(cockpit.delivery.target.label)}</strong> ${this.escapeHtml(cockpit.delivery.target.detail ?? "")}${this.renderReferenceHealthChip(snapshot.projectId)}</div></div>
+					<div class="feature-cockpit-row"><span>Tracking</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.tracking.tone}">${this.escapeHtml(cockpit.delivery.tracking.label)}</div></div>
+					<div class="feature-cockpit-row"><span>Pull request</span><div class="feature-cockpit-value feature-cockpit-value--${pull.tone}">${this.escapeHtml(pull.label)} ${pullAction}</div></div>
+					<div class="feature-cockpit-row"><span>Integration</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.integration.tone}"><strong>${this.escapeHtml(cockpit.delivery.integration.label)}</strong>${cockpit.delivery.integration.detail ? `<div class="feature-cockpit-breakdown">${this.escapeHtml(cockpit.delivery.integration.detail)}</div>` : ""}</div></div>
+				</div>
+			</div>
+			<details class="feature-cockpit-evidence">
+				<summary>Evidence</summary>
+				<div>Local observation ${this.escapeHtml(cockpit.observedAt)} · GitHub observation ${this.escapeHtml(snapshot.github.observedAt)}</div>
+			</details>
+		</section>`;
+	}
+
+	private renderWorkingTreeFiles(
+		working: Extract<
+			FeatureCockpitPresentation["work"]["workingTree"],
+			{ status: "known" }
+		>,
+	): string {
+		if (working.pending === 0) return "";
+		const files = [
+			...working.conflicted.map((file) => `conflict  ${file}`),
+			...working.staged.map((file) => `staged    ${file}`),
+			...working.unstaged.map((file) => `unstaged  ${file}`),
+			...working.untracked.map((file) => `untracked ${file}`),
+		];
+		return `<details class="feature-cockpit-files"><summary>Show files</summary><pre class="feature-cockpit-files-list">${this.escapeHtml(files.join("\n"))}</pre></details>`;
+	}
+
+	private renderCommittedFiles(
+		committed: Extract<
+			FeatureCockpitPresentation["work"]["committed"],
+			{ status: "known" }
+		>,
+	): string {
+		if (!committed.files || committed.files.length === 0) return "";
+		const files = committed.files.map((file) => {
+			const pathLabel =
+				file.oldPath && file.newPath && file.oldPath !== file.newPath
+					? `${file.oldPath} -> ${file.newPath}`
+					: file.path;
+			const insertions =
+				file.insertions === null ? "+?" : `+${file.insertions}`;
+			const deletions = file.deletions === null ? "-?" : `-${file.deletions}`;
+			return `${insertions.padStart(5)} ${deletions.padStart(5)}  ${pathLabel}`;
+		});
+		return `<details class="feature-cockpit-files"><summary>Show committed files</summary><pre class="feature-cockpit-files-list">${this.escapeHtml(files.join("\n"))}</pre></details>`;
+	}
+
+	private renderCockpitPrimaryAction(
+		action: FeatureCockpitPrimaryAction,
+		featureId: string,
+	): string {
+		let onclick: string;
+		switch (action.kind) {
+			case "refresh_evidence":
+				onclick = `quickAction('refresh', '${featureId}')`;
+				break;
+			case "open_agent":
+				onclick = `focusAgent('${featureId}', '${action.agentId}')`;
+				break;
+			case "open_workspace":
+				onclick = `quickAction('openGitView', '${featureId}')`;
+				break;
+			case "open_pull_request":
+				onclick = `openPullRequest('${featureId}')`;
+				break;
+			case "create_pull_request":
+				onclick = `quickAction('createPR', '${featureId}')`;
+				break;
+			case "review_finish":
+				onclick = `deleteFeature('${featureId}')`;
+				break;
+		}
+		return `<button class="quick-action-btn primary feature-cockpit-primary" onclick="${onclick}">${this.escapeHtml(action.label)}</button>`;
 	}
 
 	private getProjectHtml(projectId: string, settings = false): string {
@@ -1176,11 +1348,16 @@ export class HomePanel {
 						const agents = this.snapshotAgents(snapshot);
 						const services = this.snapshotServices(snapshot);
 						const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
-						const gitStatus = feature.id.startsWith("base:")
+						const summary = feature.id.startsWith("base:")
 							? null
-							: featureSnapshotGitStatus(snapshot);
-						const statusBadge = gitStatus
-							? `<span class="project-status-badge status-${gitStatus}">${gitStatusLabel(gitStatus)}</span>`
+							: presentFeatureCockpit(
+									snapshot,
+									this.featureStateCoordinator.getProjectReferenceHealth(
+										projectId,
+									),
+								).summary;
+						const statusBadge = summary
+							? `<span class="project-status-badge status-${summary.tone}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>`
 							: '<span class="project-base-label">base</span>';
 						const agentCount = agents.filter((a) => a.status !== "done").length;
 						const serviceCount = services.filter(
@@ -1366,9 +1543,15 @@ export class HomePanel {
 	}
 
 	// -- Feature Home render helpers ------------------------------
-	private renderFeatureProvisioning(feature: Feature): string {
+	private renderFeatureProvisioning(
+		feature: Feature,
+		locallyActive = false,
+	): string {
 		const progress = feature.provisioning;
 		if (!progress || progress.state === "ready") return "";
+		const activelyProvisioning =
+			progress.state === "provisioning" && locallyActive;
+		const stateUnknown = progress.state === "provisioning" && !locallyActive;
 		const steps = progress.steps
 			.map((step) => {
 				const icon =
@@ -1377,52 +1560,23 @@ export class HomePanel {
 						: step.status === "failed"
 							? "!"
 							: step.status === "running"
-								? "…"
+								? activelyProvisioning
+									? "…"
+									: "?"
 								: "·";
-				return `<div class="lifecycle-step ${step.status}"><span>${step.status === "running" ? '<i class="lifecycle-spinner"></i>' : icon}</span><span>${this.escapeHtml(step.label)}</span>${step.error ? `<small>${this.escapeHtml(step.error)}</small>` : ""}</div>`;
+				return `<div class="lifecycle-step ${step.status}"><span>${step.status === "running" && activelyProvisioning ? '<i class="lifecycle-spinner"></i>' : icon}</span><span>${this.escapeHtml(step.label)}</span>${step.error ? `<small>${this.escapeHtml(step.error)}</small>` : ""}</div>`;
 			})
 			.join("");
-		return `<section class="lifecycle-card ${progress.state === "failed" ? "failed" : ""}"><strong>${progress.state === "failed" ? "Feature setup failed" : "Setting up feature"}</strong><div class="lifecycle-steps">${steps}</div>${progress.error ? `<p>${this.escapeHtml(progress.error)}</p>` : ""}</section>`;
-	}
-
-	private renderFeatureAttention(snapshot: FeatureSnapshot): string {
-		const actionable = snapshot.attention.filter(
-			(problem) =>
-				problem.severity === "error" || problem.severity === "warning",
-		);
-		if (actionable.length === 0) return "";
-		return `
-		<div class="feature-attention-card">
-			<div class="section-label">Needs attention</div>
-			${actionable
-				.slice(0, 6)
-				.map(
-					(problem) => `
-				<div class="feature-attention-row feature-attention-row--${problem.severity}">
-					<strong>${this.escapeHtml(problem.summary)}</strong>
-					<span>${this.escapeHtml(problem.detail)}</span>
-				</div>`,
-				)
-				.join("")}
-		</div>`;
-	}
-
-	private renderProgressSection(
-		pct: number,
-		done: number,
-		total: number,
-	): string {
-		if (total === 0) return "";
-		return `
-		<div class="progress-section">
-			<div class="progress-label">
-				<span>Agent Progress</span>
-				<span>${done} / ${total} done</span>
-			</div>
-			<div class="progress-track">
-				<div class="progress-fill" style="width: ${pct}%"></div>
-			</div>
-		</div>`;
+		const title =
+			progress.state === "failed"
+				? "Feature setup failed"
+				: stateUnknown
+					? "Feature setup state unknown"
+					: "Setting up feature";
+		const detail = stateUnknown
+			? "<p>No setup operation is active in this window. Git state was left unchanged.</p>"
+			: "";
+		return `<section class="lifecycle-card ${progress.state === "failed" ? "failed" : ""}"><strong>${title}</strong><div class="lifecycle-steps">${steps}</div>${detail}${progress.error ? `<p>${this.escapeHtml(progress.error)}</p>` : ""}</section>`;
 	}
 
 	private renderAgentsSection(
@@ -1495,21 +1649,26 @@ export class HomePanel {
 		const idx = allAgents.indexOf(agent);
 		const color = TERMINAL_COLOR_HEX[idx % TERMINAL_COLOR_HEX.length];
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
-		const toolBadge = `<span class="agent-tool-badge">${this.escapeHtml(tool.name)}</span>`;
 		const observation = this.projectManager
 			.resolveFeature(feature.id)
 			?.ctx.agentManager.observe(agent);
-		const presented = observation
-			? presentAgentState(observation)
-			: { label: "Unknown", tone: "muted" as const };
-		const isDone = agent.status === "done";
-		const bindingBadgeData = presentSessionBinding(
-			agent.sessionBinding,
-			agent.status,
+		const card = presentAgentCard(
+			observation ?? {
+				identity: {
+					agentName: agent.name,
+					sessionTitle: agent.sessionTitle,
+					providerId: agent.toolId,
+				},
+				lifecycle: { state: "unknown", source: "agentspace" },
+				attention: { state: "unknown" },
+				session: {
+					state: agent.sessionBinding?.state ?? "pending",
+					detail: agent.sessionBinding?.detail,
+				},
+			},
 		);
-		const bindingBadge = bindingBadgeData
-			? `<button id="agent-binding-badge-${agent.id}" class="agent-tool-badge ${bindingBadgeData.className}" title="${this.escapeHtml(bindingBadgeData.tooltip)}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')">⚠</button>`
-			: `<span id="agent-binding-badge-${agent.id}" class="agent-tool-badge" style="display:none"></span>`;
+		const presented = card.primaryState;
+		const isDone = agent.status === "done";
 		const isErrored = agent.status === "errored";
 		const nameClass = isDone ? "agent-panel-name done" : "agent-panel-name";
 		const emptyState = isDone
@@ -1518,7 +1677,7 @@ export class HomePanel {
 				? this.escapeHtml(
 						agent.lastError ?? "Agent failed to start or exited unexpectedly.",
 					)
-				: "Click to view live terminal output";
+				: "No live output captured yet";
 		const startupStep = agent.startup?.steps.find(
 			(step) => step.status === "running",
 		);
@@ -1532,28 +1691,32 @@ export class HomePanel {
 		let actionButtons: string;
 		if (isDone) {
 			actionButtons = `
-				<button class="agent-action-btn" onclick="event.stopPropagation(); reopenAgent('${feature.id}', '${agent.id}')" title="Reopen">&#8635;</button>`;
+				<button class="agent-action-btn agent-action-btn-secondary" onclick="reopenAgent('${feature.id}', '${agent.id}')">Reopen agent</button>`;
 		} else {
-			const focusTitle = isErrored ? "Retry Agent" : "Focus Terminal";
 			actionButtons = `
-				<button class="agent-action-btn" onclick="event.stopPropagation(); focusAgent('${feature.id}', '${agent.id}')" title="${focusTitle}">&#9243;</button>
-				<button class="agent-action-btn" onclick="event.stopPropagation(); markAgentDone('${feature.id}', '${agent.id}', '${this.escapeHtml(agent.name)}')" title="Mark Done">&#10003;</button>`;
+				<button class="agent-action-btn agent-terminal-action" onclick="focusAgent('${feature.id}', '${agent.id}')">Open terminal</button>
+				<button class="agent-action-btn agent-action-btn-secondary" onclick="markAgentDone('${feature.id}', '${agent.id}')">Mark done</button>`;
 		}
 
 		return `
 		<div class="agent-panel ${isErrored ? "errored" : ""}" style="border-left: 2px solid ${color}">
-			<div class="agent-panel-header" id="agent-header-${agent.id}" onclick="toggleAgent('${agent.id}')">
-				<div id="agent-attention-dot-${agent.id}" class="agent-status-dot primary-state-${presented.tone}"></div>
-				<span class="${nameClass}" title="${this.escapeHtml(agent.name)}">${this.escapeHtml(agent.name)}</span>
-				${agent.sessionTitle ? `<span class="agent-session-title" title="${this.escapeHtml(agent.sessionTitle)}">${this.escapeHtml(agent.sessionTitle)}</span>` : ""}
-				<span id="agent-lifecycle-badge-${agent.id}" class="agent-tool-badge agent-lifecycle-badge primary-state-${presented.tone}" title="${this.escapeHtml(presented.detail ?? "")}">${presented.label}</span>
-				${toolBadge}
-				${startupBadge}
-				${bindingBadge}
+			<div class="agent-panel-header agent-card-header" id="agent-header-${agent.id}">
+				<div class="agent-panel-summary">
+					<div class="agent-identity">
+						<div id="agent-attention-dot-${agent.id}" class="agent-status-dot primary-state-${presented.tone}"></div>
+						<span id="agent-name-${agent.id}" class="${nameClass}" title="${this.escapeHtml(card.name)}">${this.escapeHtml(card.name)}</span>
+					</div>
+					<span id="agent-lifecycle-badge-${agent.id}" class="agent-primary-state primary-state-${presented.tone}" title="${this.escapeHtml(presented.detail ?? "")}">${this.escapeHtml(presented.label)}</span>
+				</div>
+				<div class="agent-metadata">
+					<span class="agent-provider">Provider &middot; ${this.escapeHtml(tool.name)}</span>
+					${card.secondaryTitle ? `<span class="agent-session-title" title="${this.escapeHtml(card.secondaryTitle)}">Session &middot; ${this.escapeHtml(card.secondaryTitle)}</span>` : ""}
+					${startupBadge}
+				</div>
 				<div class="agent-panel-actions">
 					${actionButtons}
+					<button id="agent-toggle-${agent.id}" class="agent-activity-toggle" aria-expanded="false" aria-controls="agent-activity-${agent.id}" onclick="toggleAgent('${agent.id}')">Activity <span class="agent-panel-chevron" id="agent-chevron-${agent.id}">&rsaquo;</span></button>
 				</div>
-				<span class="agent-panel-chevron" id="agent-chevron-${agent.id}">&rsaquo;</span>
 			</div>
 			<div class="agent-activity" id="agent-activity-${agent.id}">
 				<div class="activity-content">
@@ -1689,6 +1852,18 @@ export class HomePanel {
 				'<div class="tmux-empty-state">No managed tmux sessions for this feature.</div>'
 			}
 		</div>`;
+	}
+
+	private renderFeatureDiagnostics(snapshot: FeatureSnapshot): string {
+		const { liveRows, unknownRows } = this.getTmuxSessionRows(snapshot);
+		const sessionSummary =
+			unknownRows.length > 0
+				? "session state unknown"
+				: `${liveRows.length} live session${liveRows.length === 1 ? "" : "s"}`;
+		return `<details class="feature-diagnostics">
+			<summary>Diagnostics · ${sessionSummary}</summary>
+			<div class="feature-diagnostics-content">${this.renderFeatureTmuxSection(snapshot)}</div>
+		</details>`;
 	}
 
 	private renderTmuxFeatureGroup(
@@ -1882,42 +2057,11 @@ export class HomePanel {
 		</div>`;
 	}
 
-	private renderGitStatsSection(snapshot: FeatureSnapshot): string {
-		const stats = this.snapshotGitStats(snapshot);
-		const content = stats
-			? this.renderGitStatsContent(stats)
-			: '<div class="activity-empty">Git state unavailable</div>';
-		return `
-		<div>
-			<div class="section-label">Git Changes</div>
-			<div class="git-stats" id="git-stats-content">
-				${content}
-			</div>
-		</div>`;
-	}
-
 	private renderQuickActions(feature: Feature, hasBootstrap = false): string {
+		if (!hasBootstrap) return "";
 		return `
-		<div>
-			<div class="section-label">Quick Actions</div>
-			<div class="quick-actions">
-				<button class="quick-action-btn primary" onclick="quickAction('addAgent', '${feature.id}')">
-					${ICON_PLUS} Add Agent
-				</button>
-				<button class="quick-action-btn" onclick="quickAction('addService', '${feature.id}')">
-					${ICON_SERVER} Add Service
-				</button>
-				${hasBootstrap ? `<button class="quick-action-btn" onclick="quickAction('bootstrapFeature', '${feature.id}')">Bootstrap Worktree</button>` : ""}
-				<button class="quick-action-btn" onclick="quickAction('createPR', '${feature.id}')">
-					${ICON_PR} Create PR
-				</button>
-				<button class="quick-action-btn" onclick="quickAction('openGitView', '${feature.id}')">
-					${ICON_GIT} Open Workspace
-				</button>
-				<button class="quick-action-btn" onclick="quickAction('syncNames', '${feature.id}')">
-					${ICON_SYNC} Sync Names
-				</button>
-			</div>
+		<div class="feature-setup-actions">
+			<button class="quick-action-btn" onclick="quickAction('bootstrapFeature', '${feature.id}')">Bootstrap Worktree</button>
 		</div>`;
 	}
 
@@ -1970,6 +2114,3 @@ interface GitStats {
 const ICON_REFRESH = `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13.451 5.609l-.579-.921-1.017.641c-.597-.58-1.345-.99-2.162-1.18a5.03 5.03 0 0 0-2.441.077 4.975 4.975 0 0 0-2.108 1.299A5.007 5.007 0 0 0 3.986 8.1a4.947 4.947 0 0 0 .424 2.32 5.028 5.028 0 0 0 1.541 1.86 5.067 5.067 0 0 0 2.21.996 4.997 4.997 0 0 0 2.44-.079c.729-.224 1.393-.612 1.938-1.137l-.726-.726a3.98 3.98 0 0 1-1.535.892 3.98 3.98 0 0 1-1.935.062 4.037 4.037 0 0 1-1.758-.793A3.996 3.996 0 0 1 5.36 9.974a3.935 3.935 0 0 1-.337-1.842A3.985 3.985 0 0 1 5.723 6.3a3.955 3.955 0 0 1 1.674-1.032 3.998 3.998 0 0 1 1.94-.061c.65.133 1.248.436 1.723.875l-1.06.667.596.921L13.452 5.61z"/></svg>`;
 const ICON_PLUS = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>`;
 const ICON_FOLDER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10L14.5 3zm-.51 8.49V13h-12V7h12v4.49zm0-5.49h-12V3h4.29l.85.85.36.15H14v2z"/></svg>`;
-const ICON_SERVER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v1l-.5.5h-9l-.5-.5v-1l.5-.5zM5 4h1V3H5v1zm0 5h1V8H5v1z"/></svg>`;
-const ICON_PR = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7 3.28V12h1V3.28l2.35 2.36.71-.7L8 1.88l-.35.35L4.59 5.29l.7.71L7 3.28zM13.5 7.72V14H2.5V7.72h-1V14.5l.5.5h12l.5-.5V7.72h-1z"/></svg>`;
-const ICON_SYNC = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.006 8.267L.78 9.5 0 8.73l2.09-2.07.76.01 2.09 2.12-.71.71-1.34-1.34c-.04 1.53.5 2.93 1.53 3.96a5.55 5.55 0 0 0 3.92 1.63l.04 1a6.55 6.55 0 0 1-4.63-1.92 6.48 6.48 0 0 1-1.79-4.53zm12.2-.53l-.76-.01-2.09-2.12.71-.71 1.34 1.34c.04-1.53-.5-2.93-1.53-3.96a5.55 5.55 0 0 0-3.92-1.63l-.04-1a6.55 6.55 0 0 1 4.63 1.92 6.47 6.47 0 0 1 1.78 4.53l1.22-1.23.78.77-2.12 2.1z"/></svg>`;

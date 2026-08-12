@@ -17,7 +17,7 @@ available. Binding health is never promoted to the primary state.
 
 ## Primary-state hierarchy
 
-`presentAgentState` applies this order:
+`presentAgentState` applies this order to the provider-neutral state:
 
 1. lifecycle `errored`, `done`, then `stopped`;
 2. attention `waiting_for_user`, `failed`, `working`, then `idle`;
@@ -25,10 +25,14 @@ available. Binding health is never promoted to the primary state.
 4. running plus attention `unsupported` becomes `Running`;
 5. running plus attention `unknown` becomes `Unknown`.
 
-Home and the Feature Sidebar consume this same presenter. Provider session
-titles are secondary and ellipsized before the primary state. A non-bound
-session is shown as a health indicator or Doctor detail, not as a second
-primary status.
+Home and the Feature Sidebar consume `presentAgentCard`, which wraps that state
+for the compact card. When lifecycle evidence proves the agent runtime is
+running but provider activity is unknown, the card says `Running` and keeps the
+activity uncertainty in its detail. It never turns an unknown lifecycle into a
+known state. Provider session titles are secondary and omitted when they repeat
+the stable name. An ambiguous or unverified session is one explicit `Choose
+session` action; other binding states stay in Doctor rather than becoming a
+second card status.
 
 ## Provider matrix
 

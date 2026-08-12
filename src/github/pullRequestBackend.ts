@@ -145,8 +145,12 @@ export class HttpGitHubBackend implements PullRequestBackend {
 export function toPullRequestObservation(
 	record: PullRequestApiRecord,
 ): PullRequestObservation {
-	const state =
-		record.state === "open" ? "open" : record.merged ? "merged" : "closed";
+	// The REST list endpoint represents merged pull requests as `state: closed`.
+	// Unlike the single-PR endpoint, it may omit the boolean `merged` field while
+	// still returning `merged_at`. Treat either positive field as merge proof;
+	// never infer a merge from `state: closed` alone.
+	const merged = record.merged === true || Boolean(record.merged_at);
+	const state = record.state === "open" ? "open" : merged ? "merged" : "closed";
 	return {
 		number: record.number,
 		url: record.html_url,

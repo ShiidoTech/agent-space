@@ -7,6 +7,7 @@ vi.mock("vscode", () => ({
 	ThemeColor: class {},
 }));
 
+import * as vscode from "vscode";
 import { FeatureSidebarProvider } from "../features/featureSidebarProvider";
 
 describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
@@ -206,5 +207,47 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 			agentId: "a1",
 			state: "focused",
 		});
+	});
+
+	it("routes an explicit conversation link request to the extension command", () => {
+		let onMessage:
+			| ((message: { command: string } & Record<string, string>) => void)
+			| undefined;
+		const linkProvider = new FeatureSidebarProvider(
+			{ getAllContexts: () => [] } as never,
+			{
+				acquireConsumer: () => ({ dispose: vi.fn() }),
+				reconcile: () => Promise.resolve(),
+			} as never,
+			{} as never,
+			undefined,
+			{} as never,
+		);
+		linkProvider.resolveWebviewView({
+			visible: true,
+			webview: {
+				options: {},
+				html: "",
+				asWebviewUri: vi.fn(() => "asset"),
+				postMessage: vi.fn(() => Promise.resolve(true)),
+				onDidReceiveMessage: vi.fn((handler) => {
+					onMessage = handler;
+					return { dispose: vi.fn() };
+				}),
+			},
+			onDidChangeVisibility: vi.fn(() => ({ dispose: vi.fn() })),
+		} as never);
+
+		onMessage?.({
+			command: "attachProviderSession",
+			featureId: "f1",
+			agentId: "a1",
+		});
+
+		expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+			"agentSpace.attachProviderSession",
+			"f1",
+			"a1",
+		);
 	});
 });

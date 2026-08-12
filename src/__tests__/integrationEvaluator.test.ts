@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { FeatureDeliveryObservation } from "../features/featureSnapshot";
 import {
 	evaluateIntegration,
 	type MergedHeadGitEvidence,
@@ -120,6 +121,28 @@ function mergedHeadProof(ancestor = true): MergedHeadGitEvidence {
 			descendantSha: FEATURE,
 			count: 2,
 		}),
+	};
+}
+
+function delivery(
+	overrides: Partial<FeatureDeliveryObservation> = {},
+): FeatureDeliveryObservation {
+	const head = { ref: "feat/audit_and_go", sha: PR_HEAD };
+	const active = { ref: "feat/feature_cockpit", sha: FEATURE };
+	return {
+		branchRef: head.ref,
+		head: known(head),
+		activeRelation: known({
+			ancestor: head,
+			descendant: active,
+			isAncestor: true,
+		}),
+		commitsAfter: known({
+			ancestorSha: PR_HEAD,
+			descendantSha: FEATURE,
+			count: 1,
+		}),
+		...overrides,
 	};
 }
 
@@ -312,6 +335,27 @@ describe("IntegrationEvaluator", () => {
 			});
 		});
 
+		it("compares an open PR to delivery while retaining continuation evidence", () => {
+			const result = evaluateIntegration({
+				git: observations(false),
+				github: githubKnown([pull({ state: "open" })]),
+				delivery: delivery(),
+			});
+
+			expect(result).toMatchObject({
+				status: "known",
+				outcome: "pull_request_open",
+				evidence: {
+					delivery: {
+						branchRef: "feat/audit_and_go",
+						head: { sha: PR_HEAD },
+						activeRelation: { isAncestor: true },
+						commitsAfter: 1,
+					},
+				},
+			});
+		});
+
 		it("reports not integrated for a closed unmerged pull request", () => {
 			expect(
 				evaluateIntegration({
@@ -347,6 +391,39 @@ describe("IntegrationEvaluator", () => {
 			expect(result).toMatchObject({
 				status: "known",
 				outcome: "new_work_after_integration",
+			});
+		});
+
+		it("uses delivery proof for a merged PR with an active continuation", () => {
+			expect(
+				evaluateIntegration({
+					git: observations(false),
+					github: githubKnown([pull({ state: "merged" })]),
+					delivery: delivery(),
+				}),
+			).toMatchObject({
+				status: "known",
+				outcome: "new_work_after_integration",
+				evidence: {
+					github: { commitsAfterIntegration: 1 },
+				},
+			});
+		});
+
+		it("fails closed when the active relation to merged delivery is unknown", () => {
+			expect(
+				evaluateIntegration({
+					git: observations(false),
+					github: githubKnown([pull({ state: "merged" })]),
+					delivery: delivery({
+						activeRelation: unknown("ancestry_unknown", "graph unavailable"),
+						commitsAfter: unknown("git_command_failed"),
+					}),
+				}),
+			).toMatchObject({
+				status: "unknown",
+				reason: "integration_unknown",
+				detail: "graph unavailable",
 			});
 		});
 

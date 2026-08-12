@@ -8,6 +8,7 @@ describe("resolveAttention", () => {
 			resolveAttention(
 				{
 					id: "opencode",
+					conversationIdentity: { ownership: "unsupported" },
 					capabilities: {
 						launch: true,
 						resume: true,
@@ -24,6 +25,7 @@ describe("resolveAttention", () => {
 	it("accepts a structured waiting signal", () => {
 		const provider = {
 			id: "fixture",
+			conversationIdentity: { ownership: "unsupported" } as const,
 			capabilities: {
 				launch: true,
 				resume: false,

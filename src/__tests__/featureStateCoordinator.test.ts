@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FeatureStateCoordinator } from "../features/featureStateCoordinator";
 import type { FeatureGitObservations } from "../git/featureGitObservations";
 import { known } from "../git/featureGitObservations";
+import type { PullRequestBackend } from "../github/pullRequestBackend";
 import type {
 	ProjectContext,
 	ProjectManager,
@@ -103,12 +104,22 @@ function setup(
 		featureManager: {
 			getBaseFeature: () => baseFeature(),
 			getBaseBranchName: () => "main",
-			getFeatures: vi.fn(() => {
-				throw new Error("must not be called");
-			}),
+			getFeatures: vi.fn(() => features),
 		},
 		featureGitInspector: {
 			inspect,
+			isCommitAncestor: vi.fn(
+				async (ancestorSha: string, descendantSha: string) =>
+					known({
+						ancestor: { ref: ancestorSha, sha: ancestorSha },
+						descendant: { ref: descendantSha, sha: descendantSha },
+						isAncestor: true,
+					}),
+			),
+			countCommitsAfter: vi.fn(
+				async (ancestorSha: string, descendantSha: string) =>
+					known({ ancestorSha, descendantSha, count: 1 }),
+			),
 			observeProject: vi.fn(async () => ({
 				repository: known({ root: "/repo" }),
 				worktrees: known([]),
@@ -465,5 +476,126 @@ describe("FeatureStateCoordinator", () => {
 		expect(coordinator.getSnapshot("base:p1")?.feature.branch).toBe(
 			"(unknown base)",
 		);
+	});
+
+	it("inspects the active branch while querying GitHub for the delivery branch", async () => {
+		const readResult = (stdout: string) => ({
+			argv: [],
+			cwd: "/repo",
+			exitCode: 0,
+			signal: null,
+			stdout,
+			stderr: "",
+		});
+		const active = {
+			...feature(),
+			branch: "feat/feature_cockpit",
+			primaryBranchRef: "feat/audit_and_go",
+			branchLinks: [
+				{
+					ref: "feat/audit_and_go",
+					role: "primary" as const,
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "reflog_checkout" as const,
+				},
+				{
+					ref: "feat/feature_cockpit",
+					role: "continuation" as const,
+					linkedAt: "2026-08-12T09:35:00.000Z",
+					source: "reflog_checkout" as const,
+					relation: {
+						kind: "descends_from" as const,
+						ref: "feat/audit_and_go",
+					},
+				},
+			],
+		};
+		const inspect = vi.fn(async () => git(active));
+		const fixture = setup(inspect);
+		fixture.setFeatures([
+			{
+				...active,
+				primaryBranchRef: undefined,
+				branchLinks: undefined,
+			},
+		]);
+		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
+		const deliverySha = "4".repeat(40);
+		fixture.context.gitClient.read = vi.fn(async (args: readonly string[]) => {
+			if (args[0] === "config") {
+				return readResult(
+					"remote.origin.url https://github.com/ShiidoTech/agent-space.git\n",
+				);
+			}
+			if (args[0] === "rev-parse" && args[2]?.startsWith("feat/audit_and_go")) {
+				return readResult(`${deliverySha}\n`);
+			}
+			return readResult("main\n");
+		});
+		const listPullRequests = vi.fn(async () => ({
+			status: "ok" as const,
+			pulls: [
+				{
+					number: 74,
+					html_url: "https://github.com/ShiidoTech/agent-space/pull/74",
+					state: "open" as const,
+					draft: true,
+					head: { ref: "feat/audit_and_go", sha: deliverySha },
+					base: { ref: "main" },
+				},
+			],
+		}));
+		const backend = {
+			auth: vi.fn(async () => ({
+				state: "authenticated" as const,
+				source: "env" as const,
+				token: "test",
+			})),
+			listPullRequests,
+		} satisfies PullRequestBackend;
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			createGithubBackend: () => backend,
+			referenceBranchRemote: {
+				observe: vi.fn(async () => ({
+					status: "missing" as const,
+					observedAt: "2026-08-12T00:00:00.000Z",
+					provenance: {
+						source: "remote_head" as const,
+						ref: "refs/heads/main",
+						backend: "test",
+					},
+				})),
+			},
+		});
+
+		await coordinator.reconcile();
+
+		expect(inspect).toHaveBeenCalledWith(
+			expect.objectContaining({ featureBranch: "feat/feature_cockpit" }),
+			expect.anything(),
+		);
+		expect(fixture.context.featureManager.getFeatures).toHaveBeenCalledTimes(1);
+		expect(listPullRequests).toHaveBeenCalledWith(
+			expect.objectContaining({ head: "feat/audit_and_go" }),
+		);
+		expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+			queriedHeadSha: deliverySha,
+		});
+		expect(coordinator.getSnapshot("f1")?.delivery).toMatchObject({
+			branchRef: "feat/audit_and_go",
+			head: { status: "known", value: { sha: deliverySha } },
+			activeRelation: { status: "known", value: { isAncestor: true } },
+			commitsAfter: { status: "known", value: { count: 1 } },
+		});
+		expect(coordinator.getSnapshot("f1")?.attention).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ code: "continuation_outside_delivery" }),
+			]),
+		);
+		expect(
+			coordinator
+				.getSnapshot("f1")
+				?.attention.some((item) => item.code === "pull_request_head_mismatch"),
+		).toBe(false);
 	});
 });

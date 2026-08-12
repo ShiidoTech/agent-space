@@ -1,4 +1,9 @@
-import type { FeatureGitObservations } from "../git/featureGitObservations";
+import type {
+	AncestryObservation,
+	FeatureGitObservations,
+	GitObservation,
+	ObservedCommit,
+} from "../git/featureGitObservations";
 import type { GitHubObservation } from "../github/githubObservation";
 import type { Feature, GitAwareStatus } from "../types";
 import type { AttentionProblem } from "./attentionEvaluator";
@@ -11,11 +16,24 @@ export interface FeatureSnapshot {
 	readonly feature: Readonly<Feature>;
 	readonly source: FeatureSnapshotSource;
 	readonly git: FeatureGitObservations;
+	/** Delivery ref and its separately observed relation to the active checkout. */
+	readonly delivery?: FeatureDeliveryObservation;
 	readonly github: GitHubObservation;
 	readonly integration: IntegrationEvaluation;
 	readonly runtime: FeatureRuntimeObservation;
 	readonly attention: readonly AttentionProblem[];
 	readonly observedAt: string;
+}
+
+export interface FeatureDeliveryObservation {
+	readonly branchRef: string;
+	readonly head: GitObservation<ObservedCommit>;
+	readonly activeRelation: GitObservation<AncestryObservation>;
+	readonly commitsAfter: GitObservation<{
+		readonly ancestorSha: string;
+		readonly descendantSha: string;
+		readonly count: number;
+	}>;
 }
 
 export type FeatureSnapshotSource =
@@ -63,8 +81,9 @@ export function featureSnapshotGitStatus(
 	if (snapshot.integration.status === "unknown") return "unknown";
 	switch (snapshot.integration.outcome) {
 		case "integrated_by_ancestry":
-		case "integrated_by_pull_request":
 		case "integrated_to_other_base":
+			return "integrated";
+		case "integrated_by_pull_request":
 			return "merged";
 		case "no_feature_commits":
 			return "new";
