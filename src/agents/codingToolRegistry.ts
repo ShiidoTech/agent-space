@@ -545,4 +545,34 @@ export class CodingToolRegistry {
 		// No sessionId — launch fresh so each agent gets its own session
 		return this.buildLaunchCommand(tool);
 	}
+
+	/**
+	 * Build the resume command for an agent, or `undefined` when no genuine
+	 * resume is possible.
+	 *
+	 * Unlike {@link buildResumeLaunchCommand} — whose callers may legitimately
+	 * want a fresh launch as a fallback — this never falls back to a fresh
+	 * launch command. A silent fallback into a brand-new conversation is
+	 * exactly the behavior an automated runtime restoration must avoid. It
+	 * returns `undefined` unless every condition that makes the resulting
+	 * command a real provider resume is met: a sessionId exists, the tool
+	 * declares a `resumeCommand` template, or the provider advertises resume
+	 * support with non-empty resume args for that sessionId.
+	 */
+	buildStrictResumeLaunchCommand(
+		tool: CodingTool,
+		sessionId?: string | null,
+	): string | undefined {
+		if (!sessionId) return undefined;
+		if (tool.resumeCommand) {
+			return `${envPrefix(tool)}${tool.resumeCommand
+				.replaceAll("{sessionId}", sessionId)
+				.replaceAll("{command}", tool.command)}`;
+		}
+		const provider = this.getProvider(tool);
+		if (!provider.capabilities.resume) return undefined;
+		const args = provider.resumeArgs?.(sessionId);
+		if (!args || args.length === 0) return undefined;
+		return `${envPrefix(tool)}${tool.command} ${args.join(" ")}`;
+	}
 }
