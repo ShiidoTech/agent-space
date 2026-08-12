@@ -73,8 +73,24 @@ function reopenAgent(e, featureId, agentId) {
 	send("reopenAgent", { featureId: featureId, agentId: agentId });
 }
 
+let _lastFocusedAgentEl = null;
+
 function focusAgent(e, featureId, agentId) {
 	e.stopPropagation();
+	// Give immediate visual feedback on click, before the round trip to the
+	// extension host — the click must never wait on tmux/session work to
+	// feel acknowledged.
+	var el =
+		(e.currentTarget && e.currentTarget.nodeType === 1 && e.currentTarget) ||
+		document.querySelector('[data-agent-id="' + agentId + '"]');
+	if (_lastFocusedAgentEl && _lastFocusedAgentEl !== el) {
+		_lastFocusedAgentEl.classList.remove("agent-focused", "opening");
+	}
+	if (el) {
+		el.classList.add("agent-focused");
+		el.classList.add("opening");
+		_lastFocusedAgentEl = el;
+	}
 	send("focusAgent", { featureId: featureId, agentId: agentId });
 }
 
@@ -301,6 +317,17 @@ function updateBindingBadge(agentEl, agent) {
 
 window.addEventListener("message", function (event) {
 	var msg = event.data;
+
+	if (msg.type === "agentFocusState") {
+		var focusEl = document.querySelector(
+			'[data-agent-id="' + msg.agentId + '"]',
+		);
+		if (focusEl) {
+			focusEl.classList.toggle("opening", msg.state === "opening");
+		}
+		return;
+	}
+
 	if (msg.type !== "sidebarUpdate" || !msg.data) return;
 
 	var needsFullRefresh = false;

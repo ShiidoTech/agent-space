@@ -36,6 +36,12 @@ export class HomePanel {
 		| undefined;
 	private disposables: vscode.Disposable[] = [];
 	private coordinatorConsumer?: { dispose: () => void };
+	/**
+	 * Monotonic focus counter: incremented on every focus request so a cold
+	 * reconciliation that resolves late never steals focus from a more recent
+	 * warm/cold focus (same arbitration as the sidebar's `focusSequence`).
+	 */
+	private focusSequence = 0;
 
 	public static createOrShow(
 		projectManager: ProjectManager,
@@ -431,6 +437,14 @@ export class HomePanel {
 	}
 
 	// -- Terminal focus -------------------------------------------
+	/**
+	 * Same hardened path as the sidebar (see
+	 * `FeatureSidebarProvider.handleFocusAgent`): an already-tracked terminal
+	 * is revealed with zero exec, and a cold reattachment runs async tmux
+	 * reconciliation off the click's call stack. The guarantee scope is
+	 * identical — warm focus and cold reattachment; a fresh-spawn branch
+	 * still contains a few synchronous calls.
+	 */
 	private focusAgentTerminal(agentId: string): void {
 		if (!this.terminalController || !this.currentFeatureId) return;
 		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
@@ -440,12 +454,28 @@ export class HomePanel {
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);
-		this.terminalController.focusOrCreateTerminal(
-			feature,
-			agent,
-			agentIndex,
-			true,
-		);
+
+		const focusSeq = ++this.focusSequence;
+
+		const existing = this.terminalController.getTerminal(agentId);
+		if (existing) {
+			existing.show();
+			return;
+		}
+		void this.terminalController
+			.focusOrCreateTerminalAsync(feature, agent, agentIndex, true)
+			.then((terminal) => {
+				// Still the latest focus request — reveal it. A cold terminal
+				// that is no longer current stays tracked but unrevealed, so
+				// the next click is an instant warm switch without ever
+				// stealing focus (same guard as the sidebar).
+				if (focusSeq === this.focusSequence && terminal) {
+					terminal.show();
+				}
+			})
+			.catch((error) => {
+				console.warn(`[HomePanel] focusAgent reconciliation failed: ${error}`);
+			});
 	}
 
 	private focusServiceTerminal(featureId: string, serviceId: string): void {

@@ -30,6 +30,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView;
 	private _onVisibilityChange?: (visible: boolean) => void;
 	private consumer?: { dispose: () => void };
+	/**
+	 * Monotonic counter stamped on every focus request. A cold reconciliation
+	 * only reveals its terminal (and claims "focused"/"failed") if its stamp
+	 * is still the latest, so a slower cold resolution can never steal focus
+	 * from a newer click (e.g. A cold → B warm).
+	 */
+	private focusSequence = 0;
 
 	private terminalController?: TerminalController;
 
@@ -360,12 +367,63 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);
-		this.terminalController.focusOrCreateTerminal(
-			feature,
-			agent,
-			agentIndex,
-			true,
-		);
+
+		const focusSeq = ++this.focusSequence;
+
+		// Strict fast path: an already-tracked terminal is revealed with no
+		// shell/process call of any kind before terminal.show(). This is the
+		// hot path for switching between already-running agents.
+		const existing = this.terminalController.getTerminal(agentId);
+		if (existing) {
+			existing.show();
+			this.postAgentFocusState(agentId, "focused");
+			return;
+		}
+
+		// Cold path: the VS Code terminal isn't tracked yet (e.g. right after
+		// a window reload). Surface an immediate "opening" state and let
+		// tmux/session reconciliation run asynchronously — it must never run
+		// synchronously on this interactive click path.
+		this.postAgentFocusState(agentId, "opening");
+		void this.terminalController
+			.focusOrCreateTerminalAsync(feature, agent, agentIndex, true)
+			.then((terminal) => {
+				if (focusSeq === this.focusSequence) {
+					if (terminal) {
+						// Still the latest focus request — reveal it. (A cold
+						// terminal that is no longer current stays tracked but
+						// unrevealed, so the next click is an instant warm
+						// switch without ever stealing focus.)
+						terminal.show();
+						this.postAgentFocusState(agentId, "focused");
+					} else {
+						this.postAgentFocusState(agentId, "failed");
+					}
+				}
+				this.refreshState();
+			})
+			.catch((error) => {
+				console.warn(
+					`[FeatureSidebarProvider] focusAgent reconciliation failed: ${error}`,
+				);
+				if (focusSeq === this.focusSequence) {
+					this.postAgentFocusState(agentId, "failed");
+				}
+				this.refreshState();
+			});
+	}
+
+	/** Best-effort UI hint for the sidebar's optimistic click feedback. */
+	private postAgentFocusState(
+		agentId: string,
+		state: "opening" | "focused" | "failed",
+	): void {
+		if (!this._view) return;
+		void this._view.webview
+			.postMessage({ type: "agentFocusState", agentId, state })
+			.then(undefined, () => {
+				// Webview may be disposed mid-round-trip; best-effort only.
+			});
 	}
 
 	private handleFocusService(featureId: string, serviceId: string): void {

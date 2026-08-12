@@ -6,7 +6,7 @@ import {
 } from "../projects/projectKnowledge";
 import type { ProjectManager } from "../projects/projectManager";
 import type { Agent, Feature, Service } from "../types";
-import { exec, getTerminalShellArgs } from "../utils/platform";
+import { exec, execAsync, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import type { TmuxIntegration } from "./tmux";
 
@@ -32,6 +32,12 @@ export class TerminalController implements vscode.Disposable {
 	private terminalMetadata = new Map<vscode.Terminal, TerminalMetadata>();
 	private disposables: vscode.Disposable[] = [];
 	private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Coalesces concurrent cold reconciliations so two clicks on the same
+	 *  untracked agent can never create two terminals. */
+	private terminalReconciliations = new Map<
+		string,
+		Promise<vscode.Terminal | undefined>
+	>();
 	private beforeLaunchCallback?: (
 		feature: Feature,
 		agent: Agent,
@@ -202,6 +208,161 @@ export class TerminalController implements vscode.Disposable {
 			return existing;
 		}
 		return this.createTerminal(feature, agent, agentIndex, resume);
+	}
+
+	/**
+	 * Async twin of {@link focusOrCreateTerminal} for the interactive click
+	 * path (sidebar + home).
+	 *
+	 * Scope of the non-blocking guarantee:
+	 * - **Warm focus** (terminal already tracked): `terminals.get -> show()`,
+	 *   zero exec of any kind.
+	 * - **Cold tmux reattachment** (terminal lost on window reload but the
+	 *   tmux session survived): async-only discovery via `adoptSessionAsync`/
+	 *   `isSessionAliveAsync` and an async spawn.
+	 *
+	 * It is NOT a guarantee over every fresh-launch branch: when the agent's
+	 * tmux session is actually gone, `createTerminalAsync` still runs a few
+	 * synchronous calls (`configureSession`, launch-note discovery, failure
+	 * recording). Those are cold-boot edge cases, not the warm-switch path.
+	 *
+	 * Concurrency contract: concurrent calls for the same agent coalesce into
+	 * one reconciliation, so a double-click can never create duplicate
+	 * terminals. A cold-created terminal is registered but NOT revealed; the
+	 * caller decides whether (and when) to `show()` it, so a resolution that
+	 * is no longer the user's latest focus request can never steal focus.
+	 */
+	async focusOrCreateTerminalAsync(
+		feature: Feature,
+		agent: Agent,
+		agentIndex: number,
+		resume = false,
+	): Promise<vscode.Terminal | undefined> {
+		const existing = this.terminals.get(agent.id);
+		if (existing) {
+			existing.show();
+			return existing;
+		}
+		const inFlight = this.terminalReconciliations.get(agent.id);
+		if (inFlight) {
+			return inFlight;
+		}
+		const reconciliation = this.createTerminalAsync(
+			feature,
+			agent,
+			agentIndex,
+			resume,
+		).finally(() => {
+			this.terminalReconciliations.delete(agent.id);
+		});
+		this.terminalReconciliations.set(agent.id, reconciliation);
+		return reconciliation;
+	}
+
+	/**
+	 * Non-blocking twin of {@link createTerminal}, used only for cold
+	 * reattachment off the interactive click path (see
+	 * `focusOrCreateTerminalAsync`). Every other caller keeps using the
+	 * synchronous `createTerminal`; the fail-closed session-ownership
+	 * ordering (snapshot existing sessions before spawning) is unchanged —
+	 * only the discovery calls themselves run asynchronously.
+	 *
+	 * Guarantee scope: the cold *reattachment* path is fully async. The
+	 * fresh-spawn branch (only reachable when the agent's tmux session is
+	 * actually gone, not just an untracked `vscode.Terminal`) still calls the
+	 * synchronous `configureSession` and `discoverProjectKnowledge`. Do not
+	 * read this method as a general "never block" promise.
+	 */
+	private async createTerminalAsync(
+		feature: Feature,
+		agent: Agent,
+		agentIndex: number,
+		resume = false,
+	): Promise<vscode.Terminal | undefined> {
+		const name = `[${feature.name}] ${agent.name}`;
+		const color = AGENT_COLORS[agentIndex % AGENT_COLORS.length];
+		const cwd = agent.worktreePath ?? feature.worktreePath;
+
+		const sessionName =
+			agent.tmuxSession ?? this.tmux.sessionName(feature.id, agent.id);
+		const legacySessionName = this.tmux.legacySessionName(feature.id, agent.id);
+		let sessionReady = await this.tmux.adoptSessionAsync(
+			sessionName,
+			legacySessionName,
+		);
+
+		let justLaunched = false;
+		if (!sessionReady) {
+			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+			const shouldResume = resume && agent.hasStarted === true;
+			try {
+				const baseCommand = shouldResume
+					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
+					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
+				const launchContextNote = shouldResume
+					? undefined
+					: this.buildAgentLaunchNote(feature);
+				const launchCommand = this.withLaunchContextNote(
+					baseCommand,
+					launchContextNote,
+				);
+				// Snapshot the provider's existing sessions for this directory
+				// before the CLI starts — identical ordering to the sync path —
+				// so a session created by THIS launch is the only one that can
+				// later be attributed to the agent.
+				this.beforeLaunchCallback?.(feature, agent, cwd);
+				await execAsync(this.tmux.createCommand(sessionName, launchCommand), {
+					cwd,
+				});
+				this.tmux.configureSession(sessionName);
+				sessionReady = await this.tmux.isSessionAliveAsync(sessionName);
+				justLaunched = sessionReady;
+			} catch (err) {
+				console.warn(`[TerminalController] tmux session create failed: ${err}`);
+				sessionReady = false;
+			}
+		}
+
+		if (!sessionReady) {
+			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+			const message = this.buildStartupFailureMessage(
+				agent.name,
+				tool.name,
+				cwd,
+			);
+			this.recordAgentFailure(feature.id, agent.id, message);
+			void vscode.window.showErrorMessage(message);
+			return undefined;
+		}
+
+		const { shellPath, shellArgs } = getTerminalShellArgs(sessionName);
+
+		const terminal = vscode.window.createTerminal({
+			name,
+			shellPath,
+			shellArgs,
+			cwd,
+			color,
+			iconPath: new vscode.ThemeIcon("hubot"),
+			location: vscode.TerminalLocation.Editor,
+			isTransient: true,
+		});
+
+		this.terminals.set(agent.id, terminal);
+		this.terminalMetadata.set(terminal, {
+			id: agent.id,
+			kind: "agent",
+			featureId: feature.id,
+			sessionName,
+			feature,
+			agent,
+			justLaunched,
+		});
+		// Deliberately NOT calling terminal.show() here: revealing is the
+		// caller's decision, so a cold reconciliation that is no longer the
+		// user's latest focus (e.g. A cold → B warm) can create the terminal
+		// in the background and register it as warm without stealing focus.
+		return terminal;
 	}
 
 	focusOrCreateServiceTerminal(
