@@ -11,9 +11,12 @@ src/**
 scripts/**
 feature/**
 sidebar-preview.png
+AGENTS.md
 biome.json
 bun.lock
 esbuild.js
+pnpm-lock.yaml
+pnpm-workspace.yaml
 tsconfig.json
 vitest.config.ts
 media/webview/_test_*.html

@@ -19,15 +19,29 @@ before experimenting with any alternative launch or install route.
 1. Inspect the current state and PR:
    `git status --short`, `git log --oneline -5`,
    `gh pr view <N> --repo ShiidoTech/agent-space`.
-2. Validate the extension:
+2. Install the locked dependencies (`bun install`) so the pinned
+   `@vscode/vsce` binary is available locally. A fresh clone needs this step
+   before packaging; the VSIX path below only exists after a package run.
+3. Validate the extension:
    `npm run typecheck`, `npm test -- --run`, `npm run compile`,
    `npm run package`.
-3. Install the generated VSIX in VS Code Insiders:
+4. `npm run package` is now self-verifying. It compiles, packages with the
+   repository-pinned local `@vscode/vsce` (`node_modules/.bin/vsce`, no
+   download, no Bun cache path) and then runs
+   `scripts/verify-package.mjs`, which fails the run if:
+   - no `agent-space-<version>.vsix` was produced for the current build;
+   - the VSIX predates the local `dist/extension.js` build (a stale artifact
+     cannot pass);
+   - required runtime/docs/media files are missing or development-only data
+     leaks into the archive;
+   - the packaged `extension/dist/extension.js` hash differs from the local
+     built bundle.
+5. Install the generated VSIX in VS Code Insiders:
    `code-insiders --install-extension <worktree>/agent-space-<version>.vsix --force`
-4. Verify the installed identity instead of relying on the installer exit code:
+6. Verify the installed identity instead of relying on the installer exit code:
    `code-insiders --list-extensions --show-versions` must contain
    `shiidotech.agent-space@<version>`.
-5. Reload the Insiders window (`Developer: Reload Window`) and verify the
+7. Reload the Insiders window (`Developer: Reload Window`) and verify the
    extension activates (`Agent Space` activity-bar icon, or
    `Agent Space: Doctor`).
 
@@ -53,11 +67,13 @@ turn the failed canonical check green.
   `../code-server-insiders` binary to install and list the extension, then
   verify the installed bundle hash. This path is installation-specific: never
   hard-code the Insiders commit directory.
-- If `npm run package` fails because Bun cannot create its temporary/cache
-  directory on a read-only filesystem, first record the failure. The validated
-  fallback on 2026-08-12 was
-  `npx --yes @vscode/vsce@3.9.2 package --no-dependencies`. Prefer the canonical
-  package script whenever the environment permits it, and report the fallback
+- If `npm run package` fails before `vsce package` runs (e.g. Bun cannot create
+  its temporary/cache directory on a read-only filesystem during `bun install`),
+  first record the failure. The network-based emergency fallback on 2026-08-12
+  was `npx --yes @vscode/vsce@3.9.2 package --no-dependencies`; it downloads the
+  tool into a cache and requires network/cache availability, so it is NOT the
+  routine route. When using it, still run
+  `node scripts/verify-package.mjs` afterwards and report the fallback
   explicitly rather than presenting it as canonical success.
 - Some server CLI invocations can print an `EROFS` log-directory warning and
   still return the requested extension path or list. Validate the requested
