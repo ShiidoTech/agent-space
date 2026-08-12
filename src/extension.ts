@@ -15,6 +15,7 @@ import { runBootstrapCommands } from "./features/bootstrapRunner";
 import {
 	assessFeatureFinish,
 	type FeatureFinishAssessment,
+	planFeatureFinishRemovals,
 	verifySessionsStopped,
 } from "./features/featureFinish";
 import { validateFeatureNameInput } from "./features/featureName";
@@ -1110,7 +1111,14 @@ export async function activate(
 
 				let assessment: FeatureFinishAssessment;
 				try {
-					assessment = assessFeatureFinish(ctx, feature);
+					await featureStateCoordinator.reconcile();
+					const snapshot = featureStateCoordinator.getSnapshot(featureId);
+					if (!snapshot) {
+						throw new Error("Feature integration evidence was not observed");
+					}
+					assessment = assessFeatureFinish(ctx, feature, {
+						integration: snapshot.integration,
+					});
 				} catch (error) {
 					void vscode.window.showErrorMessage(
 						`Cannot assess "${feature.name}" safely: ${error instanceof Error ? error.message : String(error)}`,
@@ -1127,9 +1135,9 @@ export async function activate(
 
 				const action = assessment.safe
 					? "Finish Feature"
-					: "Force Finish (lose listed work)";
+					: "Finish with known risks";
 				const risks = assessment.reasons.length
-					? `\n\nKnown work-loss risks:\n${assessment.reasons.join("\n")}`
+					? `\n\nKnown risks and retained Git work:\n${assessment.reasons.join("\n")}`
 					: "";
 				const confirm = await vscode.window.showWarningMessage(
 					`Finish feature "${feature.name}"?\n\nThis stops its ${ctx.agentManager.getAgents(featureId).length} agent(s) and ${ctx.serviceManager.getServices(featureId).length} service(s), removes ${assessment.checks.length} worktree(s), then removes the Agent Space feature record. Git branches are preserved.${risks}`,
@@ -1165,7 +1173,14 @@ export async function activate(
 				}
 				let current: FeatureFinishAssessment;
 				try {
-					current = assessFeatureFinish(ctx, feature);
+					await featureStateCoordinator.reconcile();
+					const snapshot = featureStateCoordinator.getSnapshot(featureId);
+					if (!snapshot) {
+						throw new Error("Feature integration evidence was not observed");
+					}
+					current = assessFeatureFinish(ctx, feature, {
+						integration: snapshot.integration,
+					});
 				} catch (error) {
 					void vscode.window.showErrorMessage(
 						`Feature "${feature.name}" could not be reassessed after stopping sessions: ${error instanceof Error ? error.message : String(error)}. No worktree or metadata was removed.`,
@@ -1182,18 +1197,26 @@ export async function activate(
 					return;
 				}
 
-				const force = !current.safe;
-				const featureCheck = current.checks.find(
-					(check) => check.kind === "feature",
+				const removalPlan = planFeatureFinishRemovals(current);
+				const featureRemovalPlan = removalPlan.find(
+					(entry) => entry.kind === "feature",
 				);
-				if (featureCheck?.disposition === "registered") {
+				if (featureRemovalPlan) {
 					let featureRemoval: ReturnType<
 						typeof ctx.featureManager.removeFeatureWorktreeForFinish
 					>;
 					try {
 						featureRemoval = ctx.featureManager.removeFeatureWorktreeForFinish(
 							featureId,
-							{ force },
+							{
+								force: featureRemovalPlan.force,
+								...(featureRemovalPlan.acceptedPullRequestHeadSha
+									? {
+											acceptedPullRequestHeadSha:
+												featureRemovalPlan.acceptedPullRequestHeadSha,
+										}
+									: {}),
+							},
 						);
 					} catch (error) {
 						void vscode.window.showErrorMessage(
@@ -1208,18 +1231,12 @@ export async function activate(
 						return;
 					}
 				}
-				for (const check of current.checks) {
-					if (
-						check.kind !== "agent" ||
-						!check.agentId ||
-						check.disposition === "already_removed"
-					) {
-						continue;
-					}
+				for (const entry of removalPlan) {
+					if (entry.kind !== "agent" || !entry.agentId) continue;
 					const removal = ctx.agentManager.removeAgentWorktreeForFinish(
-						check.agentId,
+						entry.agentId,
 						featureId,
-						force,
+						entry.force,
 					);
 					if (!removal.removed) {
 						void vscode.window.showErrorMessage(

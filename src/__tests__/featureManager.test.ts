@@ -38,6 +38,23 @@ describe("FeatureManager", () => {
 		});
 	}
 
+	function mockCleanSquashMergedDeletion(remove?: () => string): void {
+		mockExecSync.mockImplementation((command: string) => {
+			const value = String(command);
+			if (value.includes("symbolic-ref")) return "";
+			if (value.includes("git status --porcelain")) return "";
+			if (value.includes('rev-parse --verify "feat/')) return featureSha;
+			if (value.includes('rev-parse --verify "feature/')) return featureSha;
+			if (value.includes('rev-parse --verify "main')) return baseSha;
+			if (value.includes("merge-base --is-ancestor")) {
+				throw Object.assign(new Error("not ancestor"), { status: 1 });
+			}
+			if (value.includes("rev-list --count")) return "1";
+			if (value.includes("git worktree remove")) return remove?.() ?? "";
+			return "";
+		});
+	}
+
 	beforeEach(() => {
 		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fm-test-"));
 		store = new Store(tmpDir);
@@ -263,9 +280,9 @@ describe("FeatureManager", () => {
 			const feature = manager.createFeature("resumable", "shared");
 			mockCleanMergedDeletion();
 
-			expect(
-				manager.removeFeatureWorktreeForFinish(feature.id),
-			).toMatchObject({ deleted: true });
+			expect(manager.removeFeatureWorktreeForFinish(feature.id)).toMatchObject({
+				deleted: true,
+			});
 			expect(manager.getFeature(feature.id)).toBeDefined();
 			expect(store.loadFeatures()).toHaveLength(1);
 
@@ -309,6 +326,53 @@ describe("FeatureManager", () => {
 			// Fail-closed: the feature must remain visible so the worktree is
 			// not orphaned into an invisible residue.
 			expect(fm.getFeatures()).toHaveLength(1);
+		});
+
+		it("uses exact merged-PR evidence without weakening Git worktree protection", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = manager.createFeature("squash-merged", "shared");
+			mockExecSync.mockReset();
+			mockCleanSquashMergedDeletion();
+
+			expect(
+				manager.removeFeatureWorktreeForFinish(feature.id, {
+					acceptedPullRequestHeadSha: featureSha,
+				}),
+			).toMatchObject({ deleted: true, reasons: [] });
+			const removeCall = mockExecSync.mock.calls.find(([command]) =>
+				String(command).includes("git worktree remove"),
+			);
+			expect(String(removeCall?.[0])).not.toContain("--force");
+		});
+
+		it("rejects stale merged-PR evidence when the working tree becomes dirty", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = manager.createFeature("dirty-after-review", "shared");
+			mockExecSync.mockReset();
+			mockCleanSquashMergedDeletion();
+			mockExecSync.mockImplementation((command: string) => {
+				const value = String(command);
+				if (value.includes("symbolic-ref")) return "";
+				if (value.includes("git status --porcelain")) return " M changed.ts";
+				if (value.includes('rev-parse --verify "feat/')) return featureSha;
+				if (value.includes('rev-parse --verify "main')) return baseSha;
+				if (value.includes("merge-base --is-ancestor")) {
+					throw Object.assign(new Error("not ancestor"), { status: 1 });
+				}
+				if (value.includes("rev-list --count")) return "1";
+				return "";
+			});
+
+			expect(() =>
+				manager.removeFeatureWorktreeForFinish(feature.id, {
+					acceptedPullRequestHeadSha: featureSha,
+				}),
+			).toThrow("no longer matches");
+			expect(
+				mockExecSync.mock.calls.some(([command]) =>
+					String(command).includes("git worktree remove"),
+				),
+			).toBe(false);
 		});
 	});
 

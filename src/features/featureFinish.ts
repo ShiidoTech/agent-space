@@ -9,6 +9,11 @@ import {
 } from "../git/worktreeSafety";
 import type { ProjectContext } from "../projects/projectManager";
 import type { Feature } from "../types";
+import type { IntegrationEvaluation } from "./integrationEvaluator";
+
+export interface FeatureFinishEvidence {
+	readonly integration: IntegrationEvaluation;
+}
 
 export interface FeatureFinishCheck {
 	readonly kind: "feature" | "agent";
@@ -17,7 +22,11 @@ export interface FeatureFinishCheck {
 	readonly worktreePath: string;
 	readonly disposition: "registered" | "already_removed" | "residue";
 	readonly safety?: WorktreeDeletionSafety | BranchRetentionSafety;
-	readonly reason?: string;
+	readonly safe: boolean;
+	readonly forceable: boolean;
+	readonly requiresForce: boolean;
+	readonly acceptedPullRequestHeadSha?: string;
+	readonly reasons: readonly string[];
 }
 
 export interface FeatureFinishAssessment {
@@ -32,6 +41,7 @@ export interface FeatureFinishAssessment {
 export function assessFeatureFinish(
 	ctx: ProjectContext,
 	feature: Feature,
+	evidence: FeatureFinishEvidence,
 	pathExists: (candidate: string) => boolean = fs.existsSync,
 ): FeatureFinishAssessment {
 	const checks: FeatureFinishCheck[] = [];
@@ -67,18 +77,18 @@ export function assessFeatureFinish(
 						branch,
 						baseBranch: comparisonBranch,
 					});
+			const residueReason = `Git no longer registers ${resolvedPath}, but files remain on disk. Inspect or remove this residue explicitly before finishing.`;
+			const decision = exists
+				? blockedDecision(residueReason)
+				: finishDecision(kind, safety, evidence.integration);
 			checks.push({
 				kind,
 				branch,
 				worktreePath: resolvedPath,
 				disposition: exists ? "residue" : "already_removed",
 				safety,
+				...decision,
 				...(agentId ? { agentId } : {}),
-				...(exists
-					? {
-							reason: `Git no longer registers ${resolvedPath}, but files remain on disk. Inspect or remove this residue explicitly before finishing.`,
-						}
-					: {}),
 			});
 			return;
 		}
@@ -89,12 +99,14 @@ export function assessFeatureFinish(
 			branch,
 			baseBranch: comparisonBranch,
 		});
+		const decision = finishDecision(kind, safety, evidence.integration);
 		checks.push({
 			kind,
 			branch,
 			worktreePath: resolvedPath,
 			disposition: "registered",
 			safety,
+			...decision,
 			...(agentId ? { agentId } : {}),
 		});
 	};
@@ -128,29 +140,159 @@ export function assessFeatureFinish(
 
 	const reasons = checks.flatMap((entry) => {
 		const prefix = entry.kind === "feature" ? "Feature" : "Agent";
-		if (entry.reason) return [`${prefix}: ${entry.reason}`];
-		return (entry.safety?.reasons ?? []).map(
-			(reason) => `${prefix}: ${reason}`,
-		);
+		return entry.reasons.map((reason) => `${prefix}: ${reason}`);
 	});
 	return {
 		checks,
 		reasons,
-		safe: checks.every((entry) => entry.safety?.safe === true),
-		forceable: checks.every(
-			(entry) =>
-				entry.disposition !== "residue" && entry.safety?.forceable === true,
-		),
-		fingerprint: JSON.stringify(
-			checks.map(({ kind, agentId, branch, disposition, safety }) => ({
-				kind,
-				agentId,
-				branch,
-				disposition,
-				safety,
-			})),
-		),
+		safe: checks.every((entry) => entry.safe),
+		forceable: checks.every((entry) => entry.forceable),
+		fingerprint: JSON.stringify({
+			checks: checks.map(
+				({
+					kind,
+					agentId,
+					branch,
+					disposition,
+					safety,
+					safe,
+					forceable,
+					requiresForce,
+					acceptedPullRequestHeadSha,
+				}) => ({
+					kind,
+					agentId,
+					branch,
+					disposition,
+					safety,
+					safe,
+					forceable,
+					requiresForce,
+					acceptedPullRequestHeadSha,
+				}),
+			),
+			integration: evidence.integration,
+		}),
 	};
+}
+
+interface FinishDecision {
+	readonly safe: boolean;
+	readonly forceable: boolean;
+	readonly requiresForce: boolean;
+	readonly acceptedPullRequestHeadSha?: string;
+	readonly reasons: readonly string[];
+}
+
+function blockedDecision(reason: string): FinishDecision {
+	return {
+		safe: false,
+		forceable: false,
+		requiresForce: false,
+		reasons: [reason],
+	};
+}
+
+function finishDecision(
+	kind: FeatureFinishCheck["kind"],
+	safety: WorktreeDeletionSafety | BranchRetentionSafety | undefined,
+	integration: IntegrationEvaluation,
+): FinishDecision {
+	if (!safety) return blockedDecision("Deletion safety was not observed.");
+	if (safety.safe) {
+		return {
+			safe: true,
+			forceable: true,
+			requiresForce: false,
+			reasons: [],
+		};
+	}
+	if (kind !== "feature") return decisionFromSafety(safety);
+
+	if (integration.status === "unknown") {
+		return blockedDecision(
+			`Integration evidence is unknown (${integration.reason})${integration.detail ? `: ${integration.detail}` : "."}`,
+		);
+	}
+	if (integration.outcome !== "integrated_by_pull_request") {
+		return decisionFromSafety(safety);
+	}
+	if (!integrationMatchesCurrentFeature(integration, safety)) {
+		return blockedDecision(
+			"The merged pull request evidence does not match the currently observed Feature head.",
+		);
+	}
+	if (!safety.forceable) return decisionFromSafety(safety);
+
+	const dirty = "dirty" in safety && safety.dirty;
+	const reasons = dirty
+		? safety.reasons.filter((reason) =>
+				reason.startsWith("Uncommitted changes detected"),
+			)
+		: [];
+	return {
+		safe: !dirty,
+		forceable: true,
+		requiresForce: dirty,
+		acceptedPullRequestHeadSha: safety.featureSha,
+		reasons,
+	};
+}
+
+function decisionFromSafety(
+	safety: WorktreeDeletionSafety | BranchRetentionSafety,
+): FinishDecision {
+	return {
+		safe: safety.safe,
+		forceable: safety.forceable,
+		requiresForce: !safety.safe && safety.forceable,
+		reasons: safety.reasons,
+	};
+}
+
+function integrationMatchesCurrentFeature(
+	integration: Extract<IntegrationEvaluation, { status: "known" }>,
+	safety: WorktreeDeletionSafety | BranchRetentionSafety,
+): boolean {
+	if (integration.outcome !== "integrated_by_pull_request") return false;
+	const observedFeature = integration.evidence.feature?.sha;
+	const github = integration.evidence.github;
+	const pullHead = github?.pull?.headSha;
+	return (
+		github?.status === "known" &&
+		github.baseMatch === true &&
+		github.pull?.state === "merged" &&
+		typeof safety.featureSha === "string" &&
+		typeof observedFeature === "string" &&
+		typeof pullHead === "string" &&
+		safety.featureSha.toLowerCase() === observedFeature.toLowerCase() &&
+		safety.featureSha.toLowerCase() === pullHead.toLowerCase()
+	);
+}
+
+export interface FeatureFinishRemovalPlanEntry {
+	readonly kind: FeatureFinishCheck["kind"];
+	readonly agentId?: string;
+	readonly worktreePath: string;
+	readonly force: boolean;
+	readonly acceptedPullRequestHeadSha?: string;
+}
+
+/** Per-worktree plan: a risk on one check never weakens another check. */
+export function planFeatureFinishRemovals(
+	assessment: FeatureFinishAssessment,
+): readonly FeatureFinishRemovalPlanEntry[] {
+	return assessment.checks
+		.filter((check) => check.disposition === "registered")
+		.map((check) => ({
+			kind: check.kind,
+			...(check.agentId ? { agentId: check.agentId } : {}),
+			worktreePath: check.worktreePath,
+			force: check.requiresForce,
+			...(check.acceptedPullRequestHeadSha
+				? { acceptedPullRequestHeadSha: check.acceptedPullRequestHeadSha }
+				: {}),
+		}));
 }
 
 export function parseRegisteredWorktreePaths(output: string): Set<string> {

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
 	assessFeatureFinish,
+	planFeatureFinishRemovals,
 	verifySessionsStopped,
 } from "../features/featureFinish";
+import type { IntegrationEvaluation } from "../features/integrationEvaluator";
 import * as worktreeSafety from "../git/worktreeSafety";
 import type { ProjectContext } from "../projects/projectManager";
 import type { Agent, Feature } from "../types";
@@ -41,6 +43,35 @@ function agent(id: string): Agent {
 		worktreePath: `/worktrees/${id}`,
 		createdAt: "2026-08-12T00:00:00.000Z",
 	};
+}
+
+const notIntegrated: IntegrationEvaluation = {
+	status: "known",
+	outcome: "not_integrated",
+	evidence: {},
+};
+
+function finishEvidence(integration: IntegrationEvaluation = notIntegrated) {
+	return { integration };
+}
+
+function context(
+	worktreeOutput: string,
+	agents: readonly Agent[] = [],
+): ProjectContext {
+	return {
+		project: { id: "p1", name: "Project", repoPath: "/repo" },
+		gitClient: { readSync: () => gitResult(worktreeOutput) },
+		featureManager: {
+			getBaseBranchName: () => "main",
+			getWorktreeBase: () => "/worktrees",
+		},
+		agentManager: {
+			getAgents: () => agents,
+			getAgentBranchName: (_feature: Feature, id: string) =>
+				`feat/f1/agent-${id}`,
+		},
+	} as unknown as ProjectContext;
 }
 
 describe("Feature Finish", () => {
@@ -102,6 +133,7 @@ describe("Feature Finish", () => {
 		const assessment = assessFeatureFinish(
 			ctx,
 			feature(),
+			finishEvidence(),
 			(candidate) => candidate === "/worktrees/a2",
 		);
 
@@ -139,7 +171,12 @@ describe("Feature Finish", () => {
 			agentManager: { getAgents: () => [] },
 		} as unknown as ProjectContext;
 
-		const assessment = assessFeatureFinish(ctx, feature(), () => false);
+		const assessment = assessFeatureFinish(
+			ctx,
+			feature(),
+			finishEvidence(),
+			() => false,
+		);
 
 		expect(assessment.safe).toBe(false);
 		expect(assessment.forceable).toBe(true);
@@ -169,7 +206,12 @@ describe("Feature Finish", () => {
 			agentManager: { getAgents: () => [] },
 		} as unknown as ProjectContext;
 
-		const assessment = assessFeatureFinish(ctx, feature(), () => false);
+		const assessment = assessFeatureFinish(
+			ctx,
+			feature(),
+			finishEvidence(),
+			() => false,
+		);
 
 		expect(assessment.safe).toBe(false);
 		expect(assessment.forceable).toBe(false);
@@ -187,12 +229,204 @@ describe("Feature Finish", () => {
 			agentManager: { getAgents: () => [] },
 		} as unknown as ProjectContext;
 
-		const assessment = assessFeatureFinish(ctx, feature(), () => true);
+		const assessment = assessFeatureFinish(
+			ctx,
+			feature(),
+			finishEvidence(),
+			() => true,
+		);
 
 		expect(assessment.safe).toBe(false);
 		expect(assessment.forceable).toBe(false);
 		expect(assessment.checks[0]).toMatchObject({ disposition: "residue" });
 		expect(assessment.reasons.join("\n")).toContain("files remain on disk");
+	});
+
+	it("accepts an exact merged PR as integration proof for a clean squash-merged Feature", () => {
+		const headSha = "1".repeat(40);
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+			worktreePath: "/worktrees/f1",
+			safe: false,
+			forceable: true,
+			insideBase: true,
+			statusObserved: true,
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			dirty: false,
+			hasLocalCommits: true,
+			unmerged: true,
+			workingTreeStatus: "",
+			localCommitCount: 1,
+			featureSha: headSha,
+			baseSha: "2".repeat(40),
+			reasons: ["Branch feat/f1 is not an ancestor of main."],
+		});
+		const integration: IntegrationEvaluation = {
+			status: "known",
+			outcome: "integrated_by_pull_request",
+			evidence: {
+				feature: { ref: "feat/f1", sha: headSha },
+				github: {
+					status: "known",
+					expectedBaseRef: "main",
+					baseMatch: true,
+					pull: {
+						number: 74,
+						url: "https://example.test/pull/74",
+						state: "merged",
+						draft: false,
+						headRef: "feat/f1",
+						headSha,
+						baseRef: "main",
+					},
+				},
+			},
+		};
+
+		const assessment = assessFeatureFinish(
+			context("worktree /repo\n\nworktree /worktrees/f1\n"),
+			feature(),
+			finishEvidence(integration),
+		);
+
+		expect(assessment).toMatchObject({
+			safe: true,
+			forceable: true,
+			reasons: [],
+		});
+		expect(planFeatureFinishRemovals(assessment)).toEqual([
+			{
+				kind: "feature",
+				worktreePath: "/worktrees/f1",
+				force: false,
+				acceptedPullRequestHeadSha: headSha,
+			},
+		]);
+	});
+
+	it("keeps post-integration work explicit and forceable", () => {
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+			worktreePath: "/worktrees/f1",
+			safe: false,
+			forceable: true,
+			insideBase: true,
+			statusObserved: true,
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			dirty: false,
+			hasLocalCommits: true,
+			unmerged: true,
+			workingTreeStatus: "",
+			localCommitCount: 2,
+			featureSha: "2".repeat(40),
+			baseSha: "3".repeat(40),
+			reasons: ["Branch feat/f1 has 2 commits not in main."],
+		});
+		const assessment = assessFeatureFinish(
+			context("worktree /repo\n\nworktree /worktrees/f1\n"),
+			feature(),
+			finishEvidence({
+				status: "known",
+				outcome: "new_work_after_integration",
+				evidence: {},
+			}),
+		);
+
+		expect(assessment).toMatchObject({ safe: false, forceable: true });
+		expect(planFeatureFinishRemovals(assessment)[0]).toMatchObject({
+			force: true,
+		});
+		expect(assessment.reasons.join("\n")).toContain("2 commits");
+	});
+
+	it("fails closed when GitHub integration evidence is unavailable", () => {
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+			worktreePath: "/worktrees/f1",
+			safe: false,
+			forceable: true,
+			insideBase: true,
+			statusObserved: true,
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			dirty: false,
+			hasLocalCommits: true,
+			unmerged: true,
+			workingTreeStatus: "",
+			localCommitCount: 1,
+			featureSha: "1".repeat(40),
+			baseSha: "2".repeat(40),
+			reasons: ["Branch feat/f1 is not an ancestor of main."],
+		});
+		const assessment = assessFeatureFinish(
+			context("worktree /repo\n\nworktree /worktrees/f1\n"),
+			feature(),
+			finishEvidence({
+				status: "unknown",
+				reason: "integration_unknown",
+				detail: "GitHub unavailable",
+				evidence: {},
+			}),
+		);
+
+		expect(assessment).toMatchObject({ safe: false, forceable: false });
+		expect(assessment.reasons.join("\n")).toContain("GitHub unavailable");
+	});
+
+	it("plans force independently for a risky Feature and a clean agent", () => {
+		const risky = {
+			worktreePath: "/worktrees/f1",
+			safe: false,
+			forceable: true,
+			insideBase: true,
+			statusObserved: true,
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			dirty: true,
+			hasLocalCommits: false,
+			unmerged: false,
+			workingTreeStatus: " M changed.ts",
+			localCommitCount: 0,
+			featureSha: "1".repeat(40),
+			baseSha: "2".repeat(40),
+			reasons: ["Uncommitted changes detected: M changed.ts"],
+		};
+		const clean = {
+			...risky,
+			worktreePath: "/worktrees/a1",
+			safe: true,
+			dirty: false,
+			workingTreeStatus: "",
+			reasons: [],
+		};
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockReturnValueOnce(risky)
+			.mockReturnValueOnce(clean);
+		const assessment = assessFeatureFinish(
+			context(
+				"worktree /repo\n\nworktree /worktrees/f1\n\nworktree /worktrees/a1\n",
+				[agent("a1")],
+			),
+			feature(),
+			finishEvidence(),
+		);
+
+		expect(planFeatureFinishRemovals(assessment)).toEqual([
+			{
+				kind: "feature",
+				worktreePath: "/worktrees/f1",
+				force: true,
+			},
+			{
+				kind: "agent",
+				agentId: "a1",
+				worktreePath: "/worktrees/a1",
+				force: false,
+			},
+		]);
 	});
 
 	it("requires positive proof that every tracked session stopped", () => {

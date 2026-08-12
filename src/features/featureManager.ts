@@ -457,13 +457,20 @@ export class FeatureManager {
 	/** Remove the Feature worktree while preserving every Agent Space record. */
 	removeFeatureWorktreeForFinish(
 		id: string,
-		options?: { force?: boolean },
+		options?: { force?: boolean; acceptedPullRequestHeadSha?: string },
 	): FeatureDeleteResult {
 		const feature = this.features.find((f) => f.id === id);
 		if (!feature) return { deleted: false, reasons: [] };
 
 		const force = options?.force === true;
 		const safety = this.getDeletionSafety(feature);
+		const acceptedPullRequestIntegration =
+			typeof options?.acceptedPullRequestHeadSha === "string" &&
+			safety.forceable &&
+			!safety.dirty &&
+			typeof safety.featureSha === "string" &&
+			safety.featureSha.toLowerCase() ===
+				options.acceptedPullRequestHeadSha.toLowerCase();
 
 		if (force && !safety.forceable) {
 			return {
@@ -474,9 +481,14 @@ export class FeatureManager {
 				],
 			};
 		}
-		if (!force && !safety.safe) {
+		if (!force && !safety.safe && !acceptedPullRequestIntegration) {
+			const staleEvidence = options?.acceptedPullRequestHeadSha
+				? [
+						"The pull request evidence no longer matches the current Feature head or working tree.",
+					]
+				: [];
 			throw new Error(
-				`Cannot delete feature "${feature.name}":\n\n${safety.reasons.join("\n")}`,
+				`Cannot delete feature "${feature.name}":\n\n${[...safety.reasons, ...staleEvidence].join("\n")}`,
 			);
 		}
 
@@ -514,7 +526,10 @@ export class FeatureManager {
 			};
 		}
 
-		return { deleted: true, reasons: safety.reasons };
+		return {
+			deleted: true,
+			reasons: acceptedPullRequestIntegration ? [] : safety.reasons,
+		};
 	}
 
 	/** Forget metadata only after every worktree removal has been verified. */
