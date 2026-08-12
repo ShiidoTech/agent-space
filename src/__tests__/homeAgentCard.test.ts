@@ -99,10 +99,10 @@ describe("Home agent card render contract", () => {
 		expect(html).toContain(
 			'class="agent-session-intervention session-ambiguous"',
 		);
-		expect(html).toContain("Session needs confirmation");
-		expect(html).toContain("Activity stays unknown");
+		expect(html).toContain("Link this agent&#039;s conversation");
+		expect(html).toContain("Several CLI conversations exist in this worktree");
 		expect(html).toContain('class="agent-session-action"');
-		expect(html).toContain(">Choose session</button>");
+		expect(html).toContain(">Link conversation</button>");
 		expect(html).not.toContain(">Ambiguous session<");
 	});
 

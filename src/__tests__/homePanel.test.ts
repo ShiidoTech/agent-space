@@ -181,6 +181,20 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(focusOrCreateTerminalAsync).toHaveBeenCalledTimes(1);
 	});
 
+	it("routes an explicit conversation link request to the extension command", () => {
+		postMessage({
+			command: "attachProviderSession",
+			featureId: "f1",
+			agentId: "a1",
+		});
+
+		expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+			"agentSpace.attachProviderSession",
+			"f1",
+			"a1",
+		);
+	});
+
 	it("cold A resolving after warm B focus does not steal focus from B", async () => {
 		const showA = vi.fn();
 		const showB = vi.fn();
@@ -404,8 +418,8 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(html).toContain('id="agent-name-a1"');
 		expect(html).toContain(">Agent 1</span>");
 		expect(html).toContain("Provider &middot; Codex CLI");
-		expect(html).toContain("Session needs confirmation");
-		expect(html).toContain(">Choose session</button>");
+		expect(html).toContain("Link this agent&#039;s conversation");
+		expect(html).toContain(">Link conversation</button>");
 		expect(html).toContain(">Open terminal</button>");
 		expect(html).toContain(">Activity <span");
 		expect(html).not.toContain("&#9243;");

@@ -135,6 +135,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				case "reopenAgent":
 					run("agentSpace.reopenAgent", message.featureId, message.agentId);
 					break;
+				case "attachProviderSession":
+					run(
+						"agentSpace.attachProviderSession",
+						message.featureId,
+						message.agentId,
+					);
+					break;
 				case "deleteAgent":
 					run("agentSpace.deleteAgent", message.featureId, message.agentId);
 					break;
@@ -648,7 +655,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 		const renderSessionAction = (a: Agent, card: AgentCardPresentation) => {
 			const action = card.sessionAction;
-			return `<button class="binding-action ${action?.className ?? "binding-badge"}" data-binding-badge="${a.id}" onclick="attachProviderSession(event, '${feature.id}', '${a.id}')" title="${this.escapeHtml(action?.tooltip ?? "")}"${action ? "" : ' style="display:none"'}>${this.escapeHtml(action?.label ?? "Choose session")}</button>`;
+			return `<button class="binding-action ${action?.className ?? "binding-badge"}" data-binding-badge="${a.id}" onclick="attachProviderSession(event, '${feature.id}', '${a.id}')" title="${this.escapeHtml(action?.tooltip ?? "")}"${action ? "" : ' style="display:none"'}>${this.escapeHtml(action?.label ?? "Link conversation")}</button>`;
 		};
 
 		const renderAgentCard = (a: Agent, i: number) => {

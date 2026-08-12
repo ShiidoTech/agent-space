@@ -247,6 +247,7 @@ const STATUS_LABELS = {
 	"new": "New",
 	modified: "Modified",
 	ahead: "Ahead",
+	integrated: "Integrated",
 	merged: "Merged",
 };
 

@@ -34,10 +34,10 @@ describe("presentAgentCard", () => {
 			},
 			sessionAction: {
 				kind: "ambiguous",
-				label: "Choose session",
-				title: "Session needs confirmation",
+				label: "Link conversation",
+				title: "Link this agent's conversation",
 				description:
-					"Activity stays unknown until you choose the matching provider session.",
+					"Several CLI conversations exist in this worktree. Link the one opened for this agent so Agent Space can read its activity and name.",
 				className: "binding-badge binding-ambiguous",
 			},
 		});
@@ -67,20 +67,21 @@ describe("presentAgentCard", () => {
 			).sessionAction,
 		).toMatchObject({
 			kind: "unverified",
-			label: "Choose session",
-			title: "Provider session unavailable",
+			label: "Link conversation",
+			title: "Linked conversation unavailable",
 			className: "binding-badge binding-unverified",
 		});
 	});
 
-	it.each(["bound", "pending", "unsupported"] as const)(
-		"keeps %s session health quiet on the card",
-		(state) => {
-			expect(
-				presentAgentCard(observation({ session: { state } })).sessionAction,
-			).toBeUndefined();
-		},
-	);
+	it.each([
+		"bound",
+		"pending",
+		"unsupported",
+	] as const)("keeps %s session health quiet on the card", (state) => {
+		expect(
+			presentAgentCard(observation({ session: { state } })).sessionAction,
+		).toBeUndefined();
+	});
 
 	it("does not offer a stale session action for a done agent", () => {
 		expect(

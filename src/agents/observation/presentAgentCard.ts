@@ -3,7 +3,7 @@ import type { AgentObservation, PresentedAgentState } from "./types";
 
 export interface AgentCardSessionAction {
 	kind: "ambiguous" | "unverified";
-	label: "Choose session";
+	label: "Link conversation";
 	title: string;
 	description: string;
 	className:
@@ -82,15 +82,15 @@ function presentSessionAction(
 
 	return {
 		kind: observation.session.state,
-		label: "Choose session",
+		label: "Link conversation",
 		title:
 			observation.session.state === "ambiguous"
-				? "Session needs confirmation"
-				: "Provider session unavailable",
+				? "Link this agent's conversation"
+				: "Linked conversation unavailable",
 		description:
 			observation.session.state === "ambiguous"
-				? "Activity stays unknown until you choose the matching provider session."
-				: "Choose the matching provider session to restore activity tracking.",
+				? "Several CLI conversations exist in this worktree. Link the one opened for this agent so Agent Space can read its activity and name."
+				: "Link this agent to an available CLI conversation to restore activity and naming.",
 		className: `binding-badge binding-${observation.session.state}`,
 		tooltip: `${detail} ${remediation}`,
 	};

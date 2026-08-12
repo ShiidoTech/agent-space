@@ -250,7 +250,8 @@ button {
 	color: var(--vscode-editor-background);
 }
 
-.status-merged {
+.status-merged,
+.status-integrated {
 	background-color: var(--vscode-button-secondaryBackground);
 	color: var(--vscode-descriptionForeground);
 }

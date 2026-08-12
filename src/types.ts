@@ -3,6 +3,7 @@ export type GitAwareStatus =
 	| "new"
 	| "modified"
 	| "ahead"
+	| "integrated"
 	| "merged"
 	| "unknown";
 export type AgentStatus = "running" | "idle" | "stopped" | "done" | "errored";

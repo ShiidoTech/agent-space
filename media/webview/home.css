@@ -841,7 +841,8 @@ body {
 	color: var(--vscode-charts-blue);
 	background: color-mix(in srgb, var(--vscode-charts-blue) 14%, transparent);
 }
-.project-status-badge.status-merged {
+.project-status-badge.status-merged,
+.project-status-badge.status-integrated {
 	color: var(--vscode-descriptionForeground);
 	background: var(--vscode-button-secondaryBackground);
 }

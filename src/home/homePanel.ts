@@ -319,6 +319,13 @@ export class HomePanel {
 			case "reopenAgent":
 				run("agentSpace.reopenAgent", message.featureId, message.agentId);
 				break;
+			case "attachProviderSession":
+				run(
+					"agentSpace.attachProviderSession",
+					message.featureId,
+					message.agentId,
+				);
+				break;
 			case "focusAgent":
 				this.focusAgentTerminal(message.agentId as string);
 				break;
@@ -1668,10 +1675,10 @@ export class HomePanel {
 		const sessionIntervention = `
 			<div id="agent-session-intervention-${agent.id}" class="agent-session-intervention session-${sessionAction?.kind ?? "none"}"${sessionAction ? "" : ' style="display:none"'}>
 				<div class="agent-session-message">
-					<strong id="agent-session-title-${agent.id}">${this.escapeHtml(sessionAction?.title ?? "Session needs confirmation")}</strong>
-					<span id="agent-session-description-${agent.id}">${this.escapeHtml(sessionAction?.description ?? "Choose the matching provider session to restore activity tracking.")}</span>
+					<strong id="agent-session-title-${agent.id}">${this.escapeHtml(sessionAction?.title ?? "Link this agent's conversation")}</strong>
+					<span id="agent-session-description-${agent.id}">${this.escapeHtml(sessionAction?.description ?? "Link the CLI conversation opened for this agent to restore activity and naming.")}</span>
 				</div>
-				<button id="agent-binding-badge-${agent.id}" class="agent-session-action" title="${this.escapeHtml(sessionAction?.tooltip ?? "")}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')">${this.escapeHtml(sessionAction?.label ?? "Choose session")}</button>
+				<button id="agent-binding-badge-${agent.id}" class="agent-session-action" title="${this.escapeHtml(sessionAction?.tooltip ?? "")}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')">${this.escapeHtml(sessionAction?.label ?? "Link conversation")}</button>
 			</div>`;
 		const isErrored = agent.status === "errored";
 		const nameClass = isDone ? "agent-panel-name done" : "agent-panel-name";
