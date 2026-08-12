@@ -115,6 +115,13 @@ function deleteFeature(featureId) {
 	send("deleteFeature", { featureId });
 }
 
+// The extension host resolves the observed PR URL from the Feature snapshot;
+// the webview supplies only the Feature identity.
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function openPullRequest(featureId) {
+	send("openPullRequest", { featureId });
+}
+
 // -- Inline Confirmation Banner ------------------------------
 function showConfirmation(title, message, onConfirm, danger = false) {
 	dismissConfirmation();

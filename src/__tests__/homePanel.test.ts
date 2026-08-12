@@ -3,12 +3,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("vscode", () => ({
 	window: { createWebviewPanel: vi.fn() },
 	commands: { executeCommand: vi.fn(() => Promise.resolve()) },
-	Uri: { joinPath: vi.fn(() => ({})) },
+	env: { openExternal: vi.fn(() => Promise.resolve(true)) },
+	Uri: {
+		joinPath: vi.fn(() => ({})),
+		parse: vi.fn((value: string) => {
+			const parsed = new URL(value);
+			return {
+				scheme: parsed.protocol.slice(0, -1),
+				authority: parsed.host,
+				toString: () => value,
+			};
+		}),
+	},
 	ViewColumn: { One: 1 },
 	ThemeIcon: class {},
 	ThemeColor: class {},
 }));
 
+import * as vscode from "vscode";
 import { HomePanel } from "../home/homePanel";
 import type { Feature } from "../types";
 
@@ -51,7 +63,10 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 	let receiveMessage: ReturnType<typeof vi.fn>;
 	let getTerminal: ReturnType<typeof vi.fn>;
 	let focusOrCreateTerminalAsync: ReturnType<typeof vi.fn>;
-	let panel: HomePanel;
+	let getSnapshot: ReturnType<typeof vi.fn>;
+	let invalidate: ReturnType<typeof vi.fn>;
+	let refreshProjectReferenceHealth: ReturnType<typeof vi.fn>;
+	let reconcile: ReturnType<typeof vi.fn>;
 
 	function buildPanel(): HomePanel {
 		receiveMessage = vi.fn();
@@ -64,13 +79,23 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 			reveal: vi.fn(),
 		};
 		getTerminal = vi.fn();
+		getSnapshot = vi.fn();
+		invalidate = vi.fn();
+		refreshProjectReferenceHealth = vi.fn();
+		reconcile = vi.fn(() => Promise.resolve());
 		focusOrCreateTerminalAsync = vi.fn().mockResolvedValue({ show: vi.fn() });
 		// @ts-expect-error HomePanel's constructor is private; the test drives
 		// the panel directly rather than through the navigation lifecycle.
 		const p = new HomePanel(
 			webviewPanel as never,
 			{ resolveFeature } as never,
-			{} as never,
+			{
+				getSnapshot,
+				invalidate,
+				refreshProjectReferenceHealth,
+				reconcile,
+				acquireConsumer: vi.fn(),
+			} as never,
 			{} as never,
 			{} as never,
 			{} as never,
@@ -92,11 +117,18 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		handler({ command: "focusAgent", agentId });
 	}
 
+	function postMessage(message: { command: string } & Record<string, unknown>) {
+		const handler = receiveMessage.mock.calls[0][0] as (
+			value: { command: string } & Record<string, unknown>,
+		) => void;
+		handler(message);
+	}
+
 	beforeEach(() => {
 		vi.clearAllMocks();
 		getAgents.mockReturnValue([agent, secondAgent]);
 		resolveFeature.mockReturnValue({ ctx, feature });
-		panel = buildPanel();
+		buildPanel();
 	});
 
 	it("warm path: shows the tracked terminal immediately with no reconciliation call", () => {
@@ -181,5 +213,51 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 
 		expect(showB).toHaveBeenCalledTimes(1);
 		expect(showA).not.toHaveBeenCalled();
+	});
+
+	it("opens only the PR URL observed by the extension host", () => {
+		getSnapshot.mockReturnValue({
+			github: {
+				status: "known",
+				resolution: {
+					outcome: "selected",
+					pull: {
+						url: "https://github.com/ShiidoTech/agent-space/pull/74",
+					},
+				},
+			},
+		});
+
+		postMessage({
+			command: "openPullRequest",
+			featureId: "f1",
+			url: "https://attacker.invalid/steal",
+		});
+
+		expect(vscode.env.openExternal).toHaveBeenCalledTimes(1);
+		expect(vscode.env.openExternal).toHaveBeenCalledWith(
+			expect.objectContaining({
+				scheme: "https",
+				authority: "github.com",
+			}),
+		);
+	});
+
+	it("does not open a URL when PR evidence is unknown", () => {
+		getSnapshot.mockReturnValue({
+			github: { status: "unknown", reason: "remote_unreadable" },
+		});
+
+		postMessage({ command: "openPullRequest", featureId: "f1" });
+
+		expect(vscode.env.openExternal).not.toHaveBeenCalled();
+	});
+
+	it("refreshes the selected Feature evidence instead of only repainting", () => {
+		postMessage({ command: "refresh", featureId: "f1" });
+
+		expect(invalidate).toHaveBeenCalledWith("f1");
+		expect(refreshProjectReferenceHealth).toHaveBeenCalledTimes(1);
+		expect(reconcile).toHaveBeenCalledTimes(1);
 	});
 });

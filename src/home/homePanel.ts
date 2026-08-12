@@ -6,6 +6,11 @@ import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_GIT } from "../constants/icons";
+import {
+	type FeatureCockpitPresentation,
+	type FeatureCockpitPrimaryAction,
+	presentFeatureCockpit,
+} from "../features/featureCockpitPresentation";
 import { gitStatusLabel } from "../features/featureGitStatus";
 import {
 	type FeatureSnapshot,
@@ -369,6 +374,9 @@ export class HomePanel {
 			case "openGitView":
 				run("agentSpace.openFeatureGitView", message.featureId);
 				break;
+			case "openPullRequest":
+				this.openSelectedPullRequest(message.featureId as string);
+				break;
 			case "deleteFeature":
 				run("agentSpace.deleteFeature", message.featureId);
 				break;
@@ -402,11 +410,28 @@ export class HomePanel {
 				this.sendActivityForServices((message.serviceIds as string[]) ?? []);
 				break;
 			case "refresh":
+				if (typeof message.featureId === "string" && message.featureId) {
+					this.featureStateCoordinator.invalidate(message.featureId);
+				}
 				this.featureStateCoordinator.refreshProjectReferenceHealth();
 				void this.featureStateCoordinator
 					.reconcile()
 					.then(() => this.refresh());
 				break;
+		}
+	}
+
+	private openSelectedPullRequest(featureId: string): void {
+		const github = this.featureStateCoordinator.getSnapshot(featureId)?.github;
+		if (github?.status !== "known") return;
+		if (github.resolution.outcome !== "selected") return;
+		const url = github.resolution.pull.url;
+		try {
+			const uri = vscode.Uri.parse(url);
+			if (uri.scheme !== "https" || uri.authority !== "github.com") return;
+			void vscode.env.openExternal(uri);
+		} catch {
+			// The observed PR URL is invalid. Keep the action fail-closed.
 		}
 	}
 
@@ -998,6 +1023,12 @@ export class HomePanel {
 				? '<div class="activity-empty">Runtime state unavailable</div>'
 				: "";
 		const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
+		const cockpit = presentFeatureCockpit(
+			snapshot,
+			this.featureStateCoordinator.getProjectReferenceHealth(
+				snapshot.projectId,
+			),
+		);
 
 		const cssUri = this.panel.webview.asWebviewUri(
 			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.css"),
@@ -1015,12 +1046,6 @@ export class HomePanel {
 		const erroredAgents = agents.filter((a) => a.status === "errored");
 		const doneAgents = agents.filter((a) => a.status === "done");
 		const stoppedAgents = agents.filter((a) => a.status === "stopped");
-		const totalAgents =
-			activeAgents.length + erroredAgents.length + doneAgents.length;
-		const doneCount = doneAgents.length;
-		const progressPct =
-			totalAgents > 0 ? Math.round((doneCount / totalAgents) * 100) : 0;
-
 		const body = `
 		<button class="home-nav-bar" onclick="goHome()" title="Back to Agent Space">&#8592; Agent Space</button>
 		<div class="workspace-header">
@@ -1029,7 +1054,6 @@ export class HomePanel {
 				<div class="header-title">${this.escapeHtml(feature.name)}</div>
 				<div class="header-branch">${this.escapeHtml(feature.branch)}</div>
 			</div>
-			<span class="header-status ${feature.status}">${feature.status === "done" ? "Done" : "Active"}</span>
 			<div class="header-actions">
 				<button class="header-action-btn" onclick="quickAction('refresh', '${feature.id}')" title="Refresh">
 					${ICON_REFRESH}
@@ -1041,9 +1065,8 @@ export class HomePanel {
 		</div>
 			<div class="workspace-content">
 				${this.renderFeatureProvisioning(feature)}
-				${this.renderFeatureAttention(snapshot)}
+				${this.renderFeatureCockpit(cockpit, snapshot)}
 				${runtimeNotice}
-			${agentsKnown ? this.renderProgressSection(progressPct, doneCount, totalAgents) : ""}
 			${
 				agentsKnown
 					? this.renderAgentsSection(
@@ -1057,13 +1080,12 @@ export class HomePanel {
 					: ""
 			}
 			${servicesKnown ? this.renderServicesSection(services, feature) : ""}
-			${this.renderFeatureTmuxSection(snapshot)}
-			${this.renderGitStatsSection(snapshot)}
+			${this.renderFeatureDiagnostics(snapshot)}
 			${this.renderQuickActions(
 				feature,
 				ctx.featureManager.getBootstrapCommands().length > 0,
 			)}
-			${this.renderFeatureActions(feature)}
+			${cockpit.primaryAction.kind === "review_finish" ? "" : this.renderFeatureActions(feature)}
 		</div>`;
 
 		return `<!DOCTYPE html>
@@ -1112,6 +1134,155 @@ export class HomePanel {
 	<script src="${jsUri}"></script>
 </body>
 </html>`;
+	}
+
+	private renderFeatureCockpit(
+		cockpit: FeatureCockpitPresentation,
+		snapshot: FeatureSnapshot,
+	): string {
+		const primary = this.renderCockpitPrimaryAction(
+			cockpit.primaryAction,
+			snapshot.feature.id,
+		);
+		const headline =
+			cockpit.alerts[0]?.summary ?? cockpit.delivery.integration.label;
+		const alerts =
+			cockpit.alerts.length === 0
+				? ""
+				: `<div class="feature-attention-card">
+					<div class="section-label">Needs you</div>
+					${cockpit.alerts
+						.map(
+							(
+								problem,
+							) => `<div class="feature-attention-row feature-attention-row--${problem.severity}">
+								<strong>${this.escapeHtml(problem.summary)}</strong>
+								<span>${this.escapeHtml(problem.detail)}</span>
+							</div>`,
+						)
+						.join("")}
+					${cockpit.hiddenAlertCount > 0 ? `<div class="feature-cockpit-observed">${cockpit.hiddenAlertCount} more item${cockpit.hiddenAlertCount === 1 ? "" : "s"}</div>` : ""}
+				</div>`;
+		const working = cockpit.work.workingTree;
+		const workingBreakdown =
+			working.status === "known"
+				? `<div class="feature-cockpit-breakdown">
+					<span>${working.staged.length} staged</span>
+					<span>${working.unstaged.length} unstaged</span>
+					<span>${working.untracked.length} untracked</span>
+					<span>${working.conflicted.length} conflicts</span>
+				</div>${this.renderWorkingTreeFiles(working)}`
+				: "";
+		const committed = cockpit.work.committed;
+		const committedBreakdown =
+			committed.status === "known"
+				? `<div class="feature-cockpit-breakdown">
+					${committed.baseCommits > 0 ? `<span>${committed.baseCommits} base-only commit${committed.baseCommits === 1 ? "" : "s"}</span>` : ""}
+					${committed.filesChanged === undefined ? "<span>File diff Unknown</span>" : `<span>${committed.filesChanged} files</span><span class="git-additions">+${committed.insertions ?? 0}</span><span class="git-deletions">-${committed.deletions ?? 0}</span>`}
+				</div>${this.renderCommittedFiles(committed)}`
+				: "";
+		const pull = cockpit.delivery.pullRequest;
+		const pullAction = pull.number
+			? `<button class="quick-action-btn subtle" onclick="openPullRequest('${snapshot.feature.id}')">Open</button>`
+			: "";
+
+		return `<section class="feature-cockpit">
+			<div class="feature-cockpit-summary">
+				<div class="feature-cockpit-summary-copy">
+					<strong>${this.escapeHtml(headline)}</strong>
+					<span>${this.escapeHtml(cockpit.runtime.label)}</span>
+				</div>
+				${primary}
+			</div>
+			${alerts}
+			<div class="feature-cockpit-grid">
+				<div class="feature-cockpit-card">
+					<h3>Work</h3>
+					<div class="feature-cockpit-row">
+						<span>Working tree</span>
+						<div class="feature-cockpit-value feature-cockpit-value--${working.status === "known" ? working.tone : "warning"}">
+							<strong>${this.escapeHtml(working.label)}</strong>${workingBreakdown}
+						</div>
+					</div>
+					<div class="feature-cockpit-row">
+						<span>Committed</span>
+						<div class="feature-cockpit-value"><strong>${this.escapeHtml(committed.label)}</strong>${committedBreakdown}</div>
+					</div>
+				</div>
+				<div class="feature-cockpit-card">
+					<h3>Delivery</h3>
+					<div class="feature-cockpit-row"><span>Target</span><div class="feature-cockpit-value"><strong>${this.escapeHtml(cockpit.delivery.target.label)}</strong> ${this.escapeHtml(cockpit.delivery.target.detail ?? "")}${this.renderReferenceHealthChip(snapshot.projectId)}</div></div>
+					<div class="feature-cockpit-row"><span>Tracking</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.tracking.tone}">${this.escapeHtml(cockpit.delivery.tracking.label)}</div></div>
+					<div class="feature-cockpit-row"><span>Pull request</span><div class="feature-cockpit-value feature-cockpit-value--${pull.tone}">${this.escapeHtml(pull.label)} ${pullAction}</div></div>
+					<div class="feature-cockpit-row"><span>Integration</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.integration.tone}"><strong>${this.escapeHtml(cockpit.delivery.integration.label)}</strong>${cockpit.delivery.integration.detail ? `<div class="feature-cockpit-breakdown">${this.escapeHtml(cockpit.delivery.integration.detail)}</div>` : ""}</div></div>
+					<div class="feature-cockpit-observed">Local evidence observed ${this.escapeHtml(cockpit.observedAt)} · GitHub evidence ${this.escapeHtml(snapshot.github.observedAt)}</div>
+				</div>
+			</div>
+		</section>`;
+	}
+
+	private renderWorkingTreeFiles(
+		working: Extract<
+			FeatureCockpitPresentation["work"]["workingTree"],
+			{ status: "known" }
+		>,
+	): string {
+		if (working.pending === 0) return "";
+		const files = [
+			...working.conflicted.map((file) => `conflict  ${file}`),
+			...working.staged.map((file) => `staged    ${file}`),
+			...working.unstaged.map((file) => `unstaged  ${file}`),
+			...working.untracked.map((file) => `untracked ${file}`),
+		];
+		return `<details class="feature-cockpit-files"><summary>Show files</summary><pre class="feature-cockpit-files-list">${this.escapeHtml(files.join("\n"))}</pre></details>`;
+	}
+
+	private renderCommittedFiles(
+		committed: Extract<
+			FeatureCockpitPresentation["work"]["committed"],
+			{ status: "known" }
+		>,
+	): string {
+		if (!committed.files || committed.files.length === 0) return "";
+		const files = committed.files.map((file) => {
+			const pathLabel =
+				file.oldPath && file.newPath && file.oldPath !== file.newPath
+					? `${file.oldPath} -> ${file.newPath}`
+					: file.path;
+			const insertions =
+				file.insertions === null ? "+?" : `+${file.insertions}`;
+			const deletions = file.deletions === null ? "-?" : `-${file.deletions}`;
+			return `${insertions.padStart(5)} ${deletions.padStart(5)}  ${pathLabel}`;
+		});
+		return `<details class="feature-cockpit-files"><summary>Show committed files</summary><pre class="feature-cockpit-files-list">${this.escapeHtml(files.join("\n"))}</pre></details>`;
+	}
+
+	private renderCockpitPrimaryAction(
+		action: FeatureCockpitPrimaryAction,
+		featureId: string,
+	): string {
+		let onclick: string;
+		switch (action.kind) {
+			case "refresh_evidence":
+				onclick = `quickAction('refresh', '${featureId}')`;
+				break;
+			case "open_agent":
+				onclick = `focusAgent('${featureId}', '${action.agentId}')`;
+				break;
+			case "open_workspace":
+				onclick = `quickAction('openGitView', '${featureId}')`;
+				break;
+			case "open_pull_request":
+				onclick = `openPullRequest('${featureId}')`;
+				break;
+			case "create_pull_request":
+				onclick = `quickAction('createPR', '${featureId}')`;
+				break;
+			case "review_finish":
+				onclick = `deleteFeature('${featureId}')`;
+				break;
+		}
+		return `<button class="quick-action-btn primary feature-cockpit-primary" onclick="${onclick}">${this.escapeHtml(action.label)}</button>`;
 	}
 
 	private getProjectHtml(projectId: string, settings = false): string {
@@ -1385,46 +1556,6 @@ export class HomePanel {
 		return `<section class="lifecycle-card ${progress.state === "failed" ? "failed" : ""}"><strong>${progress.state === "failed" ? "Feature setup failed" : "Setting up feature"}</strong><div class="lifecycle-steps">${steps}</div>${progress.error ? `<p>${this.escapeHtml(progress.error)}</p>` : ""}</section>`;
 	}
 
-	private renderFeatureAttention(snapshot: FeatureSnapshot): string {
-		const actionable = snapshot.attention.filter(
-			(problem) =>
-				problem.severity === "error" || problem.severity === "warning",
-		);
-		if (actionable.length === 0) return "";
-		return `
-		<div class="feature-attention-card">
-			<div class="section-label">Needs attention</div>
-			${actionable
-				.slice(0, 6)
-				.map(
-					(problem) => `
-				<div class="feature-attention-row feature-attention-row--${problem.severity}">
-					<strong>${this.escapeHtml(problem.summary)}</strong>
-					<span>${this.escapeHtml(problem.detail)}</span>
-				</div>`,
-				)
-				.join("")}
-		</div>`;
-	}
-
-	private renderProgressSection(
-		pct: number,
-		done: number,
-		total: number,
-	): string {
-		if (total === 0) return "";
-		return `
-		<div class="progress-section">
-			<div class="progress-label">
-				<span>Agent Progress</span>
-				<span>${done} / ${total} done</span>
-			</div>
-			<div class="progress-track">
-				<div class="progress-fill" style="width: ${pct}%"></div>
-			</div>
-		</div>`;
-	}
-
 	private renderAgentsSection(
 		active: Agent[],
 		errored: Agent[],
@@ -1691,6 +1822,18 @@ export class HomePanel {
 		</div>`;
 	}
 
+	private renderFeatureDiagnostics(snapshot: FeatureSnapshot): string {
+		const { liveRows, unknownRows } = this.getTmuxSessionRows(snapshot);
+		const sessionSummary =
+			unknownRows.length > 0
+				? "session state unknown"
+				: `${liveRows.length} live session${liveRows.length === 1 ? "" : "s"}`;
+		return `<details class="feature-diagnostics">
+			<summary>Diagnostics · ${sessionSummary}</summary>
+			<div class="feature-diagnostics-content">${this.renderFeatureTmuxSection(snapshot)}</div>
+		</details>`;
+	}
+
 	private renderTmuxFeatureGroup(
 		snapshot: FeatureSnapshot,
 		projectId?: string,
@@ -1882,20 +2025,6 @@ export class HomePanel {
 		</div>`;
 	}
 
-	private renderGitStatsSection(snapshot: FeatureSnapshot): string {
-		const stats = this.snapshotGitStats(snapshot);
-		const content = stats
-			? this.renderGitStatsContent(stats)
-			: '<div class="activity-empty">Git state unavailable</div>';
-		return `
-		<div>
-			<div class="section-label">Git Changes</div>
-			<div class="git-stats" id="git-stats-content">
-				${content}
-			</div>
-		</div>`;
-	}
-
 	private renderQuickActions(feature: Feature, hasBootstrap = false): string {
 		return `
 		<div>
@@ -1908,12 +2037,6 @@ export class HomePanel {
 					${ICON_SERVER} Add Service
 				</button>
 				${hasBootstrap ? `<button class="quick-action-btn" onclick="quickAction('bootstrapFeature', '${feature.id}')">Bootstrap Worktree</button>` : ""}
-				<button class="quick-action-btn" onclick="quickAction('createPR', '${feature.id}')">
-					${ICON_PR} Create PR
-				</button>
-				<button class="quick-action-btn" onclick="quickAction('openGitView', '${feature.id}')">
-					${ICON_GIT} Open Workspace
-				</button>
 				<button class="quick-action-btn" onclick="quickAction('syncNames', '${feature.id}')">
 					${ICON_SYNC} Sync Names
 				</button>
@@ -1971,5 +2094,4 @@ const ICON_REFRESH = `<svg width="16" height="16" viewBox="0 0 16 16" fill="curr
 const ICON_PLUS = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>`;
 const ICON_FOLDER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10L14.5 3zm-.51 8.49V13h-12V7h12v4.49zm0-5.49h-12V3h4.29l.85.85.36.15H14v2z"/></svg>`;
 const ICON_SERVER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v1l-.5.5h-9l-.5-.5v-1l.5-.5zM5 4h1V3H5v1zm0 5h1V8H5v1z"/></svg>`;
-const ICON_PR = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M7 3.28V12h1V3.28l2.35 2.36.71-.7L8 1.88l-.35.35L4.59 5.29l.7.71L7 3.28zM13.5 7.72V14H2.5V7.72h-1V14.5l.5.5h12l.5-.5V7.72h-1z"/></svg>`;
 const ICON_SYNC = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2.006 8.267L.78 9.5 0 8.73l2.09-2.07.76.01 2.09 2.12-.71.71-1.34-1.34c-.04 1.53.5 2.93 1.53 3.96a5.55 5.55 0 0 0 3.92 1.63l.04 1a6.55 6.55 0 0 1-4.63-1.92 6.48 6.48 0 0 1-1.79-4.53zm12.2-.53l-.76-.01-2.09-2.12.71-.71 1.34 1.34c.04-1.53-.5-2.93-1.53-3.96a5.55 5.55 0 0 0-3.92-1.63l-.04-1a6.55 6.55 0 0 1 4.63 1.92 6.47 6.47 0 0 1 1.78 4.53l1.22-1.23.78.77-2.12 2.1z"/></svg>`;

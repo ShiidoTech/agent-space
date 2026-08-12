@@ -612,6 +612,125 @@ body {
 	color: var(--vscode-notificationsWarningIcon-foreground);
 }
 
+/* ── Feature cockpit ─────────────────────────────────── */
+.feature-cockpit {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+.feature-cockpit-summary {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 14px 16px;
+	border: 1px solid var(--vscode-focusBorder);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--vscode-focusBorder) 7%, transparent);
+}
+.feature-cockpit-summary-copy {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	min-width: 0;
+}
+.feature-cockpit-summary-copy strong {
+	font-size: 14px;
+}
+.feature-cockpit-summary-copy span,
+.feature-cockpit-observed {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
+.feature-cockpit-primary {
+	flex: 0 0 auto;
+}
+.feature-cockpit-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+}
+.feature-cockpit-card {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 14px 16px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+}
+.feature-cockpit-card h3 {
+	font-size: 12px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.feature-cockpit-row {
+	display: grid;
+	grid-template-columns: minmax(90px, 0.35fr) minmax(0, 1fr);
+	gap: 12px;
+	font-size: 12px;
+}
+.feature-cockpit-row > span:first-child {
+	color: var(--vscode-descriptionForeground);
+}
+.feature-cockpit-value {
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.feature-cockpit-value--warning {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+}
+.feature-cockpit-value--error {
+	color: var(--vscode-errorForeground);
+}
+.feature-cockpit-breakdown {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 5px 10px;
+	margin-top: 4px;
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+}
+.feature-cockpit-files {
+	margin-top: 7px;
+	font-family: var(--vscode-editor-font-family);
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+}
+.feature-cockpit-files summary,
+.feature-diagnostics summary {
+	cursor: pointer;
+	user-select: none;
+}
+.feature-cockpit-files-list {
+	margin-top: 6px;
+	padding: 8px;
+	max-height: 160px;
+	overflow: auto;
+	white-space: pre-wrap;
+	background: var(--vscode-input-background);
+	border-radius: 4px;
+}
+.feature-runtime-summary {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+.feature-diagnostics {
+	border-top: 1px solid var(--vscode-panel-border);
+	padding-top: 10px;
+}
+.feature-diagnostics > summary {
+	font-size: 11px;
+	font-weight: 600;
+	color: var(--vscode-descriptionForeground);
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+.feature-diagnostics-content {
+	margin-top: 12px;
+}
+
 /* ── Project page: rich feature cards (sidebar-equivalent density) ── */
 .project-feature-list {
 	display: flex;
@@ -1410,6 +1529,16 @@ body {
 	.quick-actions-row {
 		flex-direction: column;
 		align-items: stretch;
+	}
+	.feature-cockpit-grid {
+		grid-template-columns: 1fr;
+	}
+	.feature-cockpit-summary {
+		align-items: stretch;
+		flex-direction: column;
+	}
+	.feature-cockpit-primary {
+		align-self: flex-start;
 	}
 }
 
