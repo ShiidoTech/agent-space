@@ -322,6 +322,32 @@ export class AgentManager {
 		this.saveAgents(featureId, agents);
 	}
 
+	/**
+	 * Persist the outcome of the post-restart runtime restoration. Blocked
+	 * outcomes stay visible in the model so a fail-closed restore is an
+	 * explicit, reportable state instead of a silent no-op. Unchanged outcomes
+	 * are not rewritten, so an idempotent restore pass never churns agents.json.
+	 */
+	recordRestoreOutcome(
+		agentId: string,
+		featureId: string,
+		outcome: NonNullable<Agent["restore"]>,
+	): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((a) => a.id === agentId);
+		if (!agent) return;
+		const current = agent.restore;
+		if (
+			current &&
+			current.state === outcome.state &&
+			current.reason === outcome.reason
+		) {
+			return;
+		}
+		agent.restore = outcome;
+		this.saveAgents(featureId, agents);
+	}
+
 	reopenAgent(agentId: string, feature: Feature): Agent | undefined {
 		const agents = this.loadAgents(feature.id);
 		const agent = agents.find((a) => a.id === agentId);

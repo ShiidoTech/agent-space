@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
+import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
@@ -305,6 +306,37 @@ export async function activate(
 	});
 	sessionBinder.start(projectManager);
 	context.subscriptions.push({ dispose: () => sessionBinder.dispose() });
+
+	// Post-restart runtime restoration. Fail-closed and strictly resuming: an
+	// agent that really had a runtime, whose tmux session is gone, is recreated
+	// with a genuinely proven provider resume — never with a silent fresh
+	// launch. Agents that cannot be strictly resumed are left untouched and
+	// explicitly reported as blocked on their record.
+	try {
+		const restoreReport = restoreAgentRuntimes({
+			projectManager,
+			tmux,
+			toolRegistry,
+		});
+		if (
+			restoreReport.resumed.length +
+				restoreReport.reattached.length +
+				restoreReport.blocked.length >
+			0
+		) {
+			projectManager.notifyChange();
+		}
+		if (restoreReport.blocked.length > 0) {
+			console.warn(
+				`[agentSpace] ${restoreReport.blocked.length} agent runtime(s) could not be restored after restart; resume them manually.`,
+			);
+			void vscode.window.showInformationMessage(
+				`${restoreReport.blocked.length} agent runtime(s) could not be restored after restart. Open each blocked agent and resume it manually.`,
+			);
+		}
+	} catch (error) {
+		console.error(`[agentSpace] runtime restoration failed: ${error}`);
+	}
 
 	// Surface undeclared project agents once at startup rather than only when
 	// someone happens to add an agent. An id enabled in .agentspace/config.json

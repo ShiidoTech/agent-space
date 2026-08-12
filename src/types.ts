@@ -191,6 +191,20 @@ export interface Agent {
 	/** ISO timestamp of the launch this binding relates to. */
 	launchedAt?: string;
 	startup?: AgentStartup;
+	/**
+	 * Outcome of the post-restart runtime restoration (a machine reboot or a
+	 * VS Code reload that killed/replaced the tmux runtime).
+	 *
+	 * `resumed` / `reattached` mean the agent's runtime is back. `blocked` is an
+	 * explicit fail-closed marker: the agent keeps its identity and session but
+	 * was NOT silently relaunched into a new conversation, because a genuine
+	 * provider resume could not be proven or is unsupported.
+	 */
+	restore?: {
+		state: "resumed" | "reattached" | "blocked";
+		reason?: string;
+		at: string;
+	};
 }
 
 export interface CompanionState {
