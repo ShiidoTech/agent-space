@@ -1,5 +1,6 @@
 import type { FeatureGitObservations } from "../git/featureGitObservations";
 import type { GitHubObservation } from "../github/githubObservation";
+import type { FeatureDeliveryObservation } from "./featureSnapshot";
 import type { IntegrationEvaluation } from "./integrationEvaluator";
 import type { FeatureRuntimeObservation } from "./runtimeObservation";
 
@@ -17,6 +18,7 @@ export interface AttentionEvaluationInput {
 	readonly git: FeatureGitObservations;
 	readonly github?: GitHubObservation;
 	readonly integration: IntegrationEvaluation;
+	readonly delivery?: FeatureDeliveryObservation;
 	readonly runtime: FeatureRuntimeObservation;
 	readonly source?: {
 		readonly status: "known" | "unknown";
@@ -232,19 +234,19 @@ export function evaluateAttention(
 			}
 			if (
 				pull.state === "open" &&
-				input.git.feature.status === "known" &&
-				pull.headSha.toLowerCase() !== input.git.feature.value.sha.toLowerCase()
+				github.queriedHeadSha !== undefined &&
+				pull.headSha.toLowerCase() !== github.queriedHeadSha.toLowerCase()
 			) {
 				problems.push(
 					problem(
 						"pull_request_head_mismatch",
 						"info",
-						"Local head differs from PR head",
-						`PR #${pull.number} is at @${pull.headSha.slice(0, 12)}, while the local feature head is @${input.git.feature.value.sha.slice(0, 12)}.`,
+						"Delivery head differs from PR head",
+						`PR #${pull.number} is at @${pull.headSha.slice(0, 12)}, while the delivery branch is at @${github.queriedHeadSha.slice(0, 12)}.`,
 						{
 							number: pull.number,
 							prHeadSha: pull.headSha,
-							localHeadSha: input.git.feature.value.sha,
+							deliveryHeadSha: github.queriedHeadSha,
 						},
 					),
 				);
@@ -279,6 +281,56 @@ export function evaluateAttention(
 					{
 						commitsAfterIntegration: githubEvidence?.commitsAfterIntegration,
 					},
+				),
+			);
+		}
+	}
+
+	if (!input.isBaseFeature && input.delivery) {
+		const delivery = input.delivery;
+		if (
+			delivery.activeRelation.status === "known" &&
+			delivery.activeRelation.value.isAncestor &&
+			delivery.commitsAfter.status === "known" &&
+			delivery.commitsAfter.value.count > 0
+		) {
+			problems.push(
+				problem(
+					"continuation_outside_delivery",
+					"warning",
+					"Continuation is outside the delivery branch",
+					`${delivery.commitsAfter.value.count} commit${delivery.commitsAfter.value.count === 1 ? " exists" : "s exist"} on the active branch after ${delivery.branchRef}.`,
+					{
+						deliveryBranch: delivery.branchRef,
+						commitsAfterDelivery: delivery.commitsAfter.value.count,
+					},
+				),
+			);
+		} else if (
+			delivery.activeRelation.status === "known" &&
+			!delivery.activeRelation.value.isAncestor
+		) {
+			problems.push(
+				problem(
+					"active_delivery_diverged",
+					"warning",
+					"Active branch diverges from delivery",
+					`The active branch is not proven to descend from ${delivery.branchRef}.`,
+					{ deliveryBranch: delivery.branchRef },
+				),
+			);
+		} else if (
+			delivery.head.status === "unknown" ||
+			delivery.activeRelation.status === "unknown" ||
+			delivery.commitsAfter.status === "unknown"
+		) {
+			problems.push(
+				problem(
+					"delivery_relation_unknown",
+					"warning",
+					"Delivery relation unknown",
+					`The active branch relation to ${delivery.branchRef} could not be fully observed.`,
+					{ deliveryBranch: delivery.branchRef },
 				),
 			);
 		}

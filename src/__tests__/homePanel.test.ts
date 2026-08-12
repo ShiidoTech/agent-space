@@ -57,7 +57,13 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 	};
 
 	const getAgents = vi.fn().mockReturnValue([agent, secondAgent]);
-	const ctx = { agentManager: { getAgents } };
+	const observe = vi.fn((value: typeof agent) => ({
+		identity: { agentName: value.name, providerId: value.toolId },
+		lifecycle: { state: value.status, source: "tmux" },
+		attention: { state: "unknown", reason: "Provider activity unavailable" },
+		session: { state: "ambiguous", detail: "Several candidates" },
+	}));
+	const ctx = { agentManager: { getAgents, observe } };
 	const resolveFeature = vi.fn().mockReturnValue({ ctx, feature });
 
 	let receiveMessage: ReturnType<typeof vi.fn>;
@@ -91,13 +97,14 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 			{ resolveFeature } as never,
 			{
 				getSnapshot,
+				getProjectReferenceHealth: vi.fn(() => undefined),
 				invalidate,
 				refreshProjectReferenceHealth,
 				reconcile,
 				acquireConsumer: vi.fn(),
 			} as never,
 			{} as never,
-			{} as never,
+			{ resolveAgentTool: vi.fn(() => ({ name: "Codex CLI" })) } as never,
 			{} as never,
 			{} as never,
 			{ getTerminal, focusOrCreateTerminalAsync } as never,
@@ -292,5 +299,115 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(local).toContain("lifecycle-spinner");
 		expect(orphaned).toContain("Feature setup state unknown");
 		expect(orphaned).not.toContain("lifecycle-spinner");
+	});
+
+	it("uses the primary alert as the cockpit summary instead of repeating it", () => {
+		const panel = buildPanel();
+		const render = (
+			panel as unknown as {
+				renderFeatureCockpit: (cockpit: unknown, snapshot: unknown) => string;
+			}
+		).renderFeatureCockpit.bind(panel);
+		const html = render(
+			{
+				alerts: [
+					{
+						code: "continuation_not_delivered",
+						severity: "warning",
+						summary: "2 continuation commits are not in PR #74",
+						detail: "Delivery stays on feat/audit_and_go.",
+						evidence: {},
+					},
+				],
+				hiddenAlertCount: 0,
+				work: {
+					workingTree: {
+						status: "known",
+						label: "Clean",
+						pending: 0,
+						staged: [],
+						unstaged: [],
+						untracked: [],
+						conflicted: [],
+						tone: "normal",
+					},
+					committed: {
+						status: "known",
+						label: "2 commits on Feature",
+						featureCommits: 2,
+						baseCommits: 0,
+					},
+				},
+				delivery: {
+					source: {
+						label: "feat/audit_and_go @dc1be9b",
+						tone: "warning",
+						detail: "feat/feature_cockpit: 2 commits beyond delivery",
+					},
+					target: { label: "main" },
+					tracking: { label: "No tracking branch", tone: "muted" },
+					pullRequest: { label: "PR #74 open main", tone: "normal" },
+					integration: { label: "PR open", tone: "normal" },
+				},
+				runtime: { label: "1 agent running", tone: "normal" },
+				primaryAction: { kind: "open_workspace", label: "Review continuation" },
+				observedAt: "2026-08-12T10:00:00.000Z",
+			},
+			{
+				projectId: "p1",
+				feature: {
+					...feature,
+					branch: "feat/feature_cockpit",
+					primaryBranchRef: "feat/audit_and_go",
+				},
+				github: { observedAt: "2026-08-12T10:00:01.000Z" },
+			},
+		);
+
+		expect(
+			html.match(/2 continuation commits are not in PR #74/g),
+		).toHaveLength(1);
+		expect(html).not.toContain("Needs you");
+		expect(html).toContain("Review continuation");
+		expect(html).toContain("<summary>Evidence</summary>");
+	});
+
+	it("keeps only the non-duplicated bootstrap action below the cockpit", () => {
+		const panel = buildPanel();
+		const render = (
+			panel as unknown as {
+				renderQuickActions: (feature: Feature, hasBootstrap: boolean) => string;
+			}
+		).renderQuickActions.bind(panel);
+
+		expect(render(feature, false)).toBe("");
+		const bootstrap = render(feature, true);
+		expect(bootstrap).toContain("Bootstrap Worktree");
+		expect(bootstrap).not.toContain("Add Agent");
+		expect(bootstrap).not.toContain("Add Service");
+	});
+
+	it("keeps the agent identity dominant and moves session choice to its own row", () => {
+		const panel = buildPanel();
+		const render = (
+			panel as unknown as {
+				renderAgentPanel: (
+					value: typeof agent,
+					all: Array<typeof agent>,
+					feature: Feature,
+				) => string;
+			}
+		).renderAgentPanel.bind(panel);
+
+		const html = render(agent, [agent], feature);
+
+		expect(html).toContain('id="agent-name-a1"');
+		expect(html).toContain(">Agent 1</span>");
+		expect(html).toContain("Provider &middot; Codex CLI");
+		expect(html).toContain("Session needs confirmation");
+		expect(html).toContain(">Choose session</button>");
+		expect(html).toContain(">Open terminal</button>");
+		expect(html).toContain(">Activity <span");
+		expect(html).not.toContain("&#9243;");
 	});
 });

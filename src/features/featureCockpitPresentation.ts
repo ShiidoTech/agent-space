@@ -33,6 +33,11 @@ export interface FeatureCockpitWork {
 }
 
 export interface FeatureCockpitDelivery {
+	readonly source: {
+		readonly label: string;
+		readonly tone: FeatureCockpitTone;
+		readonly detail?: string;
+	};
 	readonly target: { readonly label: string; readonly detail?: string };
 	readonly tracking: {
 		readonly label: string;
@@ -58,7 +63,7 @@ export type FeatureCockpitPrimaryAction =
 			readonly label: string;
 			readonly agentId: string;
 	  }
-	| { readonly kind: "open_workspace"; readonly label: "Open Workspace" }
+	| { readonly kind: "open_workspace"; readonly label: "Continue in VS Code" }
 	| {
 			readonly kind: "open_pull_request";
 			readonly label: string;
@@ -103,6 +108,7 @@ const OPEN_WORKSPACE_CODES = new Set([
 	"branch_mismatch",
 	"pull_request_head_mismatch",
 	"new_work_after_integration",
+	"continuation_outside_delivery",
 ]);
 
 export function presentFeatureCockpit(
@@ -214,10 +220,64 @@ function presentDelivery(snapshot: FeatureSnapshot): FeatureCockpitDelivery {
 	}
 
 	return {
+		source: presentDeliverySource(snapshot),
 		target,
 		tracking,
 		pullRequest: presentPullRequest(snapshot),
 		integration: presentIntegration(snapshot),
+	};
+}
+
+function presentDeliverySource(
+	snapshot: FeatureSnapshot,
+): FeatureCockpitDelivery["source"] {
+	const delivery = snapshot.delivery;
+	if (!delivery) {
+		return {
+			label: snapshot.feature.primaryBranchRef ?? snapshot.feature.branch,
+			tone: "muted",
+			detail: "Delivery relation not observed",
+		};
+	}
+	if (delivery.head.status === "unknown") {
+		return {
+			label: delivery.branchRef,
+			tone: "warning",
+			detail: "Delivery head unknown",
+		};
+	}
+	const head = `@${delivery.head.value.sha.slice(0, 12)}`;
+	if (delivery.activeRelation.status === "unknown") {
+		return {
+			label: `${delivery.branchRef} ${head}`,
+			tone: "warning",
+			detail: "Active branch relation unknown",
+		};
+	}
+	if (!delivery.activeRelation.value.isAncestor) {
+		return {
+			label: `${delivery.branchRef} ${head}`,
+			tone: "warning",
+			detail: `${snapshot.feature.branch} does not descend from delivery`,
+		};
+	}
+	if (delivery.commitsAfter.status === "unknown") {
+		return {
+			label: `${delivery.branchRef} ${head}`,
+			tone: "warning",
+			detail: "Commits after delivery unknown",
+		};
+	}
+	const count = delivery.commitsAfter.value.count;
+	return {
+		label: `${delivery.branchRef} ${head}`,
+		tone: count > 0 ? "warning" : "normal",
+		detail:
+			count > 0
+				? `${snapshot.feature.branch}: ${count} commit${count === 1 ? "" : "s"} beyond delivery`
+				: snapshot.feature.branch === delivery.branchRef
+					? "Active branch is the delivery branch"
+					: `${snapshot.feature.branch} matches delivery head`,
 	};
 }
 
@@ -379,7 +439,7 @@ function choosePrimaryAction(
 		};
 	}
 	if (snapshot.attention.some((item) => OPEN_WORKSPACE_CODES.has(item.code))) {
-		return { kind: "open_workspace", label: "Open Workspace" };
+		return { kind: "open_workspace", label: "Continue in VS Code" };
 	}
 	if (
 		snapshot.github.status === "known" &&
@@ -399,7 +459,7 @@ function choosePrimaryAction(
 		upstreamDivergence.value !== null &&
 		upstreamDivergence.value.leftOnly > 0
 	) {
-		return { kind: "open_workspace", label: "Open Workspace" };
+		return { kind: "open_workspace", label: "Continue in VS Code" };
 	}
 	const workingTree = snapshot.git.workingTree;
 	const clean =
@@ -425,7 +485,7 @@ function choosePrimaryAction(
 		return { kind: "review_finish", label: "Review finish" };
 	}
 	if (integrated) {
-		return { kind: "open_workspace", label: "Open Workspace" };
+		return { kind: "open_workspace", label: "Continue in VS Code" };
 	}
 	const delta = snapshot.git.featureDelta;
 	if (
@@ -436,7 +496,7 @@ function choosePrimaryAction(
 	) {
 		return { kind: "create_pull_request", label: "Create PR" };
 	}
-	return { kind: "open_workspace", label: "Open Workspace" };
+	return { kind: "open_workspace", label: "Continue in VS Code" };
 }
 
 function hasEssentialUnknownEvidence(snapshot: FeatureSnapshot): boolean {
@@ -455,6 +515,9 @@ function hasEssentialUnknownEvidence(snapshot: FeatureSnapshot): boolean {
 		snapshot.git.upstreamDivergence.status === "unknown" ||
 		snapshot.git.workingTree.status === "unknown" ||
 		snapshot.git.featureDelta.status === "unknown" ||
+		snapshot.delivery?.head.status === "unknown" ||
+		snapshot.delivery?.activeRelation.status === "unknown" ||
+		snapshot.delivery?.commitsAfter.status === "unknown" ||
 		snapshot.integration.status === "unknown"
 	);
 }

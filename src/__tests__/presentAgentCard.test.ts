@@ -33,7 +33,11 @@ describe("presentAgentCard", () => {
 				detail: "Activity unknown: Session is ambiguous",
 			},
 			sessionAction: {
+				kind: "ambiguous",
 				label: "Choose session",
+				title: "Session needs confirmation",
+				description:
+					"Activity stays unknown until you choose the matching provider session.",
 				className: "binding-badge binding-ambiguous",
 			},
 		});
@@ -62,7 +66,9 @@ describe("presentAgentCard", () => {
 				}),
 			).sessionAction,
 		).toMatchObject({
+			kind: "unverified",
 			label: "Choose session",
+			title: "Provider session unavailable",
 			className: "binding-badge binding-unverified",
 		});
 	});

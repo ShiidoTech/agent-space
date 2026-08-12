@@ -261,6 +261,80 @@ describe("presentFeatureCockpit", () => {
 		expect(result.delivery.pullRequest.label).toBe(expected);
 	});
 
+	it("shows an up-to-date delivery PR separately from continuation work", () => {
+		const base = snapshot();
+		const deliverySha = "4".repeat(40);
+		const activeSha = SHA.feature;
+		const deliveryHead = { ref: "feat/audit_and_go", sha: deliverySha };
+		const activeHead = { ref: "feat/feature_cockpit", sha: activeSha };
+		const selectedPull = pull("open", {
+			headRef: "feat/audit_and_go",
+			headSha: deliverySha,
+		});
+		const withDeliveryPull = withPull(
+			{
+				...base,
+				feature: {
+					...base.feature,
+					branch: "feat/feature_cockpit",
+					primaryBranchRef: "feat/audit_and_go",
+				},
+				delivery: {
+					branchRef: "feat/audit_and_go",
+					head: known(deliveryHead),
+					activeRelation: known({
+						ancestor: deliveryHead,
+						descendant: activeHead,
+						isAncestor: true,
+					}),
+					commitsAfter: known({
+						ancestorSha: deliverySha,
+						descendantSha: activeSha,
+						count: 1,
+					}),
+				},
+			},
+			selectedPull,
+		);
+		const current: FeatureSnapshot = {
+			...withDeliveryPull,
+			github: {
+				...withDeliveryPull.github,
+				status: "known",
+				pulls: [selectedPull],
+				resolution: resolvePullRequest([selectedPull], deliverySha, "main"),
+				queriedHeadSha: deliverySha,
+			} as FeatureSnapshot["github"],
+		};
+		const result = presentFeatureCockpit(current);
+
+		expect(result.delivery.pullRequest.label).toBe("PR #74 open main");
+		expect(result.delivery.source).toEqual({
+			label: `feat/audit_and_go @${deliverySha.slice(0, 12)}`,
+			tone: "warning",
+			detail: "feat/feature_cockpit: 1 commit beyond delivery",
+		});
+	});
+
+	it("keeps an unknown continuation relation unknown", () => {
+		const base = snapshot();
+		const result = presentFeatureCockpit({
+			...base,
+			delivery: {
+				branchRef: "feat/audit_and_go",
+				head: known({ ref: "feat/audit_and_go", sha: "4".repeat(40) }),
+				activeRelation: unknown("ancestry_unknown"),
+				commitsAfter: unknown("git_command_failed"),
+			},
+		});
+
+		expect(result.delivery.source).toMatchObject({
+			tone: "warning",
+			detail: "Active branch relation unknown",
+		});
+		expect(result.primaryAction.kind).toBe("refresh_evidence");
+	});
+
 	it("does not turn unavailable GitHub evidence into no PR", () => {
 		const base = snapshot();
 		const result = presentFeatureCockpit({

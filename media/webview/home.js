@@ -97,7 +97,10 @@ function killProjectSessions(projectId) {
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
-function markAgentDone(featureId, agentId, agentName) {
+function markAgentDone(featureId, agentId) {
+	const agentName =
+		document.getElementById(`agent-name-${agentId}`)?.textContent?.trim() ||
+		"this agent";
 	showConfirmation(
 		`Mark "${agentName}" as done?`,
 		"This will stop the agent session.",
@@ -174,6 +177,9 @@ function quickAction(action, featureId) {
 		case "openGitView":
 			send("openGitView", { featureId });
 			break;
+		case "bootstrapFeature":
+			send("bootstrapFeature", { featureId });
+			break;
 		case "refresh":
 			send("refresh");
 			break;
@@ -216,6 +222,7 @@ function togglePanel(prefix, id, expandedSet, requestCmd, requestPayload) {
 	const panel = document.getElementById(`${prefix}-activity-${id}`);
 	const chevron = document.getElementById(`${prefix}-chevron-${id}`);
 	const header = document.getElementById(`${prefix}-header-${id}`);
+	const toggle = document.getElementById(`${prefix}-toggle-${id}`);
 	if (!panel || !chevron || !header) return;
 
 	if (expandedSet.has(id)) {
@@ -223,11 +230,13 @@ function togglePanel(prefix, id, expandedSet, requestCmd, requestPayload) {
 		panel.classList.remove("expanded");
 		chevron.classList.remove("expanded");
 		header.classList.remove("expanded");
+		if (toggle) toggle.setAttribute("aria-expanded", "false");
 	} else {
 		expandedSet.add(id);
 		panel.classList.add("expanded");
 		chevron.classList.add("expanded");
 		header.classList.add("expanded");
+		if (toggle) toggle.setAttribute("aria-expanded", "true");
 		send(requestCmd, requestPayload);
 	}
 }
@@ -283,7 +292,7 @@ function updateAttention(agent) {
 	);
 	if (lifecycleBadge) {
 		lifecycleBadge.textContent = presented.label;
-		lifecycleBadge.className = `agent-tool-badge agent-lifecycle-badge primary-state-${presented.tone}`;
+		lifecycleBadge.className = `agent-primary-state primary-state-${presented.tone}`;
 		lifecycleBadge.title = presented.detail || "";
 	}
 
@@ -291,18 +300,28 @@ function updateAttention(agent) {
 }
 
 function updateSessionAction(agentId, action) {
+	const intervention = document.getElementById(
+		`agent-session-intervention-${agentId}`,
+	);
 	const badge = document.getElementById(`agent-binding-badge-${agentId}`);
-	if (!badge) return;
+	if (!intervention || !badge) return;
 	if (!action) {
-		badge.style.display = "none";
+		intervention.style.display = "none";
 		badge.title = "";
 		return;
 	}
 
-	badge.className = `agent-tool-badge ${action.className}`;
+	intervention.className = `agent-session-intervention session-${action.kind}`;
+	const title = document.getElementById(`agent-session-title-${agentId}`);
+	const description = document.getElementById(
+		`agent-session-description-${agentId}`,
+	);
+	if (title) title.textContent = action.title;
+	if (description) description.textContent = action.description;
+	badge.className = "agent-session-action";
 	badge.textContent = action.label;
 	badge.title = action.tooltip || "";
-	badge.style.display = "";
+	intervention.style.display = "";
 }
 
 window.addEventListener("message", (event) => {

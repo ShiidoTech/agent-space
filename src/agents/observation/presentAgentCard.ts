@@ -2,7 +2,10 @@ import { presentAgentState } from "./presentAgentState";
 import type { AgentObservation, PresentedAgentState } from "./types";
 
 export interface AgentCardSessionAction {
+	kind: "ambiguous" | "unverified";
 	label: "Choose session";
+	title: string;
+	description: string;
 	className:
 		| "binding-badge binding-ambiguous"
 		| "binding-badge binding-unverified";
@@ -78,7 +81,16 @@ function presentSessionAction(
 			: "Choose a provider session explicitly to restore activity tracking.";
 
 	return {
+		kind: observation.session.state,
 		label: "Choose session",
+		title:
+			observation.session.state === "ambiguous"
+				? "Session needs confirmation"
+				: "Provider session unavailable",
+		description:
+			observation.session.state === "ambiguous"
+				? "Activity stays unknown until you choose the matching provider session."
+				: "Choose the matching provider session to restore activity tracking.",
 		className: `binding-badge binding-${observation.session.state}`,
 		tooltip: `${detail} ${remediation}`,
 	};

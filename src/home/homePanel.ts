@@ -4,7 +4,6 @@ import { presentAgentCard } from "../agents/observation/presentAgentCard";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
-import { ICON_GIT } from "../constants/icons";
 import {
 	type FeatureCockpitPresentation,
 	type FeatureCockpitPrimaryAction,
@@ -1047,12 +1046,13 @@ export class HomePanel {
 				${feature.primaryBranchRef && feature.primaryBranchRef !== feature.branch ? `<div class="header-branch">Delivery · ${this.escapeHtml(feature.primaryBranchRef)}</div>` : ""}
 			</div>
 			<div class="header-actions">
-				<button class="header-action-btn" onclick="quickAction('refresh', '${feature.id}')" title="Refresh">
+				${
+					cockpit.primaryAction.kind === "refresh_evidence"
+						? ""
+						: `<button class="header-action-btn" onclick="quickAction('refresh', '${feature.id}')" title="Refresh evidence">
 					${ICON_REFRESH}
-				</button>
-				<button class="header-action-btn" onclick="quickAction('openGitView', '${feature.id}')" title="Open Workspace">
-					${ICON_GIT}
-				</button>
+				</button>`
+				}
 			</div>
 		</div>
 			<div class="workspace-content">
@@ -1111,13 +1111,6 @@ export class HomePanel {
 .agent-status-dot.attention-waiting_for_user { background: var(--vscode-notificationsWarningIcon-foreground); box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 18%, transparent); }
 .agent-status-dot.attention-failed { background: var(--vscode-errorForeground); }
 .agent-status-dot.attention-idle, .agent-status-dot.attention-unknown, .agent-status-dot.attention-done { background: var(--vscode-disabledForeground); }
-.binding-badge { white-space: nowrap; }
-.binding-badge.binding-pending { opacity: .75; }
-.binding-badge.binding-ambiguous { color: var(--vscode-notificationsWarningIcon-foreground); background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent); }
-.binding-badge.binding-unverified { color: var(--vscode-errorForeground); background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent); }
-.binding-badge.binding-unsupported { opacity: .6; }
-.agent-lifecycle-badge { color: var(--vscode-descriptionForeground); white-space: nowrap; }
-.agent-session-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); font-size: 9px; }
 .agent-status-dot.primary-state-working { background: var(--vscode-testing-iconPassed); animation: pulse-green 2s ease-in-out infinite; }
 .agent-status-dot.primary-state-warning { background: var(--vscode-notificationsWarningIcon-foreground); }
 .agent-status-dot.primary-state-error { background: var(--vscode-errorForeground); }
@@ -1140,14 +1133,20 @@ export class HomePanel {
 			cockpit.primaryAction,
 			snapshot.feature.id,
 		);
+		const primaryAlert = cockpit.alerts[0];
 		const headline =
-			cockpit.alerts[0]?.summary ?? cockpit.delivery.integration.label;
+			primaryAlert?.summary ?? cockpit.delivery.integration.label;
+		const summaryDetail =
+			primaryAlert?.detail ?? cockpit.delivery.integration.detail;
+		const remainingAlerts = cockpit.alerts.slice(1);
+		const remainingAlertCount =
+			remainingAlerts.length + cockpit.hiddenAlertCount;
 		const alerts =
-			cockpit.alerts.length === 0
+			remainingAlertCount === 0
 				? ""
-				: `<div class="feature-attention-card">
-					<div class="section-label">Needs you</div>
-					${cockpit.alerts
+				: `<details class="feature-attention-card">
+					<summary>${remainingAlertCount} more item${remainingAlertCount === 1 ? "" : "s"} need attention</summary>
+					${remainingAlerts
 						.map(
 							(
 								problem,
@@ -1157,8 +1156,8 @@ export class HomePanel {
 							</div>`,
 						)
 						.join("")}
-					${cockpit.hiddenAlertCount > 0 ? `<div class="feature-cockpit-observed">${cockpit.hiddenAlertCount} more item${cockpit.hiddenAlertCount === 1 ? "" : "s"}</div>` : ""}
-				</div>`;
+					${cockpit.hiddenAlertCount > 0 ? `<div class="feature-cockpit-observed">${cockpit.hiddenAlertCount} additional item${cockpit.hiddenAlertCount === 1 ? "" : "s"} available after refresh</div>` : ""}
+				</details>`;
 		const working = cockpit.work.workingTree;
 		const workingBreakdown =
 			working.status === "known"
@@ -1178,17 +1177,17 @@ export class HomePanel {
 				</div>${this.renderCommittedFiles(committed)}`
 				: "";
 		const pull = cockpit.delivery.pullRequest;
-		const deliveryBranch =
-			snapshot.feature.primaryBranchRef ?? snapshot.feature.branch;
-		const pullAction = pull.number
-			? `<button class="quick-action-btn subtle" onclick="openPullRequest('${snapshot.feature.id}')">Open</button>`
-			: "";
+		const pullAction =
+			pull.number && cockpit.primaryAction.kind !== "open_pull_request"
+				? `<button class="quick-action-btn subtle" onclick="openPullRequest('${snapshot.feature.id}')">Open</button>`
+				: "";
 
 		return `<section class="feature-cockpit">
 			<div class="feature-cockpit-summary">
 				<div class="feature-cockpit-summary-copy">
 					<strong>${this.escapeHtml(headline)}</strong>
-					<span>${this.escapeHtml(cockpit.runtime.label)}</span>
+					${summaryDetail ? `<span class="feature-cockpit-summary-detail">${this.escapeHtml(summaryDetail)}</span>` : ""}
+					<span class="feature-cockpit-summary-meta">${this.escapeHtml(cockpit.runtime.label)}</span>
 				</div>
 				${primary}
 			</div>
@@ -1209,14 +1208,17 @@ export class HomePanel {
 				</div>
 				<div class="feature-cockpit-card">
 					<h3>Delivery</h3>
-					<div class="feature-cockpit-row"><span>Branch</span><div class="feature-cockpit-value"><strong>${this.escapeHtml(deliveryBranch)}</strong>${deliveryBranch !== snapshot.feature.branch ? `<div class="feature-cockpit-breakdown">Checkout continues on ${this.escapeHtml(snapshot.feature.branch)}</div>` : ""}</div></div>
+					<div class="feature-cockpit-row"><span>Delivery branch</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.source.tone}"><strong>${this.escapeHtml(cockpit.delivery.source.label)}</strong>${cockpit.delivery.source.detail ? `<div class="feature-cockpit-breakdown">${this.escapeHtml(cockpit.delivery.source.detail)}</div>` : ""}</div></div>
 					<div class="feature-cockpit-row"><span>Target</span><div class="feature-cockpit-value"><strong>${this.escapeHtml(cockpit.delivery.target.label)}</strong> ${this.escapeHtml(cockpit.delivery.target.detail ?? "")}${this.renderReferenceHealthChip(snapshot.projectId)}</div></div>
 					<div class="feature-cockpit-row"><span>Tracking</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.tracking.tone}">${this.escapeHtml(cockpit.delivery.tracking.label)}</div></div>
 					<div class="feature-cockpit-row"><span>Pull request</span><div class="feature-cockpit-value feature-cockpit-value--${pull.tone}">${this.escapeHtml(pull.label)} ${pullAction}</div></div>
 					<div class="feature-cockpit-row"><span>Integration</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.integration.tone}"><strong>${this.escapeHtml(cockpit.delivery.integration.label)}</strong>${cockpit.delivery.integration.detail ? `<div class="feature-cockpit-breakdown">${this.escapeHtml(cockpit.delivery.integration.detail)}</div>` : ""}</div></div>
-					<div class="feature-cockpit-observed">Local evidence observed ${this.escapeHtml(cockpit.observedAt)} · GitHub evidence ${this.escapeHtml(snapshot.github.observedAt)}</div>
 				</div>
 			</div>
+			<details class="feature-cockpit-evidence">
+				<summary>Evidence</summary>
+				<div>Local observation ${this.escapeHtml(cockpit.observedAt)} · GitHub observation ${this.escapeHtml(snapshot.github.observedAt)}</div>
+			</details>
 		</section>`;
 	}
 
@@ -1642,7 +1644,6 @@ export class HomePanel {
 		const idx = allAgents.indexOf(agent);
 		const color = TERMINAL_COLOR_HEX[idx % TERMINAL_COLOR_HEX.length];
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
-		const toolBadge = `<span class="agent-tool-badge">${this.escapeHtml(tool.name)}</span>`;
 		const observation = this.projectManager
 			.resolveFeature(feature.id)
 			?.ctx.agentManager.observe(agent);
@@ -1664,7 +1665,14 @@ export class HomePanel {
 		const presented = card.primaryState;
 		const isDone = agent.status === "done";
 		const sessionAction = card.sessionAction;
-		const bindingBadge = `<button id="agent-binding-badge-${agent.id}" class="agent-tool-badge ${sessionAction?.className ?? "binding-badge"}" title="${this.escapeHtml(sessionAction?.tooltip ?? "")}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')"${sessionAction ? "" : ' style="display:none"'}>${this.escapeHtml(sessionAction?.label ?? "Choose session")}</button>`;
+		const sessionIntervention = `
+			<div id="agent-session-intervention-${agent.id}" class="agent-session-intervention session-${sessionAction?.kind ?? "none"}"${sessionAction ? "" : ' style="display:none"'}>
+				<div class="agent-session-message">
+					<strong id="agent-session-title-${agent.id}">${this.escapeHtml(sessionAction?.title ?? "Session needs confirmation")}</strong>
+					<span id="agent-session-description-${agent.id}">${this.escapeHtml(sessionAction?.description ?? "Choose the matching provider session to restore activity tracking.")}</span>
+				</div>
+				<button id="agent-binding-badge-${agent.id}" class="agent-session-action" title="${this.escapeHtml(sessionAction?.tooltip ?? "")}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')">${this.escapeHtml(sessionAction?.label ?? "Choose session")}</button>
+			</div>`;
 		const isErrored = agent.status === "errored";
 		const nameClass = isDone ? "agent-panel-name done" : "agent-panel-name";
 		const emptyState = isDone
@@ -1673,7 +1681,7 @@ export class HomePanel {
 				? this.escapeHtml(
 						agent.lastError ?? "Agent failed to start or exited unexpectedly.",
 					)
-				: "Click to view live terminal output";
+				: "No live output captured yet";
 		const startupStep = agent.startup?.steps.find(
 			(step) => step.status === "running",
 		);
@@ -1687,28 +1695,33 @@ export class HomePanel {
 		let actionButtons: string;
 		if (isDone) {
 			actionButtons = `
-				<button class="agent-action-btn" onclick="event.stopPropagation(); reopenAgent('${feature.id}', '${agent.id}')" title="Reopen">&#8635;</button>`;
+				<button class="agent-action-btn agent-action-btn-secondary" onclick="reopenAgent('${feature.id}', '${agent.id}')">Reopen agent</button>`;
 		} else {
-			const focusTitle = isErrored ? "Retry Agent" : "Focus Terminal";
 			actionButtons = `
-				<button class="agent-action-btn" onclick="event.stopPropagation(); focusAgent('${feature.id}', '${agent.id}')" title="${focusTitle}">&#9243;</button>
-				<button class="agent-action-btn" onclick="event.stopPropagation(); markAgentDone('${feature.id}', '${agent.id}', '${this.escapeHtml(agent.name)}')" title="Mark Done">&#10003;</button>`;
+				<button class="agent-action-btn agent-terminal-action" onclick="focusAgent('${feature.id}', '${agent.id}')">Open terminal</button>
+				<button class="agent-action-btn agent-action-btn-secondary" onclick="markAgentDone('${feature.id}', '${agent.id}')">Mark done</button>`;
 		}
 
 		return `
 		<div class="agent-panel ${isErrored ? "errored" : ""}" style="border-left: 2px solid ${color}">
-			<div class="agent-panel-header" id="agent-header-${agent.id}" onclick="toggleAgent('${agent.id}')">
-				<div id="agent-attention-dot-${agent.id}" class="agent-status-dot primary-state-${presented.tone}"></div>
-				<span class="${nameClass}" title="${this.escapeHtml(card.name)}">${this.escapeHtml(card.name)}</span>
-				${card.secondaryTitle ? `<span class="agent-session-title" title="${this.escapeHtml(card.secondaryTitle)}">${this.escapeHtml(card.secondaryTitle)}</span>` : ""}
-				<span id="agent-lifecycle-badge-${agent.id}" class="agent-tool-badge agent-lifecycle-badge primary-state-${presented.tone}" title="${this.escapeHtml(presented.detail ?? "")}">${presented.label}</span>
-				${toolBadge}
-				${startupBadge}
-				${bindingBadge}
+			<div class="agent-panel-header agent-card-header" id="agent-header-${agent.id}">
+				<div class="agent-panel-summary">
+					<div class="agent-identity">
+						<div id="agent-attention-dot-${agent.id}" class="agent-status-dot primary-state-${presented.tone}"></div>
+						<span id="agent-name-${agent.id}" class="${nameClass}" title="${this.escapeHtml(card.name)}">${this.escapeHtml(card.name)}</span>
+					</div>
+					<span id="agent-lifecycle-badge-${agent.id}" class="agent-primary-state primary-state-${presented.tone}" title="${this.escapeHtml(presented.detail ?? "")}">${this.escapeHtml(presented.label)}</span>
+				</div>
+				<div class="agent-metadata">
+					<span class="agent-provider">Provider &middot; ${this.escapeHtml(tool.name)}</span>
+					${card.secondaryTitle ? `<span class="agent-session-title" title="${this.escapeHtml(card.secondaryTitle)}">Session &middot; ${this.escapeHtml(card.secondaryTitle)}</span>` : ""}
+					${startupBadge}
+				</div>
+				${sessionIntervention}
 				<div class="agent-panel-actions">
 					${actionButtons}
+					<button id="agent-toggle-${agent.id}" class="agent-activity-toggle" aria-expanded="false" aria-controls="agent-activity-${agent.id}" onclick="toggleAgent('${agent.id}')">Activity <span class="agent-panel-chevron" id="agent-chevron-${agent.id}">&rsaquo;</span></button>
 				</div>
-				<span class="agent-panel-chevron" id="agent-chevron-${agent.id}">&rsaquo;</span>
 			</div>
 			<div class="agent-activity" id="agent-activity-${agent.id}">
 				<div class="activity-content">
@@ -2050,18 +2063,10 @@ export class HomePanel {
 	}
 
 	private renderQuickActions(feature: Feature, hasBootstrap = false): string {
+		if (!hasBootstrap) return "";
 		return `
-		<div>
-			<div class="section-label">Quick Actions</div>
-			<div class="quick-actions">
-				<button class="quick-action-btn primary" onclick="quickAction('addAgent', '${feature.id}')">
-					${ICON_PLUS} Add Agent
-				</button>
-				<button class="quick-action-btn" onclick="quickAction('addService', '${feature.id}')">
-					${ICON_SERVER} Add Service
-				</button>
-				${hasBootstrap ? `<button class="quick-action-btn" onclick="quickAction('bootstrapFeature', '${feature.id}')">Bootstrap Worktree</button>` : ""}
-			</div>
+		<div class="feature-setup-actions">
+			<button class="quick-action-btn" onclick="quickAction('bootstrapFeature', '${feature.id}')">Bootstrap Worktree</button>
 		</div>`;
 	}
 
@@ -2114,4 +2119,3 @@ interface GitStats {
 const ICON_REFRESH = `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13.451 5.609l-.579-.921-1.017.641c-.597-.58-1.345-.99-2.162-1.18a5.03 5.03 0 0 0-2.441.077 4.975 4.975 0 0 0-2.108 1.299A5.007 5.007 0 0 0 3.986 8.1a4.947 4.947 0 0 0 .424 2.32 5.028 5.028 0 0 0 1.541 1.86 5.067 5.067 0 0 0 2.21.996 4.997 4.997 0 0 0 2.44-.079c.729-.224 1.393-.612 1.938-1.137l-.726-.726a3.98 3.98 0 0 1-1.535.892 3.98 3.98 0 0 1-1.935.062 4.037 4.037 0 0 1-1.758-.793A3.996 3.996 0 0 1 5.36 9.974a3.935 3.935 0 0 1-.337-1.842A3.985 3.985 0 0 1 5.723 6.3a3.955 3.955 0 0 1 1.674-1.032 3.998 3.998 0 0 1 1.94-.061c.65.133 1.248.436 1.723.875l-1.06.667.596.921L13.452 5.61z"/></svg>`;
 const ICON_PLUS = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>`;
 const ICON_FOLDER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10L14.5 3zm-.51 8.49V13h-12V7h12v4.49zm0-5.49h-12V3h4.29l.85.85.36.15H14v2z"/></svg>`;
-const ICON_SERVER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3.5 2h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v3l-.5.5h-9l-.5-.5v-3l.5-.5zm0 5h9l.5.5v1l-.5.5h-9l-.5-.5v-1l.5-.5zM5 4h1V3H5v1zm0 5h1V8H5v1z"/></svg>`;

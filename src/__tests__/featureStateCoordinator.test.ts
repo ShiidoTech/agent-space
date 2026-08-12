@@ -108,6 +108,18 @@ function setup(
 		},
 		featureGitInspector: {
 			inspect,
+			isCommitAncestor: vi.fn(
+				async (ancestorSha: string, descendantSha: string) =>
+					known({
+						ancestor: { ref: ancestorSha, sha: ancestorSha },
+						descendant: { ref: descendantSha, sha: descendantSha },
+						isAncestor: true,
+					}),
+			),
+			countCommitsAfter: vi.fn(
+				async (ancestorSha: string, descendantSha: string) =>
+					known({ ancestorSha, descendantSha, count: 1 }),
+			),
 			observeProject: vi.fn(async () => ({
 				repository: known({ root: "/repo" }),
 				worktrees: known([]),
@@ -522,7 +534,16 @@ describe("FeatureStateCoordinator", () => {
 		});
 		const listPullRequests = vi.fn(async () => ({
 			status: "ok" as const,
-			pulls: [],
+			pulls: [
+				{
+					number: 74,
+					html_url: "https://github.com/ShiidoTech/agent-space/pull/74",
+					state: "open" as const,
+					draft: true,
+					head: { ref: "feat/audit_and_go", sha: deliverySha },
+					base: { ref: "main" },
+				},
+			],
 		}));
 		const backend = {
 			auth: vi.fn(async () => ({
@@ -560,5 +581,21 @@ describe("FeatureStateCoordinator", () => {
 		expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
 			queriedHeadSha: deliverySha,
 		});
+		expect(coordinator.getSnapshot("f1")?.delivery).toMatchObject({
+			branchRef: "feat/audit_and_go",
+			head: { status: "known", value: { sha: deliverySha } },
+			activeRelation: { status: "known", value: { isAncestor: true } },
+			commitsAfter: { status: "known", value: { count: 1 } },
+		});
+		expect(coordinator.getSnapshot("f1")?.attention).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ code: "continuation_outside_delivery" }),
+			]),
+		);
+		expect(
+			coordinator
+				.getSnapshot("f1")
+				?.attention.some((item) => item.code === "pull_request_head_mismatch"),
+		).toBe(false);
 	});
 });
