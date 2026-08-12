@@ -256,6 +256,26 @@ button {
 	color: var(--vscode-descriptionForeground);
 }
 
+.status-normal {
+	background-color: color-mix(in srgb, var(--vscode-charts-blue) 16%, transparent);
+	color: var(--vscode-charts-blue);
+}
+
+.status-muted {
+	background-color: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-descriptionForeground);
+}
+
+.status-warning {
+	background-color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 16%, transparent);
+	color: var(--vscode-notificationsWarningIcon-foreground);
+}
+
+.status-error {
+	background-color: color-mix(in srgb, var(--vscode-errorForeground) 16%, transparent);
+	color: var(--vscode-errorForeground);
+}
+
 .delete-btn {
 	display: flex;
 	align-items: center;

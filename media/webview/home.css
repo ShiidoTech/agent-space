@@ -846,6 +846,22 @@ body {
 	color: var(--vscode-descriptionForeground);
 	background: var(--vscode-button-secondaryBackground);
 }
+.project-status-badge.status-normal {
+	color: var(--vscode-charts-blue);
+	background: color-mix(in srgb, var(--vscode-charts-blue) 14%, transparent);
+}
+.project-status-badge.status-muted {
+	color: var(--vscode-descriptionForeground);
+	background: var(--vscode-button-secondaryBackground);
+}
+.project-status-badge.status-warning {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+	background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent);
+}
+.project-status-badge.status-error {
+	color: var(--vscode-errorForeground);
+	background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent);
+}
 .project-base-label {
 	flex: 0 0 auto;
 	padding: 2px 7px;

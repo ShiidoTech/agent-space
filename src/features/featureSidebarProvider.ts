@@ -21,9 +21,8 @@ import type {
 	ProjectManager,
 } from "../projects/projectManager";
 import type { Agent, Feature, Service } from "../types";
-import { gitStatusLabel } from "./featureGitStatus";
+import { presentFeatureCockpit } from "./featureCockpitPresentation";
 import type { FeatureSnapshot } from "./featureSnapshot";
-import { featureSnapshotGitStatus } from "./featureSnapshot";
 import type { FeatureStateCoordinator } from "./featureStateCoordinator";
 
 export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
@@ -222,7 +221,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			interface SidebarFeature {
 				id: string;
 				branch: string;
-				gitStatus?: string;
+				statusLabel?: string;
+				statusTone?: string;
+				statusDetail?: string;
 				isBase: boolean;
 				agents: SidebarAgent[];
 				services: SidebarService[];
@@ -242,12 +243,20 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				const features: SidebarFeature[] = snapshots.map((snapshot) => {
 					const agents = this.snapshotAgents(snapshot);
 					const services = this.snapshotServices(snapshot);
+					const summary = snapshot.feature.id.startsWith("base:")
+						? undefined
+						: presentFeatureCockpit(
+								snapshot,
+								this.featureStateCoordinator.getProjectReferenceHealth(
+									ctx.project.id,
+								),
+							).summary;
 					return {
 						id: snapshot.feature.id,
 						branch: snapshot.feature.branch,
-						gitStatus: snapshot.feature.id.startsWith("base:")
-							? undefined
-							: featureSnapshotGitStatus(snapshot),
+						statusLabel: summary?.label,
+						statusTone: summary?.tone,
+						statusDetail: summary?.detail,
 						isBase: snapshot.feature.id.startsWith("base:"),
 						agentsKnown: snapshot.runtime.agents.status === "known",
 						servicesKnown: snapshot.runtime.services.status === "known",
@@ -585,7 +594,12 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			agents.filter((a) => a.status !== "done").length +
 			services.filter((s) => s.status === "running").length;
 
-		const gitStatus = featureSnapshotGitStatus(snapshot);
+		const summary = presentFeatureCockpit(
+			snapshot,
+			this.featureStateCoordinator.getProjectReferenceHealth(
+				snapshot.projectId,
+			),
+		).summary;
 		const bodyHtml = this.renderSnapshotCardBody(snapshot, agents, services);
 		const count = this.snapshotRuntimeKnown(snapshot)
 			? totalCount > 0
@@ -598,7 +612,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="card-header" onclick="toggleFeatureCard(event, '${feature.id}')">
 				<span class="card-chevron" id="card-chevron-${feature.id}">${ICON_CHEVRON_DOWN}</span>
 				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
-				<span class="status-badge status-${gitStatus}" data-status-badge="${feature.id}">${gitStatusLabel(gitStatus)}</span>
+				<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
 				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Finish Feature">${ICON_DELETE}</button>
 			</div>
@@ -653,11 +667,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const activeAgents = agents.filter((a) => a.status !== "done");
 		const doneAgents = agents.filter((a) => a.status === "done");
 
-		const renderSessionAction = (a: Agent, card: AgentCardPresentation) => {
-			const action = card.sessionAction;
-			return `<button class="binding-action ${action?.className ?? "binding-badge"}" data-binding-badge="${a.id}" onclick="attachProviderSession(event, '${feature.id}', '${a.id}')" title="${this.escapeHtml(action?.tooltip ?? "")}"${action ? "" : ' style="display:none"'}>${this.escapeHtml(action?.label ?? "Link conversation")}</button>`;
-		};
-
 		const renderAgentCard = (a: Agent, i: number) => {
 			const tool = this.toolRegistry.resolveAgentTool(a.toolId);
 			const toolLabel = ` &middot; ${this.escapeHtml(tool.name)}`;
@@ -697,7 +706,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					${card.secondaryTitle ? `<span class="agent-session-title" title="${this.escapeHtml(card.secondaryTitle)}">${this.escapeHtml(card.secondaryTitle)}</span>` : ""}
 					<span class="agent-status">
 						<span class="lifecycle-badge primary-state-${presented.tone}" data-lifecycle-badge="${a.id}" title="${this.escapeHtml(presented.detail ?? "")}">${presented.label}</span>
-							${renderSessionAction(a, card)}
 					</span>
 				</div>
 				${errorNote}

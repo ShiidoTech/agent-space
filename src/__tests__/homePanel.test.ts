@@ -315,7 +315,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(orphaned).not.toContain("lifecycle-spinner");
 	});
 
-	it("uses the primary alert as the cockpit summary instead of repeating it", () => {
+	it("uses the shared Feature summary and does not repeat its primary alert", () => {
 		const panel = buildPanel();
 		const render = (
 			panel as unknown as {
@@ -324,6 +324,12 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		).renderFeatureCockpit.bind(panel);
 		const html = render(
 			{
+				summary: {
+					label: "Needs you",
+					tone: "warning",
+					detail:
+						"2 continuation commits are not in PR #74 — Delivery stays on feat/audit_and_go.",
+				},
 				alerts: [
 					{
 						code: "continuation_not_delivered",
@@ -381,7 +387,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(
 			html.match(/2 continuation commits are not in PR #74/g),
 		).toHaveLength(1);
-		expect(html).not.toContain("Needs you");
+		expect(html).toContain("Needs you");
 		expect(html).toContain("Review continuation");
 		expect(html).toContain("<summary>Evidence</summary>");
 	});
@@ -401,7 +407,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(bootstrap).not.toContain("Add Service");
 	});
 
-	it("keeps the agent identity dominant and moves session choice to its own row", () => {
+	it("keeps the agent identity dominant without exposing session repair", () => {
 		const panel = buildPanel();
 		const render = (
 			panel as unknown as {
@@ -418,8 +424,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(html).toContain('id="agent-name-a1"');
 		expect(html).toContain(">Agent 1</span>");
 		expect(html).toContain("Provider &middot; Codex CLI");
-		expect(html).toContain("Link this agent&#039;s conversation");
-		expect(html).toContain(">Link conversation</button>");
+		expect(html).not.toContain("Link conversation");
 		expect(html).toContain(">Open terminal</button>");
 		expect(html).toContain(">Activity <span");
 		expect(html).not.toContain("&#9243;");

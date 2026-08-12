@@ -63,6 +63,21 @@ export interface ProviderSessionAdapter extends SessionRenameAdapter {
 	): string | undefined | Promise<string | undefined>;
 }
 
+export type ProviderConversationIdentity =
+	| {
+			/** Agent Space chooses the id before launch and passes it to the CLI. */
+			readonly ownership: "preassigned";
+			readonly createId: () => string;
+	  }
+	| {
+			/** The provider chooses the id; a provider receipt must prove it later. */
+			readonly ownership: "provider_assigned";
+	  }
+	| {
+			/** This provider exposes no durable conversation identity. */
+			readonly ownership: "unsupported";
+	  };
+
 /**
  * Internal provider contract. Providers are compiled into the extension and
  * added through PRs; project config only selects their stable IDs.
@@ -70,6 +85,11 @@ export interface ProviderSessionAdapter extends SessionRenameAdapter {
 export interface CodingAgentProvider {
 	readonly id: string;
 	readonly capabilities: ProviderCapabilities;
+	/**
+	 * Provider-owned conversation lifecycle. Callers must not infer this from a
+	 * CLI family or from the number/order of files found after launch.
+	 */
+	readonly conversationIdentity: ProviderConversationIdentity;
 	readonly launchArgs?: (sessionId?: string | null) => string[];
 	readonly resumeArgs?: (sessionId?: string | null) => string[];
 	getAttentionSignal?(sessionId: string): ProviderAttentionSignal | undefined;

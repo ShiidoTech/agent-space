@@ -549,6 +549,15 @@ describe("CodingToolRegistry", () => {
 	});
 
 	describe("isClaudeFamilyTool", () => {
+		it("lets the provider own initial conversation identity", () => {
+			expect(registry.createInitialConversationId("claude")).toMatch(
+				/^[0-9a-f-]{36}$/,
+			);
+			expect(registry.createInitialConversationId("codex")).toBeNull();
+			expect(registry.createInitialConversationId("opencode")).toBeNull();
+			expect(registry.createInitialConversationId("copilot")).toBeNull();
+		});
+
 		it("is true for the default tool", () => {
 			expect(registry.isClaudeFamilyTool(undefined)).toBe(true);
 		});
@@ -584,9 +593,12 @@ describe("CodingToolRegistry", () => {
 				],
 			});
 			const tool = registry.resolveAgentTool("wrapped-claude");
-			// session ID preassigned (the caller assigns it), then launch and
-			// resume go through the tool's own executable, never plain claude.
+			// The provider preassigns the id, then launch and resume go through the
+			// tool's own executable, never plain claude.
 			expect(registry.isClaudeFamilyTool("wrapped-claude")).toBe(true);
+			expect(registry.createInitialConversationId("wrapped-claude")).toMatch(
+				/^[0-9a-f-]{36}$/,
+			);
 			expect(registry.buildLaunchCommand(tool, "abc-123")).toBe(
 				"my-claude --session-id abc-123",
 			);

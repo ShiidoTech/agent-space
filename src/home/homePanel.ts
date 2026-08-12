@@ -9,11 +9,7 @@ import {
 	type FeatureCockpitPrimaryAction,
 	presentFeatureCockpit,
 } from "../features/featureCockpitPresentation";
-import { gitStatusLabel } from "../features/featureGitStatus";
-import {
-	type FeatureSnapshot,
-	featureSnapshotGitStatus,
-} from "../features/featureSnapshot";
+import type { FeatureSnapshot } from "../features/featureSnapshot";
 import type { FeatureStateCoordinator } from "../features/featureStateCoordinator";
 import type { ProjectManager } from "../projects/projectManager";
 import type { GlobalStore } from "../storage/globalStore";
@@ -1140,11 +1136,8 @@ export class HomePanel {
 			cockpit.primaryAction,
 			snapshot.feature.id,
 		);
-		const primaryAlert = cockpit.alerts[0];
-		const headline =
-			primaryAlert?.summary ?? cockpit.delivery.integration.label;
-		const summaryDetail =
-			primaryAlert?.detail ?? cockpit.delivery.integration.detail;
+		const headline = cockpit.summary.label;
+		const summaryDetail = cockpit.summary.detail;
 		const remainingAlerts = cockpit.alerts.slice(1);
 		const remainingAlertCount =
 			remainingAlerts.length + cockpit.hiddenAlertCount;
@@ -1355,11 +1348,16 @@ export class HomePanel {
 						const agents = this.snapshotAgents(snapshot);
 						const services = this.snapshotServices(snapshot);
 						const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
-						const gitStatus = feature.id.startsWith("base:")
+						const summary = feature.id.startsWith("base:")
 							? null
-							: featureSnapshotGitStatus(snapshot);
-						const statusBadge = gitStatus
-							? `<span class="project-status-badge status-${gitStatus}">${gitStatusLabel(gitStatus)}</span>`
+							: presentFeatureCockpit(
+									snapshot,
+									this.featureStateCoordinator.getProjectReferenceHealth(
+										projectId,
+									),
+								).summary;
+						const statusBadge = summary
+							? `<span class="project-status-badge status-${summary.tone}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>`
 							: '<span class="project-base-label">base</span>';
 						const agentCount = agents.filter((a) => a.status !== "done").length;
 						const serviceCount = services.filter(
@@ -1671,15 +1669,6 @@ export class HomePanel {
 		);
 		const presented = card.primaryState;
 		const isDone = agent.status === "done";
-		const sessionAction = card.sessionAction;
-		const sessionIntervention = `
-			<div id="agent-session-intervention-${agent.id}" class="agent-session-intervention session-${sessionAction?.kind ?? "none"}"${sessionAction ? "" : ' style="display:none"'}>
-				<div class="agent-session-message">
-					<strong id="agent-session-title-${agent.id}">${this.escapeHtml(sessionAction?.title ?? "Link this agent's conversation")}</strong>
-					<span id="agent-session-description-${agent.id}">${this.escapeHtml(sessionAction?.description ?? "Link the CLI conversation opened for this agent to restore activity and naming.")}</span>
-				</div>
-				<button id="agent-binding-badge-${agent.id}" class="agent-session-action" title="${this.escapeHtml(sessionAction?.tooltip ?? "")}" onclick="event.stopPropagation(); attachProviderSession('${feature.id}', '${agent.id}')">${this.escapeHtml(sessionAction?.label ?? "Link conversation")}</button>
-			</div>`;
 		const isErrored = agent.status === "errored";
 		const nameClass = isDone ? "agent-panel-name done" : "agent-panel-name";
 		const emptyState = isDone
@@ -1724,7 +1713,6 @@ export class HomePanel {
 					${card.secondaryTitle ? `<span class="agent-session-title" title="${this.escapeHtml(card.secondaryTitle)}">Session &middot; ${this.escapeHtml(card.secondaryTitle)}</span>` : ""}
 					${startupBadge}
 				</div>
-				${sessionIntervention}
 				<div class="agent-panel-actions">
 					${actionButtons}
 					<button id="agent-toggle-${agent.id}" class="agent-activity-toggle" aria-expanded="false" aria-controls="agent-activity-${agent.id}" onclick="toggleAgent('${agent.id}')">Activity <span class="agent-panel-chevron" id="agent-chevron-${agent.id}">&rsaquo;</span></button>

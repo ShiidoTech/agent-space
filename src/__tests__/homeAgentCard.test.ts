@@ -88,7 +88,7 @@ describe("Home agent card render contract", () => {
 		);
 	});
 
-	it("renders ambiguous binding as a dedicated intervention row", () => {
+	it("keeps ambiguous provider recovery out of the normal card", () => {
 		const html = renderAgent(
 			observation({
 				state: "ambiguous",
@@ -96,13 +96,8 @@ describe("Home agent card render contract", () => {
 			}),
 		);
 
-		expect(html).toContain(
-			'class="agent-session-intervention session-ambiguous"',
-		);
-		expect(html).toContain("Link this agent&#039;s conversation");
-		expect(html).toContain("Several CLI conversations exist in this worktree");
-		expect(html).toContain('class="agent-session-action"');
-		expect(html).toContain(">Link conversation</button>");
+		expect(html).not.toContain("agent-session-intervention");
+		expect(html).not.toContain("Link conversation");
 		expect(html).not.toContain(">Ambiguous session<");
 	});
 
@@ -114,8 +109,6 @@ describe("Home agent card render contract", () => {
 		expect(html).toContain(">Activity <span");
 		expect(html).toContain('id="agent-activity-agent-1"');
 		expect(html).not.toContain("&#9243;");
-		expect(html).toContain(
-			'id="agent-session-intervention-agent-1" class="agent-session-intervention session-none" style="display:none"',
-		);
+		expect(html).not.toContain("agent-session-intervention");
 	});
 });

@@ -295,33 +295,6 @@ function updateAttention(agent) {
 		lifecycleBadge.className = `agent-primary-state primary-state-${presented.tone}`;
 		lifecycleBadge.title = presented.detail || "";
 	}
-
-	updateSessionAction(agent.id, card.sessionAction);
-}
-
-function updateSessionAction(agentId, action) {
-	const intervention = document.getElementById(
-		`agent-session-intervention-${agentId}`,
-	);
-	const badge = document.getElementById(`agent-binding-badge-${agentId}`);
-	if (!intervention || !badge) return;
-	if (!action) {
-		intervention.style.display = "none";
-		badge.title = "";
-		return;
-	}
-
-	intervention.className = `agent-session-intervention session-${action.kind}`;
-	const title = document.getElementById(`agent-session-title-${agentId}`);
-	const description = document.getElementById(
-		`agent-session-description-${agentId}`,
-	);
-	if (title) title.textContent = action.title;
-	if (description) description.textContent = action.description;
-	badge.className = "agent-session-action";
-	badge.textContent = action.label;
-	badge.title = action.tooltip || "";
-	intervention.style.display = "";
 }
 
 window.addEventListener("message", (event) => {

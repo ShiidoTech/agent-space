@@ -243,29 +243,6 @@ function toggleProject(id) {
 }
 
 // -- Incremental sidebar updates via postMessage ----------------------------
-const STATUS_LABELS = {
-	"new": "New",
-	modified: "Modified",
-	ahead: "Ahead",
-	integrated: "Integrated",
-	merged: "Merged",
-};
-
-function updateSessionAction(agentEl, agentId, action) {
-	var badge = agentEl.querySelector('[data-binding-badge="' + agentId + '"]');
-	if (!badge) return;
-	if (!action) {
-		badge.style.display = "none";
-		badge.title = "";
-		return;
-	}
-
-	badge.className = "binding-action " + action.className;
-	badge.textContent = action.label;
-	badge.title = action.tooltip || "";
-	badge.style.display = "";
-}
-
 window.addEventListener("message", function (event) {
 	var msg = event.data;
 
@@ -296,12 +273,13 @@ window.addEventListener("message", function (event) {
 				continue;
 			}
 
-			// Update git status badge
-			if (!feat.isBase && feat.gitStatus) {
+			// Update the same human-facing Feature summary used by the full page.
+			if (!feat.isBase && feat.statusLabel && feat.statusTone) {
 				var badge = card.querySelector('[data-status-badge="' + feat.id + '"]');
 				if (badge) {
-					badge.className = "status-badge status-" + feat.gitStatus;
-					badge.textContent = STATUS_LABELS[feat.gitStatus] || feat.gitStatus;
+					badge.className = "status-badge status-" + feat.statusTone;
+					badge.textContent = feat.statusLabel;
+					badge.title = feat.statusDetail || feat.statusLabel;
 				}
 			}
 
@@ -332,7 +310,6 @@ window.addEventListener("message", function (event) {
 					dot.className = "status-dot primary-state-" + presented.tone;
 				}
 
-				updateSessionAction(agentEl, agent.id, cardPresentation.sessionAction);
 				var lifecycleBadge = agentEl.querySelector(
 					'[data-lifecycle-badge="' + agent.id + '"]',
 				);

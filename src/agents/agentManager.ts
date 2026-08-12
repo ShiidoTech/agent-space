@@ -66,17 +66,6 @@ export class AgentManager {
 		this.agentsByFeature.delete(featureId);
 	}
 
-	/**
-	 * True when the tool resolved by the registry is a claude-family CLI
-	 * (built-in "claude", or a wrapped variant declared via
-	 * `agentSpace.codingTools` with an explicit `family: "claude"` or a
-	 * claude-prefixed id). Delegates to the registry — the single source of
-	 * truth for tool identity and family.
-	 */
-	private isClaudeFamilyTool(toolId?: string): boolean {
-		return this.toolRegistry.isClaudeFamilyTool(toolId);
-	}
-
 	getAgents(featureId: string): Agent[] {
 		return this.loadAgents(featureId).map((agent) =>
 			this.withAttentionStatus(agent),
@@ -117,13 +106,9 @@ export class AgentManager {
 			);
 		}
 
-		// Claude-family CLIs (built-in "claude" or a wrapped variant declared
-		// in project config) get a pre-assigned session ID so a later resume
-		// targets the exact same session. Codex auto-generates its own
-		// (discovered post-launch); opencode/generic manage their own.
-		const sessionId = this.isClaudeFamilyTool(toolId)
-			? crypto.randomUUID()
-			: null;
+		// Conversation identity belongs to the provider contract. AgentManager
+		// never guesses it from a CLI family or from sessions found after launch.
+		const sessionId = this.toolRegistry.createInitialConversationId(toolId);
 
 		const agent: Agent = {
 			id,

@@ -26,19 +26,12 @@ describe("presentAgentCard", () => {
 					},
 				}),
 			),
-		).toMatchObject({
+		).toEqual({
+			name: "Agent 1",
 			primaryState: {
 				label: "Running",
 				tone: "normal",
 				detail: "Activity unknown: Session is ambiguous",
-			},
-			sessionAction: {
-				kind: "ambiguous",
-				label: "Link conversation",
-				title: "Link this agent's conversation",
-				description:
-					"Several CLI conversations exist in this worktree. Link the one opened for this agent so Agent Space can read its activity and name.",
-				className: "binding-badge binding-ambiguous",
 			},
 		});
 	});
@@ -58,40 +51,17 @@ describe("presentAgentCard", () => {
 		).toMatchObject({ label: "Unknown", tone: "warning" });
 	});
 
-	it("uses one explicit action for an unverified session", () => {
-		expect(
-			presentAgentCard(
-				observation({
-					session: { state: "unverified", detail: "Session disappeared" },
-				}),
-			).sessionAction,
-		).toMatchObject({
-			kind: "unverified",
-			label: "Link conversation",
-			title: "Linked conversation unavailable",
-			className: "binding-badge binding-unverified",
+	it("keeps provider recovery out of the normal card", () => {
+		const card = presentAgentCard(
+			observation({
+				session: { state: "unverified", detail: "Session disappeared" },
+			}),
+		);
+		expect(card).toMatchObject({
+			name: "Agent 1",
+			primaryState: { label: "Working", tone: "working" },
 		});
-	});
-
-	it.each([
-		"bound",
-		"pending",
-		"unsupported",
-	] as const)("keeps %s session health quiet on the card", (state) => {
-		expect(
-			presentAgentCard(observation({ session: { state } })).sessionAction,
-		).toBeUndefined();
-	});
-
-	it("does not offer a stale session action for a done agent", () => {
-		expect(
-			presentAgentCard(
-				observation({
-					lifecycle: { state: "done", source: "agentspace" },
-					session: { state: "ambiguous", detail: "Old candidates" },
-				}),
-			).sessionAction,
-		).toBeUndefined();
+		expect(card).not.toHaveProperty("sessionAction");
 	});
 
 	it("deduplicates a provider title equal to the stable name", () => {

@@ -126,10 +126,9 @@ export interface Feature {
  * - `command`/`args` build the process to start.
  * - `env` are merged into the launched process environment (e.g. a personal
  *   profile config dir).
- * - `family` drives session handling. "claude" CLIs are launched with a
- *   pre-assigned `--session-id` and resumed with `--resume <sessionId>`;
- *   "codex" generates its own id and is resumed with `codex resume`;
- *   "opencode"/"generic" manage their own sessions.
+ * - `family` selects a compiled provider adapter. Conversation identity and
+ *   resume behavior belong to that provider contract; callers must not infer
+ *   ownership from the family or from session discovery order.
  * - `sessionsDir` tells Agent Space where the CLI stores its session index
  *   so names can be discovered for display/rename.
  * - `resumeCommand` is an optional explicit template. `{command}` and

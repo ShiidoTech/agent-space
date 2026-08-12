@@ -550,6 +550,65 @@ describe("presentFeatureCockpit", () => {
 		).toBe("review_finish");
 	});
 
+	it("shares one Ready to finish summary for a merged PR present in the local base", () => {
+		const selectedPull = pull("merged");
+		const base = withPull(
+			snapshot({
+				integration: {
+					status: "known",
+					outcome: "integrated_by_ancestry",
+					evidence: {},
+				},
+			}),
+			selectedPull,
+		);
+
+		expect(presentFeatureCockpit(base, referenceHealth()).summary).toEqual({
+			label: "Ready to finish",
+			tone: "normal",
+			detail: "PR #74 merged · present in main",
+		});
+	});
+
+	it("keeps a local-only integration explicit when remote completion is not proven", () => {
+		const result = presentFeatureCockpit(
+			snapshot({
+				integration: {
+					status: "known",
+					outcome: "integrated_by_ancestry",
+					evidence: {},
+				},
+			}),
+		);
+
+		expect(result.summary).toEqual({
+			label: "Integrated locally",
+			tone: "normal",
+			detail: "The Feature revision is present in the local target branch.",
+		});
+	});
+
+	it("uses Needs you as the shared summary when an intervention is required", () => {
+		const result = presentFeatureCockpit({
+			...snapshot(),
+			attention: [
+				{
+					code: "working_tree_changes",
+					severity: "warning",
+					summary: "Pending changes",
+					detail: "Two files are not committed.",
+					evidence: {},
+				},
+			],
+		});
+
+		expect(result.summary).toEqual({
+			label: "Needs you",
+			tone: "warning",
+			detail: "Pending changes — Two files are not committed.",
+		});
+	});
+
 	it("refreshes essential unknown working-tree evidence before proposing delivery", () => {
 		const base = snapshot();
 		expect(

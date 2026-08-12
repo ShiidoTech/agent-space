@@ -73,6 +73,12 @@ export type FeatureCockpitPrimaryAction =
 	| { readonly kind: "review_finish"; readonly label: "Review finish" };
 
 export interface FeatureCockpitPresentation {
+	/** One human-facing state shared by every Feature surface. */
+	readonly summary: {
+		readonly label: string;
+		readonly tone: FeatureCockpitTone;
+		readonly detail?: string;
+	};
 	readonly alerts: readonly AttentionProblem[];
 	readonly hiddenAlertCount: number;
 	readonly work: FeatureCockpitWork;
@@ -124,16 +130,111 @@ export function presentFeatureCockpit(
 		)
 		.sort((left, right) => severityRank(left) - severityRank(right));
 	const alerts = actionable.slice(0, 3);
+	const primaryAction = choosePrimaryAction(snapshot, referenceHealth);
 
 	return {
+		summary: presentSummary(snapshot, alerts, primaryAction),
 		alerts,
 		hiddenAlertCount: Math.max(0, actionable.length - alerts.length),
 		work: presentWork(snapshot),
 		delivery: presentDelivery(snapshot),
 		runtime: presentRuntime(snapshot),
-		primaryAction: choosePrimaryAction(snapshot, referenceHealth),
+		primaryAction,
 		observedAt: snapshot.observedAt,
 	};
+}
+
+function presentSummary(
+	snapshot: FeatureSnapshot,
+	alerts: readonly AttentionProblem[],
+	primaryAction: FeatureCockpitPrimaryAction,
+): FeatureCockpitPresentation["summary"] {
+	const primaryAlert = alerts[0];
+	if (primaryAlert) {
+		return {
+			label: "Needs you",
+			tone: primaryAlert.severity === "error" ? "error" : "warning",
+			detail: `${primaryAlert.summary} — ${primaryAlert.detail}`,
+		};
+	}
+
+	switch (primaryAction.kind) {
+		case "refresh_evidence":
+			return {
+				label: "Evidence unavailable",
+				tone: "warning",
+				detail: "Refresh before deciding what to do next.",
+			};
+		case "open_agent":
+			return { label: "Needs you", tone: "warning" };
+		case "open_pull_request":
+			return {
+				label: `PR #${primaryAction.number} open`,
+				tone: "normal",
+				detail: "Delivery is awaiting review or integration.",
+			};
+		case "create_pull_request":
+			return {
+				label: "Ready for PR",
+				tone: "normal",
+				detail: "Committed Feature work has no pull request.",
+			};
+		case "review_finish":
+			return {
+				label: "Ready to finish",
+				tone: "normal",
+				detail: presentCompletionProof(snapshot),
+			};
+		case "open_workspace":
+			break;
+	}
+
+	if (
+		snapshot.integration.status === "known" &&
+		snapshot.integration.outcome === "new_work_after_integration"
+	) {
+		return {
+			label: "New work after integration",
+			tone: "warning",
+			detail:
+				"The active checkout contains work beyond the delivered revision.",
+		};
+	}
+	if (
+		snapshot.integration.status === "known" &&
+		snapshot.integration.outcome === "integrated_by_ancestry"
+	) {
+		return {
+			label: "Integrated locally",
+			tone: "normal",
+			detail: "The Feature revision is present in the local target branch.",
+		};
+	}
+	if (
+		snapshot.integration.status === "known" &&
+		snapshot.integration.outcome === "no_feature_commits"
+	) {
+		return { label: "Not started", tone: "muted" };
+	}
+	return { label: "In progress", tone: "normal" };
+}
+
+function presentCompletionProof(snapshot: FeatureSnapshot): string {
+	const local =
+		snapshot.integration.status === "known" &&
+		(snapshot.integration.outcome === "integrated_by_ancestry" ||
+			snapshot.integration.outcome === "integrated_by_pull_request")
+			? `present in ${snapshot.git.base.status === "known" ? snapshot.git.base.value.ref : "local target"}`
+			: undefined;
+	const github = snapshot.github;
+	if (
+		github.status === "known" &&
+		github.resolution.outcome === "selected" &&
+		github.resolution.pull.state === "merged"
+	) {
+		return `PR #${github.resolution.pull.number} merged${local ? ` · ${local}` : ""}`;
+	}
+	return local ?? "Integration is proven and the working tree is clean.";
 }
 
 function presentWork(snapshot: FeatureSnapshot): FeatureCockpitWork {

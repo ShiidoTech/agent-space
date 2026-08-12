@@ -1,37 +1,24 @@
 import { presentAgentState } from "./presentAgentState";
 import type { AgentObservation, PresentedAgentState } from "./types";
 
-export interface AgentCardSessionAction {
-	kind: "ambiguous" | "unverified";
-	label: "Link conversation";
-	title: string;
-	description: string;
-	className:
-		| "binding-badge binding-ambiguous"
-		| "binding-badge binding-unverified";
-	tooltip: string;
-}
-
 /**
  * Presentation shared by Home and the Feature Sidebar.
  *
  * It keeps the stable Agent Space identity prominent, reports only facts the
- * observation proves, and turns an unresolved provider-session choice into one
- * explicit action instead of repeating the same uncertainty as two statuses.
+ * observation proves, and keeps provider-session recovery out of the normal
+ * card. Ambiguous candidates are diagnostics, not conversations the user is
+ * expected to identify for Agent Space.
  */
 export interface AgentCardPresentation {
 	name: string;
 	secondaryTitle?: string;
 	primaryState: PresentedAgentState;
-	sessionAction?: AgentCardSessionAction;
 }
 
 export function presentAgentCard(
 	observation: AgentObservation,
 ): AgentCardPresentation {
 	const primaryState = presentPrimaryState(observation);
-	const sessionAction = presentSessionAction(observation);
-
 	return {
 		name: observation.identity.agentName,
 		secondaryTitle: distinctSessionTitle(
@@ -39,7 +26,6 @@ export function presentAgentCard(
 			observation.identity.sessionTitle,
 		),
 		primaryState,
-		...(sessionAction ? { sessionAction } : {}),
 	};
 }
 
@@ -60,39 +46,6 @@ function presentPrimaryState(
 		detail: observation.attention.reason
 			? `Activity unknown: ${observation.attention.reason}`
 			: "Activity unknown: no current provider evidence",
-	};
-}
-
-function presentSessionAction(
-	observation: AgentObservation,
-): AgentCardSessionAction | undefined {
-	if (observation.lifecycle.state === "done") return undefined;
-	if (
-		observation.session.state !== "ambiguous" &&
-		observation.session.state !== "unverified"
-	) {
-		return undefined;
-	}
-
-	const detail = observation.session.detail ?? "Provider session is unresolved";
-	const remediation =
-		observation.session.state === "ambiguous"
-			? "Agent Space will not guess. Choose the session explicitly."
-			: "Choose a provider session explicitly to restore activity tracking.";
-
-	return {
-		kind: observation.session.state,
-		label: "Link conversation",
-		title:
-			observation.session.state === "ambiguous"
-				? "Link this agent's conversation"
-				: "Linked conversation unavailable",
-		description:
-			observation.session.state === "ambiguous"
-				? "Several CLI conversations exist in this worktree. Link the one opened for this agent so Agent Space can read its activity and name."
-				: "Link this agent to an available CLI conversation to restore activity and naming.",
-		className: `binding-badge binding-${observation.session.state}`,
-		tooltip: `${detail} ${remediation}`,
 	};
 }
 
