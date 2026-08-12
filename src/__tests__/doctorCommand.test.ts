@@ -53,7 +53,7 @@ describe("doctor agent probing", () => {
 			} as never);
 
 			expect(result.agents).toHaveLength(1);
-			expect(result.agents[0]?.featureLabel).toBe("main");
+			expect(result.agents[0]?.featureLabel).toBe("(unknown base)");
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 			fs.rmSync(storagePath, { recursive: true, force: true });

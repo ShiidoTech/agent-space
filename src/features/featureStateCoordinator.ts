@@ -15,6 +15,13 @@ import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
+import {
+	GitLsRemoteBranchHeadSource,
+	normalizeReferenceBranch,
+	type ProjectReferenceBranchHealth,
+	ProjectReferenceBranchObserver,
+	type RemoteBranchHeadSource,
+} from "../projects/referenceBranchHealth";
 import type { Agent, Feature, Service } from "../types";
 import { evaluateAttention } from "./attentionEvaluator";
 import {
@@ -40,6 +47,8 @@ export interface FeatureStateCoordinatorOptions {
 	readonly createGithubBackend?: (repoRoot: string) => PullRequestBackend;
 	readonly githubTtlMs?: number;
 	readonly githubRepositoryFactTtlMs?: number;
+	/** Injectable read-only remote head source for project reference health. */
+	readonly referenceBranchRemote?: RemoteBranchHeadSource;
 }
 
 export class FeatureStateCoordinator implements Disposable {
@@ -55,12 +64,22 @@ export class FeatureStateCoordinator implements Disposable {
 	private generation = 0;
 	private consumers = 0;
 	private githubServices = new Map<string, GitHubObservationService>();
+	private projectReferenceHealth = new Map<
+		string,
+		ProjectReferenceBranchHealth
+	>();
+	private readonly injectedReferenceBranchRemote?: RemoteBranchHeadSource;
+	private referenceBranchRemotes = new Map<
+		string,
+		GitLsRemoteBranchHeadSource
+	>();
 
 	constructor(
 		projectManager?: ProjectManager,
 		private readonly options: FeatureStateCoordinatorOptions = {},
 	) {
 		this.projectManager = projectManager;
+		this.injectedReferenceBranchRemote = options.referenceBranchRemote;
 	}
 
 	start(
@@ -104,6 +123,8 @@ export class FeatureStateCoordinator implements Disposable {
 		this.githubServices.clear();
 		this.listeners.clear();
 		this.snapshots.clear();
+		this.projectReferenceHealth.clear();
+		this.referenceBranchRemotes.clear();
 	}
 
 	getSnapshot(featureId: string): FeatureSnapshot | undefined {
@@ -116,11 +137,31 @@ export class FeatureStateCoordinator implements Disposable {
 		);
 	}
 
+	getProjectReferenceHealth(
+		projectId: string,
+	): ProjectReferenceBranchHealth | undefined {
+		return this.projectReferenceHealth.get(projectId);
+	}
+
 	invalidate(featureId?: string): void {
 		if (this.disposed) return;
 		this.generation += 1;
 		if (featureId) this.snapshots.delete(featureId);
 		for (const service of this.githubServices.values()) service.invalidate();
+		if (this.inFlight) {
+			this.reconcileAfterFlight = true;
+			return;
+		}
+		void this.reconcile();
+	}
+
+	/** Explicit network refresh; ordinary runtime changes keep cached remote proof. */
+	refreshProjectReferenceHealth(): void {
+		if (this.disposed) return;
+		this.generation += 1;
+		this.injectedReferenceBranchRemote?.invalidate?.();
+		for (const remote of this.referenceBranchRemotes.values())
+			remote.invalidate();
 		if (this.inFlight) {
 			this.reconcileAfterFlight = true;
 			return;
@@ -153,6 +194,7 @@ export class FeatureStateCoordinator implements Disposable {
 		if (!manager) return;
 		const generation = this.generation;
 		const seen = new Set<string>();
+		const seenProjects = new Set<string>();
 		const nextSnapshots: FeatureSnapshot[] = [];
 		const tmuxObservation = manager.observeTmuxSessions();
 		const tmuxSessions =
@@ -162,7 +204,24 @@ export class FeatureStateCoordinator implements Disposable {
 
 		for (const ctx of manager.getAllContexts()) {
 			if (this.disposed) return;
+			seenProjects.add(ctx.project.id);
 			const baseRef = await observeBaseRef(ctx);
+			if (baseRef) {
+				const normalizedReference = normalizeReferenceBranch(baseRef);
+				void new ProjectReferenceBranchObserver({
+					git: ctx.gitClient,
+					remote: this.referenceRemoteFor(ctx),
+				})
+					.observe({
+						repoPath: ctx.project.repoPath,
+						branch: normalizedReference.branch,
+						remoteName: normalizedReference.remoteName,
+					})
+					.then((health) =>
+						this.acceptReferenceHealth(generation, ctx.project.id, health),
+					)
+					.catch(() => undefined);
+			}
 			const base = createBaseFeature(ctx, baseRef);
 			let features: Feature[];
 			let source: FeatureSnapshotSource = { status: "known" };
@@ -207,18 +266,29 @@ export class FeatureStateCoordinator implements Disposable {
 		}
 		if (generation !== this.generation || this.disposed) return;
 
+		let referenceHealthChanged = false;
+		for (const projectId of this.projectReferenceHealth.keys()) {
+			if (seenProjects.has(projectId)) continue;
+			this.projectReferenceHealth.delete(projectId);
+			referenceHealthChanged = true;
+		}
+
+		let snapshotChanged = false;
 		for (const snapshot of nextSnapshots) {
 			const previous = this.snapshots.get(snapshot.feature.id);
 			if (previous && equivalent(previous, snapshot)) continue;
 			this.snapshots.set(snapshot.feature.id, snapshot);
+			snapshotChanged = true;
 			this.emit(snapshot);
 		}
 
 		for (const featureId of this.snapshots.keys()) {
 			if (seen.has(featureId)) continue;
 			this.snapshots.delete(featureId);
+			snapshotChanged = true;
 			this.emit(undefined);
 		}
+		if (referenceHealthChanged && !snapshotChanged) this.emit(undefined);
 	}
 
 	private async observe(
@@ -346,6 +416,31 @@ export class FeatureStateCoordinator implements Disposable {
 		return service;
 	}
 
+	private referenceRemoteFor(ctx: ProjectContext): RemoteBranchHeadSource {
+		if (this.injectedReferenceBranchRemote) {
+			return this.injectedReferenceBranchRemote;
+		}
+		let remote = this.referenceBranchRemotes.get(ctx.project.repoPath);
+		if (!remote) {
+			remote = new GitLsRemoteBranchHeadSource({ git: ctx.gitClient });
+			this.referenceBranchRemotes.set(ctx.project.repoPath, remote);
+		}
+		return remote;
+	}
+
+	private acceptReferenceHealth(
+		generation: number,
+		projectId: string,
+		health: ProjectReferenceBranchHealth,
+	): void {
+		if (this.disposed || generation !== this.generation) return;
+		const previous = this.projectReferenceHealth.get(projectId);
+		this.projectReferenceHealth.set(projectId, health);
+		if (!previous || !equivalentReferenceHealth(previous, health)) {
+			this.emit(undefined);
+		}
+	}
+
 	private configurePolling(intervalMs: number): void {
 		if (this.consumers === 0 || intervalMs <= 0 || this.timer) return;
 		this.timer = setInterval(() => void this.reconcile(), intervalMs);
@@ -423,6 +518,32 @@ function equivalent(left: FeatureSnapshot, right: FeatureSnapshot): boolean {
 	const { observedAt: _leftObservedAt, ...leftState } = left;
 	const { observedAt: _rightObservedAt, ...rightState } = right;
 	return JSON.stringify(leftState) === JSON.stringify(rightState);
+}
+
+function equivalentReferenceHealth(
+	left: ProjectReferenceBranchHealth,
+	right: ProjectReferenceBranchHealth,
+): boolean {
+	const project = (health: ProjectReferenceBranchHealth) => ({
+		repoPath: health.repoPath,
+		branch: health.branch,
+		remoteName: health.remoteName,
+		local: stripObservationTime(health.local),
+		remoteTracking: stripObservationTime(health.remoteTracking),
+		verifiedRemote: stripObservationTime(health.verifiedRemote),
+		remoteTrackingRelation: health.remoteTrackingRelation,
+		verifiedRemoteRelation: health.verifiedRemoteRelation,
+		state: health.state,
+		freshness: health.remoteFreshness.status,
+	});
+	return JSON.stringify(project(left)) === JSON.stringify(project(right));
+}
+
+function stripObservationTime<T extends { readonly observedAt: string }>(
+	observation: T,
+): Omit<T, "observedAt"> {
+	const { observedAt: _observedAt, ...state } = observation;
+	return state;
 }
 
 function unavailableGit(root: string) {

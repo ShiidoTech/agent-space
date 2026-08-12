@@ -18,7 +18,9 @@ export class AgentObservationResolver {
 		const lifecycle = this.resolveLifecycle(agent);
 		const attention = this.attentionResolver.resolve(
 			agent,
-			lifecycle.state === "starting" ? undefined : lifecycle.state,
+			lifecycle.state === "starting" || lifecycle.state === "unknown"
+				? undefined
+				: lifecycle.state,
 		);
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 
@@ -59,11 +61,31 @@ export class AgentObservationResolver {
 		const sessionName =
 			agent.tmuxSession ?? this.tmux.sessionName(agent.featureId, agent.id);
 		try {
+			const sessions = this.tmux.observeSessions?.();
+			if (sessions?.status === "unknown") {
+				return {
+					state: "unknown",
+					source: "tmux",
+					reason: `tmux observation failed: ${sessions.detail}`,
+				};
+			}
+			if (sessions?.status === "known") {
+				return sessions.sessions.includes(sessionName)
+					? { state: "running", source: "tmux" }
+					: { state: "stopped", source: "tmux" };
+			}
 			if (this.tmux.isSessionAlive?.(sessionName) === false) {
 				return { state: "stopped", source: "tmux" };
 			}
-		} catch {
-			return { state: "stopped", source: "tmux" };
+		} catch (error) {
+			return {
+				state: "unknown",
+				source: "tmux",
+				reason:
+					error instanceof Error
+						? `tmux observation failed: ${error.message}`
+						: "tmux observation failed",
+			};
 		}
 		return { state: "running", source: "agentspace" };
 	}

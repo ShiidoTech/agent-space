@@ -17,6 +17,12 @@ import { CodingToolRegistry } from "./codingToolRegistry";
 import { AgentObservationResolver } from "./observation/agentObservationResolver";
 import type { TmuxIntegration } from "./tmux";
 
+export interface AgentWorktreeRemovalResult {
+	readonly removed: boolean;
+	readonly worktreePath?: string;
+	readonly reason?: string;
+}
+
 export class AgentManager {
 	private agentsByFeature = new Map<string, Agent[]>();
 	private cachedDefaultBranch: string | undefined;
@@ -138,15 +144,34 @@ export class AgentManager {
 		return agent;
 	}
 
-	beginAgentStartup(agentId: string, featureId: string, waitingForWorktree = false): void {
+	beginAgentStartup(
+		agentId: string,
+		featureId: string,
+		waitingForWorktree = false,
+	): void {
 		const agents = this.loadAgents(featureId);
 		const agent = agents.find((candidate) => candidate.id === agentId);
 		if (!agent) return;
-		agent.startup = { state: "starting", steps: [
-			{ id: "worktree", label: "Waiting for feature worktree", status: waitingForWorktree ? "running" : "completed" },
-			{ id: "terminal", label: "Creating terminal", status: waitingForWorktree ? "pending" : "running" },
-			{ id: "provider", label: `Starting ${agent.toolId ?? "agent"}`, status: "pending" },
-		] };
+		agent.startup = {
+			state: "starting",
+			steps: [
+				{
+					id: "worktree",
+					label: "Waiting for feature worktree",
+					status: waitingForWorktree ? "running" : "completed",
+				},
+				{
+					id: "terminal",
+					label: "Creating terminal",
+					status: waitingForWorktree ? "pending" : "running",
+				},
+				{
+					id: "provider",
+					label: `Starting ${agent.toolId ?? "agent"}`,
+					status: "pending",
+				},
+			],
+		};
 		this.saveAgents(featureId, agents);
 	}
 
@@ -225,7 +250,9 @@ export class AgentManager {
 		agent.lastError = message;
 		agent.lastExitCode = exitCode ?? null;
 		if (agent.startup) {
-			const step = agent.startup.steps.find((candidate) => candidate.status === "running");
+			const step = agent.startup.steps.find(
+				(candidate) => candidate.status === "running",
+			);
 			if (step) {
 				step.status = "failed";
 				step.error = message;
@@ -374,7 +401,8 @@ export class AgentManager {
 		const agents = this.loadAgents(featureId);
 		const agent = agents.find((a) => a.id === agentId);
 		if (agent?.worktreePath) {
-			this.removeWorktree(agent.worktreePath);
+			const result = this.removeWorktree(agent.worktreePath);
+			if (!result.removed) return;
 		}
 		this.saveAgents(
 			featureId,
@@ -383,13 +411,30 @@ export class AgentManager {
 	}
 
 	deleteAllAgents(featureId: string): void {
-		for (const agent of this.loadAgents(featureId)) {
-			if (agent.worktreePath) {
-				this.removeWorktree(agent.worktreePath);
-			}
-		}
-		this.saveAgents(featureId, []);
-		this.store.deleteFeatureData(featureId);
+		const remaining = this.loadAgents(featureId).filter((agent) => {
+			if (!agent.worktreePath) return false;
+			return !this.removeWorktree(agent.worktreePath).removed;
+		});
+		this.saveAgents(featureId, remaining);
+	}
+
+	/** Remove only the agent worktree; keep its record until Feature cleanup succeeds. */
+	removeAgentWorktreeForFinish(
+		agentId: string,
+		featureId: string,
+		force = false,
+	): AgentWorktreeRemovalResult {
+		const agent = this.loadAgents(featureId).find(
+			(candidate) => candidate.id === agentId,
+		);
+		if (!agent) return { removed: false, reason: "Agent record not found" };
+		if (!agent.worktreePath) return { removed: true };
+		return this.removeWorktree(agent.worktreePath, force);
+	}
+
+	/** Stable Git branch identity for a per-agent worktree, even after removal. */
+	getAgentBranchName(feature: Feature, agentId: string): string {
+		return this.agentBranchName(feature, agentId.slice(0, 8));
 	}
 
 	private withAttentionStatus(agent: Agent): Agent {
@@ -454,12 +499,16 @@ export class AgentManager {
 		return agents;
 	}
 
-	private removeWorktree(worktreePath: string, force = false): void {
+	private removeWorktree(
+		worktreePath: string,
+		force = false,
+	): AgentWorktreeRemovalResult {
 		if (!isWorktreePathSafe(worktreePath, this.worktreeBase)) {
-			console.error(
-				`[AgentManager] Refusing to remove worktree outside base: "${worktreePath}"`,
-			);
-			return;
+			return {
+				removed: false,
+				worktreePath,
+				reason: `Refusing to remove worktree outside base: ${worktreePath}`,
+			};
 		}
 		try {
 			// Fail-closed by default: git refuses to remove a worktree that
@@ -473,8 +522,16 @@ export class AgentManager {
 					stdio: ["ignore", "pipe", "pipe"],
 				},
 			);
+			return { removed: true, worktreePath };
 		} catch (err) {
-			console.error(`[AgentManager] Failed to remove worktree: ${err}`);
+			if (!fs.existsSync(worktreePath)) {
+				return { removed: true, worktreePath };
+			}
+			return {
+				removed: false,
+				worktreePath,
+				reason: `Git refused to remove agent worktree: ${err instanceof Error ? err.message : String(err)}`,
+			};
 		}
 	}
 

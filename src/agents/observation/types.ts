@@ -4,7 +4,7 @@ import type {
 	AgentStatus,
 } from "../../types";
 
-export type AgentLifecycleState = AgentStatus | "starting";
+export type AgentLifecycleState = AgentStatus | "starting" | "unknown";
 
 export type AgentObservationAttention =
 	| Exclude<AgentAttentionStatus, "done">
@@ -19,6 +19,7 @@ export interface AgentObservation {
 	lifecycle: {
 		state: AgentLifecycleState;
 		source: "agentspace" | "tmux" | "process";
+		reason?: string;
 	};
 	attention: {
 		state: AgentObservationAttention;

@@ -56,7 +56,15 @@ export class FeatureManager {
 	 * Not persisted to storage.
 	 */
 	getBaseFeature(projectId: string): Feature {
-		const branch = this.getBaseBranch();
+		let branch: string;
+		try {
+			branch = this.getBaseBranch();
+		} catch {
+			// Observation-only consumers still need the synthetic Feature identity.
+			// Keep the branch explicitly unknown; Git actions call
+			// getBaseBranchName() and remain fail-closed.
+			branch = "(unknown base)";
+		}
 		return {
 			id: `base:${projectId}`,
 			name: branch,
@@ -183,13 +191,22 @@ export class FeatureManager {
 		}
 
 		try {
-			this.cachedBaseBranch = execSync("git rev-parse --abbrev-ref HEAD", {
-				cwd: this.repoRoot,
-				encoding: "utf-8",
-				stdio: ["ignore", "pipe", "pipe"],
-			}).trim();
-		} catch {
-			this.cachedBaseBranch = "main";
+			const detected = String(
+				execSync("git rev-parse --abbrev-ref HEAD", {
+					cwd: this.repoRoot,
+					encoding: "utf-8",
+					stdio: ["ignore", "pipe", "pipe"],
+				}),
+			).trim();
+			if (!detected || detected === "HEAD") {
+				throw new Error("Git did not report a local branch");
+			}
+			this.cachedBaseBranch = detected;
+		} catch (error) {
+			const detail = error instanceof Error ? `: ${error.message}` : "";
+			throw new Error(
+				`Unable to determine the project base branch${detail}. Configure baseBranch explicitly before running Git actions.`,
+			);
 		}
 		return this.cachedBaseBranch;
 	}
@@ -431,12 +448,32 @@ export class FeatureManager {
 		id: string,
 		options?: { force?: boolean },
 	): FeatureDeleteResult {
+		const result = this.removeFeatureWorktreeForFinish(id, options);
+		if (!result.deleted) return result;
+		this.forgetFinishedFeature(id);
+		return result;
+	}
+
+	/** Remove the Feature worktree while preserving every Agent Space record. */
+	removeFeatureWorktreeForFinish(
+		id: string,
+		options?: { force?: boolean },
+	): FeatureDeleteResult {
 		const feature = this.features.find((f) => f.id === id);
 		if (!feature) return { deleted: false, reasons: [] };
 
 		const force = options?.force === true;
 		const safety = this.getDeletionSafety(feature);
 
+		if (force && !safety.forceable) {
+			return {
+				deleted: false,
+				reasons: [
+					...safety.reasons,
+					"Force is unavailable because deletion safety could not be fully observed.",
+				],
+			};
+		}
 		if (!force && !safety.safe) {
 			throw new Error(
 				`Cannot delete feature "${feature.name}":\n\n${safety.reasons.join("\n")}`,
@@ -468,15 +505,24 @@ export class FeatureManager {
 				}
 			}
 		} else {
-			console.error(
-				`[FeatureManager] Refusing to remove worktree outside base: "${feature.worktreePath}"`,
-			);
+			return {
+				deleted: false,
+				reasons: [
+					...safety.reasons,
+					`Refusing to remove worktree outside base: ${feature.worktreePath}`,
+				],
+			};
 		}
 
+		return { deleted: true, reasons: safety.reasons };
+	}
+
+	/** Forget metadata only after every worktree removal has been verified. */
+	forgetFinishedFeature(id: string): void {
+		if (!this.features.some((feature) => feature.id === id)) return;
 		this.store.deleteFeatureData(id);
 		this.features = this.features.filter((f) => f.id !== id);
 		this.store.saveFeatures(this.features);
-		return { deleted: true, reasons: safety.reasons };
 	}
 
 	updateFeatureStatus(id: string, status: FeatureStatus): void {

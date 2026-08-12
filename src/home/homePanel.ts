@@ -402,7 +402,10 @@ export class HomePanel {
 				this.sendActivityForServices((message.serviceIds as string[]) ?? []);
 				break;
 			case "refresh":
-				this.refresh();
+				this.featureStateCoordinator.refreshProjectReferenceHealth();
+				void this.featureStateCoordinator
+					.reconcile()
+					.then(() => this.refresh());
 				break;
 		}
 	}
@@ -722,6 +725,58 @@ export class HomePanel {
 		return `${worktreeChip}${upstreamChip}`;
 	}
 
+	private renderReferenceHealthChip(projectId: string): string {
+		const health =
+			this.featureStateCoordinator.getProjectReferenceHealth(projectId);
+		if (!health) {
+			return '<span class="project-base-chip project-base-chip--warning" title="The reference branch has not been observed">origin state unknown</span>';
+		}
+		const relation = health.verifiedRemoteRelation;
+		let label: string;
+		let tone = "";
+		switch (relation.state) {
+			case "current":
+				label = `${health.remoteName}/${health.branch} verified current`;
+				break;
+			case "behind":
+				label = `${relation.comparedOnly} behind ${health.remoteName}/${health.branch}`;
+				tone = " project-base-chip--warning";
+				break;
+			case "ahead":
+				label = `${relation.localOnly} ahead of ${health.remoteName}/${health.branch}`;
+				tone = " project-base-chip--warning";
+				break;
+			case "diverged":
+				label = `${relation.localOnly} ahead · ${relation.comparedOnly} behind ${health.remoteName}/${health.branch}`;
+				tone = " project-base-chip--error";
+				break;
+			case "different_unknown":
+				label = `${health.remoteName}/${health.branch} differs · relation unknown`;
+				tone = " project-base-chip--warning";
+				break;
+			case "missing":
+				label = `reference branch missing`;
+				tone = " project-base-chip--error";
+				break;
+			case "unknown":
+				label = `${health.remoteName}/${health.branch} state unknown`;
+				tone = " project-base-chip--warning";
+				break;
+		}
+		if (health.remoteFreshness.status === "stale") {
+			label += " · stale";
+			tone ||= " project-base-chip--warning";
+		}
+		const detail =
+			relation.state === "unknown" ||
+			relation.state === "different_unknown" ||
+			relation.state === "missing"
+				? (relation.detail ?? relation.reason)
+				: `Remote head observed via ${health.verifiedRemote.provenance.backend}`;
+		const title = `${detail} · ${health.verifiedRemote.observedAt}`;
+		return `<span class="project-base-chip${tone}" title="${this.escapeHtml(title)}">${this.escapeHtml(label)}</span>`;
+	}
+
 	private renderGitStatsContent(stats: GitStats): string {
 		if (stats.filesChanged === 0) {
 			return '<div class="activity-empty">No changes yet</div>';
@@ -860,6 +915,9 @@ export class HomePanel {
 						)?.feature.branch ?? "Unknown";
 					const branchKinds = ctx.featureManager.getBranchKinds();
 					const defaultBranchKind = ctx.featureManager.getDefaultBranchKind();
+					const referenceHealth = this.renderReferenceHealthChip(
+						ctx.project.id,
+					);
 					return `
 					<tr>
 						<td>${this.escapeHtml(ctx.project.name)}</td>
@@ -867,6 +925,7 @@ export class HomePanel {
 						<td>
 							<strong>${this.escapeHtml(effectiveBaseBranch)}</strong>
 							<div class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</div>
+							<div class="project-base-chips">${referenceHealth}</div>
 						</td>
 						<td>${this.escapeHtml(branchKinds.join(", ") || "Default")}${defaultBranchKind ? ` <span class="project-setting-source">(default: ${this.escapeHtml(defaultBranchKind)})</span>` : ""}</td>
 						<td class="project-worktree-cell">${this.escapeHtml(ctx.featureManager.getWorktreeBase())}</td>
@@ -980,9 +1039,10 @@ export class HomePanel {
 				</button>
 			</div>
 		</div>
-		<div class="workspace-content">
-			${this.renderFeatureProvisioning(feature)}
-			${runtimeNotice}
+			<div class="workspace-content">
+				${this.renderFeatureProvisioning(feature)}
+				${this.renderFeatureAttention(snapshot)}
+				${runtimeNotice}
 			${agentsKnown ? this.renderProgressSection(progressPct, doneCount, totalAgents) : ""}
 			${
 				agentsKnown
@@ -1106,6 +1166,7 @@ export class HomePanel {
 
 		// ── Base branch git state (the comparison branch) ──────────────
 		const baseStateChips = this.renderBaseStateChips(baseSnapshot);
+		const referenceHealthChip = this.renderReferenceHealthChip(projectId);
 
 		// ── Rich feature cards (sidebar-equivalent density) ────────────
 		const featureRows = projectSnapshots.length
@@ -1147,7 +1208,7 @@ export class HomePanel {
 								<span class="project-feature-branch">${this.escapeHtml(feature.branch)}</span>
 								${statusBadge}
 								<span class="project-feature-counts">${counts}</span>
-								<button class="project-feature-delete" onclick="event.stopPropagation(); deleteFeature('${feature.id}')" title="Delete Feature">&times;</button>
+								<button class="project-feature-delete" onclick="event.stopPropagation(); deleteFeature('${feature.id}')" title="Finish Feature">&times;</button>
 							</div>
 							<div class="project-feature-card-body" id="pf-body-${feature.id}">
 								${this.renderProjectFeatureBody(snapshot, feature, agents, services)}
@@ -1197,7 +1258,7 @@ export class HomePanel {
 					<div><strong>${projectServiceCount ?? "?"}</strong><span>Scripts</span></div>
 				</div>
 				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong> ${baseCommitLabel ? `&middot; <span title="Observed base SHA">${this.escapeHtml(baseCommitLabel)}</span>` : ""}</p>
-				<div class="project-base-chips">${baseStateChips}</div>
+				<div class="project-base-chips">${referenceHealthChip}${baseStateChips}</div>
 			</div>
 			<div>
 				<div class="section-label">Active / recent features</div>
@@ -1212,6 +1273,7 @@ export class HomePanel {
 				<div class="header-title">${this.escapeHtml(context.project.name)}</div>
 				<div class="header-branch">${this.escapeHtml(context.project.repoPath)}</div>
 			</div>
+			<button class="header-action-btn" onclick="quickAction('refresh', '')" title="Refresh local and remote observations">${ICON_REFRESH}</button>
 			<button class="project-delete-btn" onclick="removeProject('${projectId}')" title="Remove project">Remove project</button>
 		</div>
 		<div class="workspace-content project-page">
@@ -1321,6 +1383,28 @@ export class HomePanel {
 			})
 			.join("");
 		return `<section class="lifecycle-card ${progress.state === "failed" ? "failed" : ""}"><strong>${progress.state === "failed" ? "Feature setup failed" : "Setting up feature"}</strong><div class="lifecycle-steps">${steps}</div>${progress.error ? `<p>${this.escapeHtml(progress.error)}</p>` : ""}</section>`;
+	}
+
+	private renderFeatureAttention(snapshot: FeatureSnapshot): string {
+		const actionable = snapshot.attention.filter(
+			(problem) =>
+				problem.severity === "error" || problem.severity === "warning",
+		);
+		if (actionable.length === 0) return "";
+		return `
+		<div class="feature-attention-card">
+			<div class="section-label">Needs attention</div>
+			${actionable
+				.slice(0, 6)
+				.map(
+					(problem) => `
+				<div class="feature-attention-row feature-attention-row--${problem.severity}">
+					<strong>${this.escapeHtml(problem.summary)}</strong>
+					<span>${this.escapeHtml(problem.detail)}</span>
+				</div>`,
+				)
+				.join("")}
+		</div>`;
 	}
 
 	private renderProgressSection(
@@ -1839,9 +1923,9 @@ export class HomePanel {
 
 	private renderFeatureActions(feature: Feature): string {
 		return `
-		<div class="feature-actions-section">
-			<button class="quick-action-btn danger" onclick="deleteFeature('${feature.id}')">
-				Delete Feature
+			<div class="feature-actions-section">
+				<button class="quick-action-btn danger" onclick="deleteFeature('${feature.id}')">
+					Finish Feature
 			</button>
 		</div>`;
 	}

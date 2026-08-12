@@ -7,6 +7,7 @@ export interface GitReadOptions {
 	cwd: string;
 	env?: NodeJS.ProcessEnv;
 	maxBuffer?: number;
+	timeoutMs?: number;
 }
 
 export interface GitReadResult {
@@ -38,6 +39,7 @@ export class GitClient implements GitReader {
 			env: options.env,
 			encoding: "utf8",
 			maxBuffer: options.maxBuffer,
+			timeout: options.timeoutMs,
 			stdio: ["ignore", "pipe", "pipe"],
 			shell: false,
 		});
@@ -64,6 +66,7 @@ export class GitClient implements GitReader {
 				env: options.env,
 				encoding: "utf8",
 				maxBuffer: options.maxBuffer,
+				timeout: options.timeoutMs,
 				shell: false,
 			});
 			return {

@@ -558,7 +558,58 @@ body {
 }
 .project-base-chip--dirty {
 	color: var(--vscode-notificationsWarningIcon-foreground);
-	border-color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 40%, transparent);
+	border-color: color-mix(
+		in srgb,
+		var(--vscode-notificationsWarningIcon-foreground) 40%,
+		transparent
+	);
+}
+.project-base-chip--warning {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+	border-color: color-mix(
+		in srgb,
+		var(--vscode-notificationsWarningIcon-foreground) 40%,
+		transparent
+	);
+}
+.project-base-chip--error {
+	color: var(--vscode-errorForeground);
+	border-color: color-mix(
+		in srgb,
+		var(--vscode-errorForeground) 45%,
+		transparent
+	);
+}
+
+.feature-attention-card {
+	padding: 12px;
+	border: 1px solid var(--vscode-notificationsWarningIcon-foreground);
+	border-radius: 6px;
+	background: color-mix(
+		in srgb,
+		var(--vscode-notificationsWarningIcon-foreground) 7%,
+		transparent
+	);
+}
+.feature-attention-row {
+	display: grid;
+	gap: 3px;
+	padding: 7px 0;
+	border-top: 1px solid
+		color-mix(in srgb, var(--vscode-panel-border) 65%, transparent);
+}
+.feature-attention-row:first-of-type {
+	border-top: none;
+}
+.feature-attention-row span {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+.feature-attention-row--error strong {
+	color: var(--vscode-errorForeground);
+}
+.feature-attention-row--warning strong {
+	color: var(--vscode-notificationsWarningIcon-foreground);
 }
 
 /* ── Project page: rich feature cards (sidebar-equivalent density) ── */
@@ -624,11 +675,19 @@ body {
 }
 .project-status-badge.status-new {
 	color: var(--vscode-testing-iconPassed);
-	background: color-mix(in srgb, var(--vscode-testing-iconPassed) 14%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--vscode-testing-iconPassed) 14%,
+		transparent
+	);
 }
 .project-status-badge.status-modified {
 	color: var(--vscode-notificationsWarningIcon-foreground);
-	background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--vscode-notificationsWarningIcon-foreground) 14%,
+		transparent
+	);
 }
 .project-status-badge.status-ahead {
 	color: var(--vscode-charts-blue);
@@ -672,7 +731,11 @@ body {
 }
 .project-feature-delete:hover {
 	color: var(--vscode-errorForeground);
-	background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+	background: color-mix(
+		in srgb,
+		var(--vscode-errorForeground) 12%,
+		transparent
+	);
 }
 .project-feature-card-body {
 	padding: 4px 14px 14px;
@@ -702,7 +765,9 @@ body {
 	border-radius: 4px;
 	background: var(--vscode-sideBar-background);
 }
-.project-overview-grid strong { font-size: 20px; }
+.project-overview-grid strong {
+	font-size: 20px;
+}
 .project-overview-grid span {
 	font-size: 10px;
 	color: var(--vscode-descriptionForeground);

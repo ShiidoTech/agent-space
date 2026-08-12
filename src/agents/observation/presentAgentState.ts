@@ -23,6 +23,13 @@ export function presentAgentState(
 	if (lifecycle.state === "stopped") {
 		return { label: "Stopped", tone: "muted" };
 	}
+	if (lifecycle.state === "unknown") {
+		return {
+			label: "Unknown",
+			tone: "warning",
+			detail: lifecycle.reason ?? "Agent lifecycle could not be observed",
+		};
+	}
 	switch (attention.state) {
 		case "waiting_for_user":
 			return { label: "Needs you", tone: "warning", detail: attention.reason };

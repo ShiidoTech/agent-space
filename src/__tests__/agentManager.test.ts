@@ -284,6 +284,22 @@ describe("AgentManager", () => {
 		});
 	});
 
+	describe("removeAgentWorktreeForFinish", () => {
+		it("keeps the agent record while removing its worktree", () => {
+			const perAgentFeature: Feature = {
+				...feature,
+				isolation: "per-agent",
+			};
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const agent = manager.createAgent(perAgentFeature);
+
+			expect(
+				manager.removeAgentWorktreeForFinish(agent.id, "f1"),
+			).toMatchObject({ removed: true, worktreePath: agent.worktreePath });
+			expect(manager.getAgents("f1")).toHaveLength(1);
+		});
+	});
+
 	describe("deleteAllAgents", () => {
 		it("removes all agents for a feature", () => {
 			manager.createAgent(feature);

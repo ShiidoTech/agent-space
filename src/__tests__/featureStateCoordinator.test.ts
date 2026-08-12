@@ -238,16 +238,20 @@ describe("FeatureStateCoordinator", () => {
 		const listener = vi.fn();
 		coordinator.onDidChange(listener);
 		await coordinator.reconcile();
-		expect(listener).toHaveBeenCalledTimes(2);
+		await vi.waitFor(() =>
+			expect(coordinator.getProjectReferenceHealth("p1")).toBeDefined(),
+		);
+		const initialNotifications = listener.mock.calls.length;
+		expect(initialNotifications).toBeGreaterThanOrEqual(3);
 		await coordinator.reconcile();
-		expect(listener).toHaveBeenCalledTimes(2);
+		expect(listener).toHaveBeenCalledTimes(initialNotifications);
 		fixture.recreateContext();
 		await coordinator.reconcile();
-		expect(listener).toHaveBeenCalledTimes(2);
+		expect(listener).toHaveBeenCalledTimes(initialNotifications);
 		fixture.setFeatures([]);
 		await coordinator.reconcile();
 		expect(coordinator.getSnapshot("f1")).toBeUndefined();
-		expect(listener).toHaveBeenCalledTimes(3);
+		expect(listener).toHaveBeenCalledTimes(initialNotifications + 1);
 	});
 
 	it("represents inspector and runtime failures as unknown", async () => {
@@ -314,6 +318,46 @@ describe("FeatureStateCoordinator", () => {
 		release?.();
 		await first;
 		expect(inspect).toHaveBeenCalledTimes(2);
+	});
+
+	it("publishes local snapshots without waiting for a slow remote head", async () => {
+		const fixture = setup();
+		const remoteNeverResolves = new Promise<never>(() => undefined);
+		const observe = vi.fn(() => remoteNeverResolves);
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			referenceBranchRemote: { observe },
+		});
+
+		await coordinator.reconcile();
+
+		expect(coordinator.getProjectSnapshots("p1")).toHaveLength(2);
+		expect(observe).toHaveBeenCalledTimes(1);
+		coordinator.dispose();
+	});
+
+	it("keeps remote proof cached on ordinary invalidation and clears it explicitly", () => {
+		const fixture = setup();
+		const invalidate = vi.fn();
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			referenceBranchRemote: {
+				observe: vi.fn(async () => ({
+					status: "missing" as const,
+					observedAt: "2026-08-12T00:00:00.000Z",
+					provenance: {
+						source: "remote_head" as const,
+						ref: "refs/heads/main",
+						backend: "test",
+					},
+				})),
+				invalidate,
+			},
+		});
+
+		coordinator.invalidate("f1");
+		expect(invalidate).not.toHaveBeenCalled();
+		coordinator.refreshProjectReferenceHealth();
+		expect(invalidate).toHaveBeenCalledTimes(1);
+		coordinator.dispose();
 	});
 
 	it("records tmux liveness as runtime evidence", async () => {

@@ -57,7 +57,12 @@ export class GitHubObservationService {
 	}
 
 	async observe(request: GithubObservationRequest): Promise<GitHubObservation> {
-		const branchKey = `${request.repoRoot}\u0000${request.branch}`;
+		const branchKey = [
+			request.repoRoot,
+			request.branch,
+			request.queriedHeadSha ?? "(unknown head)",
+			request.expectedBaseRef ?? "(unknown base)",
+		].join("\u0000");
 		const cached = this.branchObservations.get(branchKey);
 		if (cached && this.now() - cached.at < this.ttlMs) {
 			return cached.observation;
