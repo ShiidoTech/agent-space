@@ -34,7 +34,17 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		createdAt: "2026-03-06T00:00:00Z",
 	};
 
-	const getAgents = vi.fn().mockReturnValue([agent]);
+	const secondAgent = {
+		id: "b1",
+		featureId: "f1",
+		name: "Agent 2",
+		sessionId: "session-2",
+		toolId: "claude",
+		status: "running",
+		createdAt: "2026-03-06T00:00:00Z",
+	};
+
+	const getAgents = vi.fn().mockReturnValue([agent, secondAgent]);
 	const ctx = { agentManager: { getAgents } };
 	const resolveFeature = vi.fn().mockReturnValue({ ctx, feature });
 
@@ -84,7 +94,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		getAgents.mockReturnValue([agent]);
+		getAgents.mockReturnValue([agent, secondAgent]);
 		resolveFeature.mockReturnValue({ ctx, feature });
 		panel = buildPanel();
 	});
@@ -130,5 +140,46 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		await Promise.resolve();
 
 		expect(focusOrCreateTerminalAsync).toHaveBeenCalledTimes(1);
+	});
+
+	it("cold A resolving after warm B focus does not steal focus from B", async () => {
+		const showA = vi.fn();
+		const showB = vi.fn();
+		getTerminal.mockImplementation((id: string) =>
+			id === "b1" ? { show: showB } : undefined,
+		);
+		focusOrCreateTerminalAsync.mockResolvedValue({ show: showA });
+
+		// A cold: async reconciliation starts; B warm: shown synchronously.
+		focusAgent("a1");
+		focusAgent("b1");
+
+		expect(showB).toHaveBeenCalledTimes(1);
+
+		// A resolves last; its cold reveal must be suppressed so B keeps focus.
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(showA).not.toHaveBeenCalled();
+	});
+
+	it("two cold agents resolving out of order reveal only the last-focused one", async () => {
+		const showA = vi.fn();
+		const showB = vi.fn();
+		getTerminal.mockReturnValue(undefined);
+		focusOrCreateTerminalAsync
+			.mockResolvedValueOnce({ show: showA })
+			.mockResolvedValueOnce({ show: showB });
+
+		focusAgent("a1");
+		focusAgent("b1");
+
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(showB).toHaveBeenCalledTimes(1);
+		expect(showA).not.toHaveBeenCalled();
 	});
 });
