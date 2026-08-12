@@ -32,6 +32,12 @@ export class TerminalController implements vscode.Disposable {
 	private terminalMetadata = new Map<vscode.Terminal, TerminalMetadata>();
 	private disposables: vscode.Disposable[] = [];
 	private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	/** Coalesces concurrent cold reconciliations so two clicks on the same
+	 *  untracked agent can never create two terminals. */
+	private terminalReconciliations = new Map<
+		string,
+		Promise<vscode.Terminal | undefined>
+	>();
 	private beforeLaunchCallback?: (
 		feature: Feature,
 		agent: Agent,
@@ -205,12 +211,26 @@ export class TerminalController implements vscode.Disposable {
 	}
 
 	/**
-	 * Async twin of {@link focusOrCreateTerminal} for the interactive sidebar
-	 * click path. A warm/tracked terminal resolves exactly like the sync
-	 * path — `terminals.get -> show() -> return`, no exec of any kind.
-	 * Only cold reattachment (terminal not tracked, e.g. after a window
-	 * reload) falls through to async tmux/session reconciliation, so a click
-	 * on an untracked agent never blocks the extension host.
+	 * Async twin of {@link focusOrCreateTerminal} for the interactive click
+	 * path (sidebar + home).
+	 *
+	 * Scope of the non-blocking guarantee:
+	 * - **Warm focus** (terminal already tracked): `terminals.get -> show()`,
+	 *   zero exec of any kind.
+	 * - **Cold tmux reattachment** (terminal lost on window reload but the
+	 *   tmux session survived): async-only discovery via `adoptSessionAsync`/
+	 *   `isSessionAliveAsync` and an async spawn.
+	 *
+	 * It is NOT a guarantee over every fresh-launch branch: when the agent's
+	 * tmux session is actually gone, `createTerminalAsync` still runs a few
+	 * synchronous calls (`configureSession`, launch-note discovery, failure
+	 * recording). Those are cold-boot edge cases, not the warm-switch path.
+	 *
+	 * Concurrency contract: concurrent calls for the same agent coalesce into
+	 * one reconciliation, so a double-click can never create duplicate
+	 * terminals. A cold-created terminal is registered but NOT revealed; the
+	 * caller decides whether (and when) to `show()` it, so a resolution that
+	 * is no longer the user's latest focus request can never steal focus.
 	 */
 	async focusOrCreateTerminalAsync(
 		feature: Feature,
@@ -223,7 +243,20 @@ export class TerminalController implements vscode.Disposable {
 			existing.show();
 			return existing;
 		}
-		return this.createTerminalAsync(feature, agent, agentIndex, resume);
+		const inFlight = this.terminalReconciliations.get(agent.id);
+		if (inFlight) {
+			return inFlight;
+		}
+		const reconciliation = this.createTerminalAsync(
+			feature,
+			agent,
+			agentIndex,
+			resume,
+		).finally(() => {
+			this.terminalReconciliations.delete(agent.id);
+		});
+		this.terminalReconciliations.set(agent.id, reconciliation);
+		return reconciliation;
 	}
 
 	/**
@@ -233,6 +266,12 @@ export class TerminalController implements vscode.Disposable {
 	 * synchronous `createTerminal`; the fail-closed session-ownership
 	 * ordering (snapshot existing sessions before spawning) is unchanged —
 	 * only the discovery calls themselves run asynchronously.
+	 *
+	 * Guarantee scope: the cold *reattachment* path is fully async. The
+	 * fresh-spawn branch (only reachable when the agent's tmux session is
+	 * actually gone, not just an untracked `vscode.Terminal`) still calls the
+	 * synchronous `configureSession` and `discoverProjectKnowledge`. Do not
+	 * read this method as a general "never block" promise.
 	 */
 	private async createTerminalAsync(
 		feature: Feature,
@@ -319,8 +358,10 @@ export class TerminalController implements vscode.Disposable {
 			agent,
 			justLaunched,
 		});
-		terminal.show(true);
-
+		// Deliberately NOT calling terminal.show() here: revealing is the
+		// caller's decision, so a cold reconciliation that is no longer the
+		// user's latest focus (e.g. A cold → B warm) can create the terminal
+		// in the background and register it as warm without stealing focus.
 		return terminal;
 	}
 

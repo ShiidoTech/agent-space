@@ -598,6 +598,48 @@ describe("TerminalController", () => {
 			expect(adoptSession).not.toHaveBeenCalled();
 			expect(isSessionAlive).not.toHaveBeenCalled();
 		});
+
+		it("coalesces overlapping cold requests for the same agent into one create, without revealing", async () => {
+			const isSessionAliveAsync = vi.fn().mockResolvedValue(true);
+			const adoptSessionAsync = vi.fn().mockResolvedValue(true);
+			const controller = new TerminalController(
+				{ findContextByFeatureId, notifyChange } as never,
+				{
+					sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+					legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+					adoptSession,
+					createCommand,
+					configureSession,
+					isSessionAlive,
+					isSessionAliveAsync,
+					adoptSessionAsync,
+					getPaneStatus,
+				} as never,
+				{
+					resolveAgentTool,
+					buildLaunchCommand,
+					buildResumeLaunchCommand,
+				} as never,
+			);
+
+			// Two overlapping clicks on the same untracked agent: neither one
+			// can take the warm path (the map stays empty until resolution),
+			// and the second must reuse the in-flight reconciliation instead
+			// of starting a duplicate create.
+			const first = controller.focusOrCreateTerminalAsync(feature, agent, 0, true);
+			const second = controller.focusOrCreateTerminalAsync(feature, agent, 0, true);
+
+			const [terminalA, terminalB] = await Promise.all([first, second]);
+
+			expect(terminalA).toBe(terminalInstance);
+			expect(terminalB).toBe(terminalInstance);
+			expect(createTerminalMock).toHaveBeenCalledTimes(1);
+			expect(adoptSessionAsync).toHaveBeenCalledTimes(1);
+			expect(isSessionAliveAsync).not.toHaveBeenCalled();
+			// Cold create must not reveal by itself — the caller owns the
+			// show decision so a stale resolution cannot steal focus.
+			expect(terminalInstance.show).not.toHaveBeenCalled();
+		});
 	});
 
 	it("does not create a terminal when service tmux session fails to start", () => {

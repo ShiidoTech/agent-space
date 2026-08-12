@@ -273,6 +273,16 @@ type ExecFileAsyncFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 let _execFileAsync: ExecFileAsyncFn | undefined;
 
+/**
+ * Test-only seam: replace or reset the lazily-initialized promisified
+ * `execFile`. A top-level import would break tests that mock
+ * `node:child_process` without `execFile`; this keeps the lazy init while
+ * giving platform.test.ts a way to drive the function directly.
+ */
+export function _setExecFileAsyncForTest(fn: unknown): void {
+	_execFileAsync = fn as ExecFileAsyncFn | undefined;
+}
+
 function getExecFileAsync(): ExecFileAsyncFn {
 	if (!_execFileAsync) {
 		// Lazy init to avoid breaking test mocks that don't include exec
@@ -299,7 +309,10 @@ export function execFileAsync(
 		return getExecFileAsync()(
 			bashPath,
 			["-lc", 'exec "$0" "$@"', file, ...args],
-			getExecAsyncOptions(opts?.cwd),
+			// shell:false keeps execFile a direct argv spawn — without it
+			// getExecAsyncOptions' shell:bathPath would wrap the args in an
+			// extra shell layer, diverging from the sync execFile twin.
+			{ ...getExecAsyncOptions(opts?.cwd), shell: false },
 		);
 	}
 

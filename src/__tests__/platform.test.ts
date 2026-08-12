@@ -19,12 +19,17 @@ const mockExecSync = vi.mocked(execSync);
 const mockExecFileSync = vi.mocked(execFileSync);
 const mockExistsSync = vi.mocked(existsSync);
 
+// Stashed by loadPlatform so afterEach can reset the execFileAsync seam even
+// though the platform module is imported dynamically.
+let setExecFileAsyncForTest: ((fn: unknown) => void) | undefined;
+
 // Helper: dynamically import the platform module so each test gets fresh
 // module-level state (e.g. the cached bash path is reset).
 async function loadPlatform() {
 	const mod = await import("../utils/platform");
 	mod._resetBashCache();
 	mod._resetCommandExistsCache();
+	setExecFileAsyncForTest = mod._setExecFileAsyncForTest;
 	return mod;
 }
 
@@ -612,6 +617,82 @@ describe("platform", () => {
 				);
 			} finally {
 				Object.defineProperty(process, "platform", { value: originalPlatform });
+				process.env = originalEnv;
+			}
+		});
+	});
+
+	// -----------------------------------------------------------------------
+	// execFileAsync
+	// -----------------------------------------------------------------------
+	describe("execFileAsync", () => {
+		// Drives the promisified execFile seam directly (see
+		// _setExecFileAsyncForTest), so the test does not depend on vitest
+		// intercepting the module's lazy `require("node:child_process")`.
+		const execFileStub = vi.fn(async () => ({ stdout: "ok", stderr: "" }));
+
+		beforeEach(() => {
+			execFileStub.mockClear();
+		});
+
+		afterEach(() => {
+			setExecFileAsyncForTest?.(undefined);
+		});
+
+		it("uses direct argv execution on Linux", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { value: "linux" });
+			try {
+				const { execFileAsync } = await loadPlatform();
+				setExecFileAsyncForTest?.(execFileStub as never);
+				await expect(
+					execFileAsync("tmux", ["has-session", "-t", "agent-space-f1-a1"]),
+				).resolves.toBeDefined();
+				expect(execFileStub).toHaveBeenCalledWith(
+					"tmux",
+					["has-session", "-t", "agent-space-f1-a1"],
+					expect.objectContaining({ encoding: "utf-8" }),
+				);
+			} finally {
+				Object.defineProperty(process, "platform", {
+					value: originalPlatform,
+				});
+			}
+		});
+
+		it("uses Git Bash with shell:false on Windows (no double shell wrap)", async () => {
+			const originalPlatform = process.platform;
+			Object.defineProperty(process, "platform", { value: "win32" });
+			const originalEnv = { ...process.env };
+			process.env.PROGRAMFILES = "C:\\Program Files";
+			try {
+				mockExistsSync.mockImplementation(
+					(p) => p === "C:\\Program Files\\Git\\bin\\bash.exe",
+				);
+				const { execFileAsync } = await loadPlatform();
+				setExecFileAsyncForTest?.(execFileStub as never);
+				await expect(
+					execFileAsync("tmux", ["has-session", "-t", "agent-space-x; evil"]),
+				).resolves.toBeDefined();
+				// Mirror of the sync execFile twin: bashPath executed directly
+				// with shell:false, so getExecAsyncOptions' shell option never
+				// wraps the argv in a second shell layer.
+				expect(execFileStub).toHaveBeenCalledWith(
+					"C:\\Program Files\\Git\\bin\\bash.exe",
+					[
+						"-lc",
+						'exec "$0" "$@"',
+						"tmux",
+						"has-session",
+						"-t",
+						"agent-space-x; evil",
+					],
+					expect.objectContaining({ shell: false }),
+				);
+			} finally {
+				Object.defineProperty(process, "platform", {
+					value: originalPlatform,
+				});
 				process.env = originalEnv;
 			}
 		});

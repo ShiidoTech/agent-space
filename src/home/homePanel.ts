@@ -431,6 +431,14 @@ export class HomePanel {
 	}
 
 	// -- Terminal focus -------------------------------------------
+	/**
+	 * Same hardened path as the sidebar (see
+	 * `FeatureSidebarProvider.handleFocusAgent`): an already-tracked terminal
+	 * is revealed with zero exec, and a cold reattachment runs async tmux
+	 * reconciliation off the click's call stack. The guarantee scope is
+	 * identical — warm focus and cold reattachment; a fresh-spawn branch
+	 * still contains a few synchronous calls.
+	 */
 	private focusAgentTerminal(agentId: string): void {
 		if (!this.terminalController || !this.currentFeatureId) return;
 		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
@@ -440,12 +448,20 @@ export class HomePanel {
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);
-		this.terminalController.focusOrCreateTerminal(
-			feature,
-			agent,
-			agentIndex,
-			true,
-		);
+
+		const existing = this.terminalController.getTerminal(agentId);
+		if (existing) {
+			existing.show();
+			return;
+		}
+		void this.terminalController
+			.focusOrCreateTerminalAsync(feature, agent, agentIndex, true)
+			.then((terminal) => {
+				if (terminal) terminal.show();
+			})
+			.catch((error) => {
+				console.warn(`[HomePanel] focusAgent reconciliation failed: ${error}`);
+			});
 	}
 
 	private focusServiceTerminal(featureId: string, serviceId: string): void {
