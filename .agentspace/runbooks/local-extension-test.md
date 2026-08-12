@@ -19,9 +19,12 @@ before experimenting with any alternative launch or install route.
 1. Inspect the current state and PR:
    `git status --short`, `git log --oneline -5`,
    `gh pr view <N> --repo ShiidoTech/agent-space`.
-2. Install the locked dependencies (`bun install`) so the pinned
-   `@vscode/vsce` binary is available locally. A fresh clone needs this step
-   before packaging; the VSIX path below only exists after a package run.
+2. Install the locked dependencies (`bun install --frozen-lockfile`) so the
+   pinned `@vscode/vsce` binary is available locally. The frozen flag makes the
+   clean-install proof deterministic: a drift between `package.json` and
+   `bun.lock` fails instead of being silently repaired. A fresh clone needs
+   this step before packaging; the VSIX path below only exists after a package
+   run.
 3. Validate the extension:
    `npm run typecheck`, `npm test -- --run`, `npm run compile`,
    `npm run package`.
