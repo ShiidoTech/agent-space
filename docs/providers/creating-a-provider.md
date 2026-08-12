@@ -29,6 +29,30 @@ Agent Space launch owns it. CWD, timing, ordering, uniqueness, and an internal
 reservation do not satisfy that contract. If the provider cannot provide this
 correlation, new sessions remain fail-closed until explicit user attachment.
 
+The explicit recovery path is exposed as `Agent Space: Attach Provider Session`.
+It lists only sessions in the selected agent's worktree that are not already
+owned by another agent. The user must select the provider conversation; the
+selection is revalidated before `sessionId` and `binding=bound` are persisted.
+The runtime-only command is intentionally named
+`Agent Space: Reconnect Existing Agent Runtime` and does not attach a provider
+conversation.
+
+Current provider identity findings:
+
+- Claude remains preassigned: Agent Space creates the UUID and passes it to
+  `--session-id`.
+- Codex 0.147.0 exposes `thread/start` and `thread/resume` through its
+  experimental app-server protocol. `thread/start` returns a provider thread
+  identity, but the existing integration is a CLI/TUI launch and does not yet
+  have a supported way to hand that app-server-owned thread into the
+  interactive CLI. Agent Space therefore does not pretend that app-server
+  discovery proves ownership; Codex remains provider-assigned and uses
+  explicit attachment when the CLI did not persist an id.
+- OpenCode 1.18.17 exposes `--session` for resume and a session database, but
+  no launch option or provider-native ownership receipt was found in the CLI
+  contract. Directory and creation time remain insufficient, so OpenCode also
+  remains fail-closed until explicit attachment.
+
 Session naming exposes a provider session title separately from the stable Agent
 Space agent name; it is not a rename of the native terminal prompt. Working means
 the provider proves that it is processing. Waiting means the provider proves

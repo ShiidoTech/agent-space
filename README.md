@@ -173,7 +173,8 @@ All commands are available from the Command Palette.
 | `Agent Space: Inspect Feature Worktrees` | Report missing, detached, divergent, or valid persisted feature worktrees without mutating Git |
 | `Agent Space: Inspect tmux Sessions` | Report tracked and untracked Agent Space tmux sessions without stopping or renaming them |
 | `Agent Space: Clean Untracked Agent Space Sessions` | Select and explicitly confirm removal of untracked Agent Space tmux sessions; foreign sessions are excluded |
-| `Agent Space: Attach Existing Agent Session` | Explicitly attach a persisted live tmux session without adopting, renaming, killing, or starting a process |
+| `Agent Space: Reconnect Existing Agent Runtime` | Reconnect a persisted live tmux runtime without adopting, renaming, killing, or starting a process |
+| `Agent Space: Attach Provider Session` | Choose and persist an exact provider conversation for an Agent Space agent |
 | `Agent Space: Open Feature Home` | Open the feature home view in the current window |
 | `Agent Space: Delete Feature` | Remove the feature, worktree, and agent data |
 | `Agent Space: Open in File Explorer` | Open the feature worktree in a new VS Code window |

@@ -166,9 +166,15 @@
 			},
 			{
 				"command": "agentSpace.recoverAgentSession",
-				"title": "Attach Existing Agent Session",
+				"title": "Reconnect Existing Agent Runtime",
 				"category": "Agent Space",
 				"icon": "$(plug)"
+			},
+			{
+				"command": "agentSpace.attachProviderSession",
+				"title": "Attach Provider Session",
+				"category": "Agent Space",
+				"icon": "$(link-external)"
 			},
 			{
 				"command": "agentSpace.openWorkspace",

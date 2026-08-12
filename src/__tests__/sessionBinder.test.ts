@@ -219,6 +219,81 @@ describe("SessionBinder", () => {
 		binder.start(projectManager, 0);
 
 		expect(binder.attachExplicitly("f1", "a1", "ses_selected")).toBe(false);
+		expect(binder.listAttachableSessions("f1", "a1")).toEqual([]);
+		expect(ctx.store.loadAgents("f1")[0].sessionId).toBeNull();
+	});
+
+	it("lets two shared-worktree agents bind the explicitly selected sessions", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [
+			agentFixture({ id: "a1", name: "Agent 1" }),
+			agentFixture({ id: "a2", name: "Agent 2" }),
+		]);
+		const binder = new SessionBinder(
+			registry(
+				adapter([
+					{
+						sessionId: "session_a",
+						prompt: "Conversation A",
+						created: "2026-08-09T07:52:00.000Z",
+						projectPath: WORKTREE,
+					},
+					{
+						sessionId: "session_b",
+						prompt: "Conversation B",
+						created: "2026-08-09T07:53:00.000Z",
+						projectPath: WORKTREE,
+					},
+				]),
+			),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		expect(binder.listAttachableSessions("f1", "a2")).toHaveLength(2);
+		expect(binder.attachExplicitly("f1", "a2", "session_b")).toBe(true);
+		expect(binder.listAttachableSessions("f1", "a1")).toEqual([
+			expect.objectContaining({ sessionId: "session_a" }),
+		]);
+		expect(binder.attachExplicitly("f1", "a1", "session_a")).toBe(true);
+
+		expect(ctx.store.loadAgents("f1")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "a1",
+					sessionId: "session_a",
+					sessionBinding: expect.objectContaining({ state: "bound" }),
+				}),
+				expect.objectContaining({
+					id: "a2",
+					sessionId: "session_b",
+					sessionBinding: expect.objectContaining({ state: "bound" }),
+				}),
+			]),
+		);
+	});
+
+	it("refuses an explicit session from another worktree or a vanished store", () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const binder = new SessionBinder(
+			registry(
+				adapter([
+					{
+						sessionId: "wrong-cwd",
+						prompt: "Other worktree",
+						created: "2026-08-09T07:52:00.000Z",
+						projectPath: "/tmp/another-worktree",
+					},
+				]),
+			),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		expect(binder.listAttachableSessions("f1", "a1")).toEqual([]);
+		expect(binder.attachExplicitly("f1", "a1", "wrong-cwd")).toBe(false);
+		expect(binder.attachExplicitly("f1", "a1", "vanished")).toBe(false);
 		expect(ctx.store.loadAgents("f1")[0].sessionId).toBeNull();
 	});
 

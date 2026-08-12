@@ -46,6 +46,12 @@ let activeFeatureId: string | null = null;
 let featureActivationInProgress = false;
 const execFileAsync = promisify(execFileCallback);
 
+function shortSessionId(sessionId: string): string {
+	return sessionId.length > 16
+		? `${sessionId.slice(0, 8)}…${sessionId.slice(-6)}`
+		: sessionId;
+}
+
 export async function activate(
 	context: vscode.ExtensionContext,
 ): Promise<void> {
@@ -461,10 +467,38 @@ export async function activate(
 		vscode.commands.registerCommand(
 			"agentSpace.attachProviderSession",
 			async (featureId?: string, agentId?: string) => {
-				if (!featureId || !agentId) return;
+				let selectedFeatureId = featureId;
+				let selectedAgentId = agentId;
+				if (!selectedFeatureId || !selectedAgentId) {
+					const choices = projectManager.getAllContexts().flatMap((context) => {
+						const base = context.featureManager.getBaseFeature(
+							context.project.id,
+						);
+						const features = [base, ...context.store.loadFeatures()];
+						return features.flatMap((feature) =>
+							context.agentManager.getAgents(feature.id).map((agent) => {
+								const tool = toolRegistry.resolveAgentTool(agent.toolId);
+								return {
+									label: `${context.project.name} / ${feature.name} / ${agent.name}`,
+									description: `${tool.name} · ${agent.worktreePath ?? feature.worktreePath}`,
+									featureId: feature.id,
+									agentId: agent.id,
+								};
+							}),
+						);
+					});
+					const selection = await vscode.window.showQuickPick(choices, {
+						title: "Attach a provider conversation",
+						placeHolder: "Select the Agent Space agent to repair",
+					});
+					if (!selection) return;
+					selectedFeatureId = selection.featureId;
+					selectedAgentId = selection.agentId;
+				}
+				if (!selectedFeatureId || !selectedAgentId) return;
 				const sessions = sessionBinder.listAttachableSessions(
-					featureId,
-					agentId,
+					selectedFeatureId,
+					selectedAgentId,
 				);
 				if (sessions.length === 0) {
 					vscode.window.showInformationMessage(
@@ -475,7 +509,7 @@ export async function activate(
 				const choice = await vscode.window.showQuickPick(
 					sessions.map((session) => ({
 						label: session.prompt || session.sessionId,
-						description: `${session.sessionId} · ${session.created || "unknown time"}`,
+						description: `${session.provider ?? "provider"} · ${session.created || "unknown time"} · ${shortSessionId(session.sessionId)} · ${session.projectPath}`,
 						sessionId: session.sessionId,
 					})),
 					{
@@ -486,7 +520,11 @@ export async function activate(
 				);
 				if (
 					!choice ||
-					!sessionBinder.attachExplicitly(featureId, agentId, choice.sessionId)
+					!sessionBinder.attachExplicitly(
+						selectedFeatureId,
+						selectedAgentId,
+						choice.sessionId,
+					)
 				) {
 					if (choice)
 						vscode.window.showErrorMessage(
@@ -495,6 +533,9 @@ export async function activate(
 					return;
 				}
 				projectManager.notifyChange();
+				vscode.window.showInformationMessage(
+					`Provider conversation ${shortSessionId(choice.sessionId)} attached and bound.`,
+				);
 			},
 		),
 	);
@@ -1044,7 +1085,7 @@ export async function activate(
 		),
 	);
 
-	// Command: Attach an existing persisted tmux session without recovery side effects
+	// Command: Reconnect an existing persisted tmux runtime without provider adoption
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
 			"agentSpace.recoverAgentSession",
