@@ -3,6 +3,8 @@ export interface SessionInfo {
 	prompt: string;
 	created: string;
 	projectPath: string;
+	/** Provider id, populated when a session is presented for explicit attach. */
+	provider?: string;
 }
 
 export interface SessionProvider {

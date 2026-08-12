@@ -138,31 +138,11 @@ export class SessionBinder {
 		if (!adapter?.scanSessions || !adapter.hasSession?.(sessionId))
 			return false;
 		const cwd = agent.worktreePath ?? feature.worktreePath;
-		const session = safeScan(adapter).find(
+		const session = safeScan(adapter, true).find(
 			(candidate) => candidate.sessionId === sessionId,
 		);
 		if (!session || !samePath(session.projectPath, cwd)) return false;
-		const alreadyOwned = this.projectManager
-			.getAllContexts()
-			.some((otherCtx) => {
-				const baseFeature = otherCtx.featureManager.getBaseFeature(
-					otherCtx.project.id,
-				);
-				const featureIds = [
-					baseFeature.id,
-					...otherCtx.store
-						.loadFeatures()
-						.map((otherFeature) => otherFeature.id),
-				];
-				return featureIds.some((otherFeatureId) =>
-					otherCtx.agentManager
-						.getAgents(otherFeatureId)
-						.some(
-							(other) => other.id !== agentId && other.sessionId === sessionId,
-						),
-				);
-			});
-		if (alreadyOwned) return false;
+		if (this.ownedSessionIds(featureId, agentId).has(sessionId)) return false;
 		ctx.agentManager.updateAgentSessionId(agentId, featureId, sessionId);
 		ctx.agentManager.updateSessionBinding(agentId, featureId, {
 			state: "bound",
@@ -198,9 +178,35 @@ export class SessionBinder {
 		const adapter = this.adapterFor(agent);
 		if (!adapter?.scanSessions) return [];
 		const cwd = agent.worktreePath ?? resolved.feature.worktreePath;
-		return safeScan(adapter).filter((session) =>
-			samePath(session.projectPath, cwd),
-		);
+		const owned = this.ownedSessionIds(featureId, agentId);
+		return safeScan(adapter, true)
+			.filter(
+				(session) =>
+					samePath(session.projectPath, cwd) && !owned.has(session.sessionId),
+			)
+			.map((session) => ({ ...session, provider: adapter.toolId }));
+	}
+
+	private ownedSessionIds(
+		exceptFeatureId: string,
+		exceptAgentId: string,
+	): Set<string> {
+		const owned = new Set<string>();
+		for (const ctx of this.projectManager?.getAllContexts() ?? []) {
+			const base = ctx.featureManager.getBaseFeature(ctx.project.id);
+			for (const feature of [base, ...ctx.store.loadFeatures()]) {
+				for (const agent of ctx.agentManager.getAgents(feature.id)) {
+					if (
+						(agent.featureId !== exceptFeatureId ||
+							agent.id !== exceptAgentId) &&
+						agent.sessionId
+					) {
+						owned.add(agent.sessionId);
+					}
+				}
+			}
+		}
+		return owned;
 	}
 
 	private resolveFeatureForAttachment(
