@@ -282,6 +282,14 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(reconcile).toHaveBeenCalledTimes(1);
 	});
 
+	it("invalidates cached GitHub evidence on the global Refresh action too", () => {
+		postMessage({ command: "refresh", featureId: "" });
+
+		expect(invalidate).toHaveBeenCalledWith(undefined);
+		expect(refreshProjectReferenceHealth).toHaveBeenCalledTimes(1);
+		expect(reconcile).toHaveBeenCalledTimes(1);
+	});
+
 	it("renders a setup spinner only for a locally-owned provisioning attempt", () => {
 		const panel = buildPanel();
 		const provisioningFeature: Feature = {

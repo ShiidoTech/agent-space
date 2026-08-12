@@ -408,9 +408,11 @@ export class HomePanel {
 				this.sendActivityForServices((message.serviceIds as string[]) ?? []);
 				break;
 			case "refresh":
-				if (typeof message.featureId === "string" && message.featureId) {
-					this.featureStateCoordinator.invalidate(message.featureId);
-				}
+				this.featureStateCoordinator.invalidate(
+					typeof message.featureId === "string" && message.featureId
+						? message.featureId
+						: undefined,
+				);
 				this.featureStateCoordinator.refreshProjectReferenceHealth();
 				void this.featureStateCoordinator
 					.reconcile()
