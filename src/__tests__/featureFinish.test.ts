@@ -408,6 +408,44 @@ describe("Feature Finish", () => {
 		expect(assessment.checks[0].disposition).toBe("already_removed");
 	});
 
+	it("maps a worktree-style Feature name to its real feature branch ref", () => {
+		const ctx = context("worktree /repo\n");
+		const readSync = vi.fn((args: readonly string[]) => {
+			if (args[0] === "for-each-ref") return gitResult("feature/player\n");
+			return gitResult("worktree /repo\n");
+		});
+		ctx.gitClient.readSync = readSync;
+		const named = { ...feature(), name: "feature-player", branch: "feature-player" };
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+			branch: "feature/player",
+			baseBranch: "v2_ia_first",
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			featureSha: "1".repeat(40),
+			baseSha: "2".repeat(40),
+			hasLocalCommits: false,
+			localCommitCount: 0,
+			unmerged: false,
+			forceable: true,
+			safe: true,
+			reasons: [],
+		});
+
+		const assessment = assessFeatureFinish(
+			ctx,
+			named,
+			{ integration: { status: "unknown", reason: "ancestry_unknown", evidence: {} } },
+			() => false,
+		);
+
+		expect(assessment.safe).toBe(true);
+		expect(readSync).toHaveBeenCalledWith(
+			["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+			expect.anything(),
+		);
+	});
+
 	it("surfaces unique commits on an already absent worktree", () => {
 		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
 			branch: "feat/f1",

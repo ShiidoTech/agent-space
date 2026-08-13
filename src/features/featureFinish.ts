@@ -85,11 +85,15 @@ export function assessFeatureFinish(
 		const resolvedPath = path.resolve(worktreePath);
 		if (!registeredPaths.has(resolvedPath)) {
 			const exists = pathExists(resolvedPath);
+			const retentionBranch =
+				kind === "feature"
+					? resolveFeatureRetentionBranch(ctx, feature, branch)
+					: branch;
 			const safety = exists
 				? undefined
 				: checkBranchRetentionSafety({
 						repoRoot: ctx.project.repoPath,
-						branch,
+						branch: retentionBranch,
 						baseBranch: comparisonBranch,
 					});
 			const residueReason = `Git no longer registers ${resolvedPath}, but files remain on disk. Inspect or remove this residue explicitly before finishing.`;
@@ -98,7 +102,7 @@ export function assessFeatureFinish(
 				: finishDecision(kind, safety, evidence.integration);
 			checks.push({
 				kind,
-				branch,
+				branch: retentionBranch,
 				worktreePath: resolvedPath,
 				disposition: exists ? "residue" : "already_removed",
 				safety,
@@ -189,6 +193,36 @@ export function assessFeatureFinish(
 			integration: evidence.integration,
 		}),
 	};
+}
+
+function resolveFeatureRetentionBranch(
+	ctx: ProjectContext,
+	feature: Feature,
+	declaredBranch: string | undefined,
+): string | undefined {
+	const candidates = new Set<string>();
+	if (declaredBranch) candidates.add(declaredBranch);
+	const name = feature.name.trim().replace(/\s+/gu, "-").toLowerCase();
+	if (name) {
+		candidates.add(`feature/${name}`);
+		candidates.add(`feat/${name}`);
+	}
+	const refs = ctx.gitClient.readSync(
+		["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+		{ cwd: ctx.project.repoPath },
+	);
+	if (refs.exitCode === 0 && !refs.error) {
+		for (const ref of refs.stdout.split(/\r?\n/u)) {
+			if (candidates.has(ref.trim())) return ref.trim();
+		}
+	}
+	return [...candidates].find((candidate) => {
+		const resolved = ctx.gitClient.readSync(
+			["rev-parse", "--verify", `${candidate}^{commit}`],
+			{ cwd: ctx.project.repoPath },
+		);
+		return resolved.exitCode === 0 && !resolved.error && resolved.stdout.trim();
+	});
 }
 
 function observeRegisteredBranch(
