@@ -7,6 +7,10 @@ import {
 	unknown,
 } from "../git/featureGitObservations";
 import {
+	type WorktreeBranchInventory,
+	WorktreeBranchObserver,
+} from "../git/worktreeBranchObserver";
+import {
 	type GitHubObservation,
 	githubObservationFromRepository,
 } from "../github/githubObservation";
@@ -74,6 +78,7 @@ export class FeatureStateCoordinator implements Disposable {
 		string,
 		ProjectReferenceBranchHealth
 	>();
+	private worktreeInventories = new Map<string, WorktreeBranchInventory>();
 	private readonly injectedReferenceBranchRemote?: RemoteBranchHeadSource;
 	private referenceBranchRemotes = new Map<
 		string,
@@ -130,6 +135,7 @@ export class FeatureStateCoordinator implements Disposable {
 		this.listeners.clear();
 		this.snapshots.clear();
 		this.projectReferenceHealth.clear();
+		this.worktreeInventories.clear();
 		this.referenceBranchRemotes.clear();
 	}
 
@@ -147,6 +153,13 @@ export class FeatureStateCoordinator implements Disposable {
 		projectId: string,
 	): ProjectReferenceBranchHealth | undefined {
 		return this.projectReferenceHealth.get(projectId);
+	}
+
+	/** Read-only per-project inventory of every worktree branch and its state. */
+	getProjectWorktreeBranches(
+		projectId: string,
+	): WorktreeBranchInventory | undefined {
+		return this.worktreeInventories.get(projectId);
 	}
 
 	invalidate(featureId?: string): void {
@@ -253,6 +266,19 @@ export class FeatureStateCoordinator implements Disposable {
 			const projectObservation = await ctx.featureGitInspector.observeProject(
 				ctx.project.repoPath,
 			);
+			if (projectObservation.worktrees.status === "known") {
+				new WorktreeBranchObserver({ git: ctx.gitClient })
+					.observe({
+						repoPath: ctx.project.repoPath,
+						worktrees: projectObservation.worktrees.value,
+						baseRef,
+						featureBranches: featureBranchRefs(features),
+					})
+					.then((inventory) =>
+						this.acceptWorktreeInventory(generation, ctx.project.id, inventory),
+					)
+					.catch(() => undefined);
+			}
 
 			const observed = await Promise.all(
 				features.map(async (feature) => ({
@@ -283,6 +309,13 @@ export class FeatureStateCoordinator implements Disposable {
 			referenceHealthChanged = true;
 		}
 
+		let inventoryChanged = false;
+		for (const projectId of this.worktreeInventories.keys()) {
+			if (seenProjects.has(projectId)) continue;
+			this.worktreeInventories.delete(projectId);
+			inventoryChanged = true;
+		}
+
 		let snapshotChanged = false;
 		for (const snapshot of nextSnapshots) {
 			const previous = this.snapshots.get(snapshot.feature.id);
@@ -299,6 +332,22 @@ export class FeatureStateCoordinator implements Disposable {
 			this.emit(undefined);
 		}
 		if (referenceHealthChanged && !snapshotChanged) this.emit(undefined);
+		if (inventoryChanged && !snapshotChanged && !referenceHealthChanged) {
+			this.emit(undefined);
+		}
+	}
+
+	private acceptWorktreeInventory(
+		generation: number,
+		projectId: string,
+		inventory: WorktreeBranchInventory,
+	): void {
+		if (this.disposed || generation !== this.generation) return;
+		const previous = this.worktreeInventories.get(projectId);
+		this.worktreeInventories.set(projectId, inventory);
+		if (!previous || !equivalentInventory(previous, inventory)) {
+			this.emit(undefined);
+		}
 	}
 
 	private async observe(
@@ -634,6 +683,38 @@ function equivalentReferenceHealth(
 		freshness: health.remoteFreshness.status,
 	});
 	return JSON.stringify(project(left)) === JSON.stringify(project(right));
+}
+
+function equivalentInventory(
+	left: WorktreeBranchInventory,
+	right: WorktreeBranchInventory,
+): boolean {
+	const inventory = (value: WorktreeBranchInventory) => ({
+		repoPath: value.repoPath,
+		baseRef: value.baseRef,
+		status: value.status,
+		reason: value.reason,
+		branches: value.branches,
+	});
+	return JSON.stringify(inventory(left)) === JSON.stringify(inventory(right));
+}
+
+/** Maps every ref a Feature owns (primary, links, active branch) to its id. */
+function featureBranchRefs(
+	features: readonly Feature[],
+): ReadonlyMap<string, string> {
+	const map = new Map<string, string>();
+	for (const feature of features) {
+		if (feature.id.startsWith("base:")) continue;
+		const refs = new Set<string>();
+		if (feature.primaryBranchRef) refs.add(feature.primaryBranchRef);
+		refs.add(feature.branch);
+		for (const link of feature.branchLinks ?? []) refs.add(link.ref);
+		for (const ref of refs) {
+			if (!map.has(ref)) map.set(ref, feature.id);
+		}
+	}
+	return map;
 }
 
 function stripObservationTime<T extends { readonly observedAt: string }>(

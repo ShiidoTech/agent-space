@@ -478,6 +478,43 @@ describe("FeatureStateCoordinator", () => {
 		);
 	});
 
+	it("exposes a per-project worktree branch inventory from the observed worktrees", async () => {
+		const fixture = setup();
+		fixture.setFeatures([
+			{
+				...feature(),
+				branch: "agent/restore-feature-cockpit",
+				primaryBranchRef: "agent/restore-feature-cockpit",
+			},
+		]);
+		fixture.context.featureGitInspector.observeProject = vi.fn(async () => ({
+			repository: known({ root: "/repo" }),
+			worktrees: known([
+				{
+					path: "/repo/.worktrees/cockpit",
+					headSha: "2".repeat(40),
+					branchRef: "refs/heads/agent/restore-feature-cockpit",
+					detached: false,
+					bare: false,
+					prunable: false,
+				},
+			]),
+		}));
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcile();
+		await vi.waitFor(() =>
+			expect(coordinator.getProjectWorktreeBranches("p1")).toBeDefined(),
+		);
+		const inventory = coordinator.getProjectWorktreeBranches("p1");
+		expect(inventory?.status).toBe("known");
+		expect(inventory?.branches[0]?.ref).toBe("agent/restore-feature-cockpit");
+		expect(inventory?.branches[0]?.linkedFeatureId).toBe("f1");
+		expect(inventory?.branches[0]?.baseRelation).toEqual({
+			status: "unknown",
+			reason: "base_unknown",
+		});
+	});
+
 	it("inspects the active branch while querying GitHub for the delivery branch", async () => {
 		const readResult = (stdout: string) => ({
 			argv: [],
