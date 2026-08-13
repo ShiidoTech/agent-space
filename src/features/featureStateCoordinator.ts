@@ -351,12 +351,16 @@ export class FeatureStateCoordinator implements Disposable {
 			delivery.head.status === "known" ? delivery.head.value.sha : undefined;
 		const activeHeadSha =
 			git.feature.status === "known" ? git.feature.value.sha : undefined;
+		const activeIsContinuation =
+			delivery.activeRelation.status === "known" &&
+			delivery.activeRelation.value.isAncestor;
 		const github = await this.observeGithub(
 			ctx,
 			feature,
 			deliveryBranch,
 			deliveryHeadSha,
 			activeHeadSha,
+			activeIsContinuation,
 			baseRef,
 		);
 		const delivered = withDeliveredVia(delivery, feature, github, git.feature);
@@ -408,6 +412,9 @@ export class FeatureStateCoordinator implements Disposable {
 	 * - `deliveryBranch` is the feature's historical branch (e.g. `fix/1203`);
 	 * - `feature.branch` is the active checkout (e.g. `dev/improvements`), which
 	 *   is where an agent may have actually delivered the work.
+	 * The active branch is only considered when it is a proven continuation of
+	 * the historical branch: a PR merged from the active branch is only proof of
+	 * delivery if that branch descends from the historical branch.
 	 * A merged PR targeting the expected base wins; otherwise the delivery
 	 * branch observation is preserved (legacy behavior).
 	 */
@@ -417,6 +424,7 @@ export class FeatureStateCoordinator implements Disposable {
 		deliveryBranch: string,
 		deliveryHeadSha: string | undefined,
 		activeHeadSha: string | undefined,
+		activeIsContinuation: boolean,
 		baseRef: string | undefined,
 	): Promise<GitHubObservation> {
 		const candidates: Array<{
@@ -429,7 +437,9 @@ export class FeatureStateCoordinator implements Disposable {
 			}
 		};
 		push(deliveryBranch, deliveryHeadSha);
-		push(feature.branch, activeHeadSha);
+		if (activeIsContinuation) {
+			push(feature.branch, activeHeadSha);
+		}
 		const observations = await Promise.all(
 			candidates.map((candidate) =>
 				this.observeGithubBranch(
@@ -560,6 +570,12 @@ function withDeliveredVia(
 	}
 	const pull = github.resolution.pull;
 	if (!sameSha(pull.headSha, activeHead.value.sha)) {
+		return delivery;
+	}
+	if (
+		github.expectedBaseRef === undefined ||
+		pull.baseRef !== github.expectedBaseRef
+	) {
 		return delivery;
 	}
 	return {

@@ -291,8 +291,7 @@ export function evaluateAttention(
 		const provenIntegrated =
 			input.integration.status === "known" &&
 			(input.integration.outcome === "integrated_by_ancestry" ||
-				input.integration.outcome === "integrated_by_pull_request" ||
-				input.integration.outcome === "integrated_to_other_base");
+				input.integration.outcome === "integrated_by_pull_request");
 		if (
 			delivery.activeRelation.status === "known" &&
 			delivery.activeRelation.value.isAncestor &&
