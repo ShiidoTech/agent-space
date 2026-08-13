@@ -59,6 +59,7 @@ export function assessFeatureFinish(
 		);
 	}
 	const registeredPaths = parseRegisteredWorktreePaths(worktrees.stdout);
+	const registeredBranches = parseRegisteredWorktreeBranches(worktrees.stdout);
 	const featurePath = path.resolve(feature.worktreePath);
 	let activeFeatureBranch: string | undefined = feature.branch;
 	if (registeredPaths.has(featurePath)) {
@@ -69,7 +70,7 @@ export function assessFeatureFinish(
 		const branch =
 			observed.exitCode === 0 && !observed.error
 				? observed.stdout.trim() || undefined
-				: undefined;
+				: registeredBranches.get(featurePath);
 		const linked = branch
 			? branch === feature.branch ||
 				(feature.branchLinks?.some((entry) => entry.ref === branch) ?? false)
@@ -139,19 +140,24 @@ export function assessFeatureFinish(
 	for (const agent of ctx.agentManager.getAgents(feature.id)) {
 		if (!agent.worktreePath) continue;
 		const registered = registeredPaths.has(path.resolve(agent.worktreePath));
+		const resolvedAgentPath = path.resolve(agent.worktreePath);
 		const branch = registered
-			? ctx.gitClient.readSync(["symbolic-ref", "--quiet", "--short", "HEAD"], {
+			? (() => {
+					const observed = ctx.gitClient.readSync(
+						["symbolic-ref", "--quiet", "--short", "HEAD"],
+						{
 					cwd: agent.worktreePath,
-				})
+						},
+					);
+					return observed.exitCode === 0 && !observed.error
+						? observed.stdout.trim() || undefined
+						: registeredBranches.get(resolvedAgentPath);
+				})()
 			: undefined;
 		check(
 			"agent",
 			agent.worktreePath,
-			registered
-				? branch && branch.exitCode === 0 && !branch.error
-					? branch.stdout.trim() || undefined
-					: undefined
-				: ctx.agentManager.getAgentBranchName(feature, agent.id),
+			registered ? branch : ctx.agentManager.getAgentBranchName(feature, agent.id),
 			activeFeatureBranch ?? feature.branch,
 			agent.id,
 		);
@@ -321,6 +327,23 @@ export function parseRegisteredWorktreePaths(output: string): Set<string> {
 			.filter((line) => line.startsWith("worktree "))
 			.map((line) => path.resolve(line.slice("worktree ".length))),
 	);
+}
+
+export function parseRegisteredWorktreeBranches(
+	output: string,
+): Map<string, string> {
+	const branches = new Map<string, string>();
+	let currentPath: string | undefined;
+	for (const line of output.split(/\r?\n/u)) {
+		if (line.startsWith("worktree ")) {
+			currentPath = path.resolve(line.slice("worktree ".length));
+			continue;
+		}
+		if (currentPath && line.startsWith("branch refs/heads/")) {
+			branches.set(currentPath, line.slice("branch refs/heads/".length));
+		}
+	}
+	return branches;
 }
 
 export type SessionStopVerification =

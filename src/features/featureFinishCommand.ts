@@ -170,6 +170,10 @@ export async function runFeatureFinish(
 								void ui.showInformationMessage(
 									`Removed worktree residue at ${residue.worktreePath}. Run Finish Feature again to remove the Agent Space record.`,
 								);
+								return {
+									status: "blocked",
+									message: `Removed worktree residue at ${residue.worktreePath}. Run Finish Feature again to remove the Agent Space record.`,
+								};
 							} else {
 								void ui.showErrorMessage(
 									`Could not remove worktree residue: ${removal?.reason ?? "unknown error"}`,

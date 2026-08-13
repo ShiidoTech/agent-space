@@ -543,6 +543,51 @@ describe("FeatureManager", () => {
 		});
 	});
 
+		describe("removeWorktreeResidue", () => {
+		it("refuses a path outside worktreeBase", () => {
+			const outside = fs.mkdtempSync(path.join(os.tmpdir(), "fm-outside-"));
+			try {
+				const result = manager.removeWorktreeResidue(outside);
+
+				expect(result.deleted).toBe(false);
+				expect(result.reasons.join("\n")).toContain("outside base");
+				expect(fs.existsSync(outside)).toBe(true);
+			} finally {
+				fs.rmSync(outside, { recursive: true, force: true });
+			}
+		});
+
+		it("refuses a path registered by Git", () => {
+			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			const registered = path.join(tmpDir, "registered");
+			fs.mkdirSync(registered);
+			mockExecSync.mockReturnValue(`worktree ${registered}\n`);
+
+			const result = localManager.removeWorktreeResidue(registered);
+
+			expect(result.deleted).toBe(false);
+			expect(result.reasons.join("\n")).toContain("registered by Git");
+			expect(fs.existsSync(registered)).toBe(true);
+		});
+
+		it("removes an unregistered residue directory", () => {
+			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			const residue = path.join(tmpDir, "residue");
+			fs.mkdirSync(residue);
+			fs.writeFileSync(path.join(residue, "untracked.txt"), "work");
+			mockExecSync.mockReturnValue(`worktree ${path.join(tmpDir, "other")}\n`);
+
+			const result = localManager.removeWorktreeResidue(residue);
+
+			expect(result).toEqual({ deleted: true, reasons: [] });
+			expect(fs.existsSync(residue)).toBe(false);
+		});
+	});
+
 	describe("getFeatures / getFeature", () => {
 		it("returns all features", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));

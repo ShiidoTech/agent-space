@@ -178,6 +178,45 @@ describe("Feature Finish", () => {
 		);
 	});
 
+	it("uses the branch recorded in the Git worktree inventory when symbolic-ref fails", () => {
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockReturnValue({
+				worktreePath: "/worktrees/f1",
+				safe: true,
+				forceable: true,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: true,
+				integrationObserved: true,
+				localCommitsObserved: true,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				workingTreeStatus: "",
+				localCommitCount: 0,
+				featureSha: "1".repeat(40),
+				baseSha: "2".repeat(40),
+				reasons: [],
+			});
+		const ctx = context(
+				"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
+			);
+		ctx.gitClient.readSync = (args: readonly string[]) =>
+				args[0] === "symbolic-ref"
+					? { ...gitResult(""), exitCode: 1 }
+					: gitResult(
+							"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
+						);
+
+		const assessment = assessFeatureFinish(ctx, feature(), finishEvidence());
+
+		expect(assessment.safe).toBe(true);
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: "feat/f1" }),
+		);
+	});
+
 	it("resumes after earlier worktrees were removed while records were preserved", () => {
 		const agents = [agent("a1"), agent("a2")];
 		const readSync = vi.fn(
