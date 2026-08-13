@@ -453,6 +453,7 @@ export class FeatureStateCoordinator implements Disposable {
 		return selectGithubObservation(
 			deliveryBranch,
 			baseRef,
+			activeHeadSha,
 			candidates.map((candidate, index) => ({
 				branch: candidate.branch,
 				observation: observations[index],
@@ -596,6 +597,7 @@ function withDeliveredVia(
 function selectGithubObservation(
 	deliveryBranch: string,
 	expectedBaseRef: string | undefined,
+	activeHeadSha: string | undefined,
 	candidates: ReadonlyArray<{
 		branch: string;
 		observation: GitHubObservation;
@@ -605,7 +607,11 @@ function selectGithubObservation(
 	let bestRank = -1;
 	let bestIsDelivery = false;
 	for (const candidate of candidates) {
-		const rank = githubObservationRank(candidate.observation, expectedBaseRef);
+		const rank = githubObservationRank(
+			candidate.observation,
+			expectedBaseRef,
+			activeHeadSha,
+		);
 		const isDelivery = candidate.branch === deliveryBranch;
 		if (
 			rank > bestRank ||
@@ -622,14 +628,21 @@ function selectGithubObservation(
 function githubObservationRank(
 	observation: GitHubObservation,
 	expectedBaseRef: string | undefined,
+	activeHeadSha: string | undefined,
 ): number {
 	if (observation.status !== "known") return 0;
 	if (observation.resolution.outcome !== "selected") return 1;
 	const pull = observation.resolution.pull;
 	if (pull.state === "merged") {
-		return expectedBaseRef === undefined || pull.baseRef === expectedBaseRef
-			? 4
-			: 3;
+		if (expectedBaseRef !== undefined && pull.baseRef !== expectedBaseRef) {
+			return 3;
+		}
+		// A merged PR whose head is the exact active head proves delivery of
+		// the current work; prefer it over a historical PR targeting the same
+		// base when the active branch is a proven continuation.
+		return activeHeadSha !== undefined && sameSha(pull.headSha, activeHeadSha)
+			? 5
+			: 4;
 	}
 	if (pull.state === "open") return 2;
 	return 1;
