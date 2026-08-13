@@ -797,6 +797,71 @@ export class HomePanel {
 		return `<span class="project-base-chip${tone}" title="${this.escapeHtml(title)}">${this.escapeHtml(label)}</span>`;
 	}
 
+	private renderWorktreeBranches(projectId: string): string {
+		const inventory =
+			this.featureStateCoordinator.getProjectWorktreeBranches(projectId);
+		if (!inventory || inventory.status !== "known") {
+			return `
+				<div class="worktree-branches-card">
+					<div class="section-label">Worktree branches</div>
+					<div class="project-setting-source">Branch inventory not observed yet.</div>
+				</div>`;
+		}
+		if (inventory.branches.length === 0) {
+			return `
+				<div class="worktree-branches-card">
+					<div class="section-label">Worktree branches</div>
+					<div class="project-setting-source">No branch worktrees detected.</div>
+				</div>`;
+		}
+		const rows = inventory.branches
+			.map((branch) => {
+				const relation = this.renderBranchRelation(branch.baseRelation);
+				const worktreeTone =
+					branch.workingTree.status === "dirty"
+						? " project-base-chip--warning"
+						: branch.workingTree.status === "unknown"
+							? " project-base-chip--warning"
+							: "";
+				const worktreeChip = `<span class="project-base-chip${worktreeTone}" title="Working tree in ${this.escapeHtml(branch.worktreePath)}">${branch.workingTree.status}</span>`;
+				const link = branch.linkedFeatureId
+					? `<span class="worktree-branch-linked">feature</span>`
+					: "";
+				return `
+					<div class="worktree-branch-row">
+						<span class="worktree-branch-ref" title="${this.escapeHtml(branch.worktreePath)}">${this.escapeHtml(branch.ref)}</span>
+						<span class="worktree-branch-meta">
+							<span title="${this.escapeHtml(branch.headSha)}">@${this.escapeHtml(branch.headSha.slice(0, 8))}</span>
+							${branch.prunable ? '<span class="worktree-branch-prunable">prunable</span>' : ""}
+						</span>
+						<span class="worktree-branch-chips">${relation}${worktreeChip}${link}</span>
+					</div>`;
+			})
+			.join("");
+		return `
+			<div class="worktree-branches-card">
+				<div class="section-label">Worktree branches <span class="project-setting-source">· ${inventory.branches.length} branch${inventory.branches.length === 1 ? "" : "es"}</span></div>
+				<div class="worktree-branch-list">${rows}</div>
+			</div>`;
+	}
+
+	private renderBranchRelation(
+		relation: import("../git/worktreeBranchObserver").WorktreeBranchBaseRelation,
+	): string {
+		switch (relation.status) {
+			case "current":
+				return '<span class="project-base-chip" title="Equal to base">current</span>';
+			case "merged":
+				return '<span class="project-base-chip" title="Ancestor of the base branch">merged</span>';
+			case "ahead":
+				return `<span class="project-base-chip project-base-chip--warning" title="Contains commits not present in base">${relation.commits} ahead</span>`;
+			case "diverged":
+				return `<span class="project-base-chip project-base-chip--error" title="Both refs contain commits absent from the other">${relation.ahead} ahead &middot; ${relation.behind} behind</span>`;
+			case "unknown":
+				return '<span class="project-base-chip project-base-chip--warning" title="Relation could not be observed">unknown</span>';
+		}
+	}
+
 	private renderGitStatsContent(stats: GitStats): string {
 		if (stats.filesChanged === 0) {
 			return '<div class="activity-empty">No changes yet</div>';
@@ -1341,6 +1406,7 @@ export class HomePanel {
 		// ── Base branch git state (the comparison branch) ──────────────
 		const baseStateChips = this.renderBaseStateChips(baseSnapshot);
 		const referenceHealthChip = this.renderReferenceHealthChip(projectId);
+		const worktreeBranches = this.renderWorktreeBranches(projectId);
 
 		// ── Rich feature cards (sidebar-equivalent density) ────────────
 		const featureRows = projectSnapshots.length
@@ -1439,6 +1505,7 @@ export class HomePanel {
 				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong> ${baseCommitLabel ? `&middot; <span title="Observed base SHA">${this.escapeHtml(baseCommitLabel)}</span>` : ""}</p>
 				<div class="project-base-chips">${referenceHealthChip}${baseStateChips}</div>
 			</div>
+			${worktreeBranches}
 			<div>
 				<div class="section-label">Active / recent features</div>
 				<div class="project-feature-list">${featureRows}</div>

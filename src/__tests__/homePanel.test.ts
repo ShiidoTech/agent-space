@@ -98,6 +98,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 			{
 				getSnapshot,
 				getProjectReferenceHealth: vi.fn(() => undefined),
+				getProjectWorktreeBranches: vi.fn(() => undefined),
 				invalidate,
 				refreshProjectReferenceHealth,
 				reconcile,

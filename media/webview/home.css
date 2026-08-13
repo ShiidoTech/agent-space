@@ -581,6 +581,54 @@ body {
 	);
 }
 
+/* ── Project page: worktree branch inventory ── */
+.worktree-branches-card {
+	margin-top: 18px;
+	padding: 12px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 6px;
+}
+.worktree-branch-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 8px;
+}
+.worktree-branch-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 5px 0;
+	border-top: 1px solid var(--vscode-panel-border);
+	font-size: 12px;
+}
+.worktree-branch-row:first-child {
+	border-top: none;
+}
+.worktree-branch-ref {
+	font-family: var(--vscode-editor-font-family, monospace);
+	font-weight: 600;
+}
+.worktree-branch-meta {
+	display: inline-flex;
+	gap: 6px;
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
+.worktree-branch-prunable {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+}
+.worktree-branch-chips {
+	margin-left: auto;
+	display: inline-flex;
+	gap: 6px;
+	align-items: center;
+}
+.worktree-branch-linked {
+	font-size: 11px;
+	color: var(--vscode-charts-blue);
+}
+
 .feature-attention-card {
 	padding: 12px;
 	border: 1px solid var(--vscode-notificationsWarningIcon-foreground);
