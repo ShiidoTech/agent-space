@@ -175,35 +175,21 @@ export class FeatureGitInspector {
 						path: targetPath,
 					});
 
-		const targetWorktree =
-			worktrees.status === "known"
-				? worktrees.value.find((entry) => path.resolve(entry.path) === targetPath)
-				: undefined;
-
 		// These reads are independent. Keeping them serial made the first snapshot
 		// unnecessarily expensive, especially for repositories with large graphs.
-		const [base, resolvedFeature, creationPoint] = await Promise.all([
+		const [base, resolvedFeature, worktreeHead, creationPoint] = await Promise.all([
 			input.baseRef
 				? this.resolveCommit(input.baseRef, input.repoRoot, "base")
 				: Promise.resolve(unknown("base_unknown", "No base ref was observed")),
 			this.resolveCommit(input.featureBranch, input.repoRoot, "feature"),
+			worktree.status === "known" && worktree.value.present
+				? this.resolveCommit("HEAD", input.worktreePath, "head")
+				: Promise.resolve(unknown("worktree_missing")),
 			input.createdFromSha
 				? this.resolveCommit(input.createdFromSha, input.repoRoot, "creation")
 				: Promise.resolve(unknown("creation_point_unknown")),
 		]);
-		const feature =
-			resolvedFeature.status === "known" ||
-			!targetWorktree ||
-			targetWorktree.detached ||
-			targetWorktree.prunable ||
-			!targetWorktree.headSha
-				? resolvedFeature
-				: known({
-						ref:
-							targetWorktree.branchRef?.replace(/^refs\/heads\//u, "") ??
-							input.featureBranch,
-						sha: targetWorktree.headSha,
-					});
+		const feature = resolvedFeature.status === "known" ? resolvedFeature : worktreeHead;
 		const [
 			creationPointInFeature,
 			featureDelta,
