@@ -71,9 +71,8 @@ export function assessFeatureFinish(
 				? observed.stdout.trim() || undefined
 				: undefined;
 		const linked = branch
-			? feature.branchLinks
-				? feature.branchLinks.some((entry) => entry.ref === branch)
-				: branch === feature.branch
+			? branch === feature.branch ||
+				(feature.branchLinks?.some((entry) => entry.ref === branch) ?? false)
 			: false;
 		// A registered worktree is deletable only against its positively observed,
 		// Feature-linked checkout. Unknown or unrelated refs remain fail-closed.

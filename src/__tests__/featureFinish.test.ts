@@ -137,6 +137,47 @@ describe("Feature Finish", () => {
 		);
 	});
 
+	it("keeps the declared branch when legacy links do not list it", () => {
+		const legacyLinks: Feature = {
+			...feature(),
+			branchLinks: [
+				{
+					ref: "feat/old-primary",
+					role: "primary",
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "legacy_record",
+				},
+			],
+		};
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockReturnValue({
+				worktreePath: "/worktrees/f1",
+				safe: true,
+				forceable: true,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: true,
+				integrationObserved: true,
+				localCommitsObserved: true,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				workingTreeStatus: "",
+				localCommitCount: 0,
+				featureSha: "1".repeat(40),
+				baseSha: "2".repeat(40),
+				reasons: [],
+			});
+		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
+
+		assessFeatureFinish(ctx, legacyLinks, finishEvidence());
+
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: "feat/f1" }),
+		);
+	});
+
 	it("resumes after earlier worktrees were removed while records were preserved", () => {
 		const agents = [agent("a1"), agent("a2")];
 		const readSync = vi.fn(
