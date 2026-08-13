@@ -143,10 +143,17 @@ export async function activate(
 		}
 	}
 
+	// Constructed before TerminalController so a resume that cannot be proven
+	// via the persisted sessionId can still be resolved through the binder's
+	// own worktree-scoped, ownership-checked candidate list (see
+	// TerminalController's use of sessionBinder below).
+	const sessionBinder = new SessionBinder(toolRegistry, tmux);
+
 	const terminalController = new TerminalController(
 		projectManager,
 		tmux,
 		toolRegistry,
+		sessionBinder,
 	);
 	context.subscriptions.push(terminalController);
 
@@ -293,7 +300,6 @@ export async function activate(
 	// to be reconciled for as long as the agent lives — not a one-shot capture at
 	// launch. Everything session-derived (name, attention, resume) reads through
 	// this binding.
-	const sessionBinder = new SessionBinder(toolRegistry, tmux);
 	terminalController.onBeforeAgentLaunch((feature, agent, cwd) => {
 		const ctx = projectManager.findContextByFeatureId(feature.id);
 		if (ctx) sessionBinder.recordLaunch(ctx, feature.id, agent, cwd);

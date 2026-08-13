@@ -5,9 +5,10 @@ import {
 	discoverProjectKnowledge,
 } from "../projects/projectKnowledge";
 import type { ProjectManager } from "../projects/projectManager";
-import type { Agent, Feature, Service } from "../types";
+import type { Agent, CodingTool, Feature, Service } from "../types";
 import { exec, execAsync, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
+import type { SessionBinder } from "./sessionBinder";
 import type { TmuxIntegration } from "./tmux";
 
 const AGENT_COLORS = getThemeColors();
@@ -49,6 +50,13 @@ export class TerminalController implements vscode.Disposable {
 		private readonly projectManager: ProjectManager,
 		private readonly tmux: TmuxIntegration,
 		private readonly toolRegistry: CodingToolRegistry,
+		/**
+		 * Optional: lets a blocked resume (no persisted sessionId) resolve
+		 * itself through the binder's own worktree-scoped, ownership-checked
+		 * candidate list instead of failing closed outright. See
+		 * {@link tryAutoAttachAndResume}.
+		 */
+		private readonly sessionBinder?: SessionBinder,
 	) {
 		this.disposables.push(
 			vscode.window.onDidOpenTerminal((terminal) => {
@@ -118,20 +126,42 @@ export class TerminalController implements vscode.Disposable {
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
-			try {
-				const baseCommand = shouldResume
-					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
-					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
-				// Fresh launches get the project's operational knowledge note so
-				// the agent's launch context shows which instructions/runbooks
-				// were made available. Resume/attach launches stay quiet.
-				const launchContextNote = shouldResume
-					? undefined
-					: this.buildAgentLaunchNote(feature);
-				const launchCommand = this.withLaunchContextNote(
-					baseCommand,
-					launchContextNote,
+			let baseCommand: string;
+			if (shouldResume) {
+				// A silent fresh launch here would drop the agent into a brand-new
+				// empty conversation while the user believes they are resuming one
+				// — the same failure mode runtimeRestorer's strict resume exists to
+				// prevent. Apply the same fail-closed guarantee to the manual click
+				// path: block explicitly instead of guessing.
+				const resumeCommand =
+					this.toolRegistry.buildStrictResumeLaunchCommand(
+						tool,
+						agent.sessionId,
+					) ?? this.tryAutoAttachAndResume(feature, agent, tool);
+				if (!resumeCommand) {
+					const message = this.buildResumeBlockedMessage(agent.name, tool.name);
+					this.recordAgentFailure(feature.id, agent.id, message);
+					void vscode.window.showErrorMessage(message);
+					return undefined;
+				}
+				baseCommand = resumeCommand;
+			} else {
+				baseCommand = this.toolRegistry.buildLaunchCommand(
+					tool,
+					agent.sessionId,
 				);
+			}
+			// Fresh launches get the project's operational knowledge note so
+			// the agent's launch context shows which instructions/runbooks
+			// were made available. Resume/attach launches stay quiet.
+			const launchContextNote = shouldResume
+				? undefined
+				: this.buildAgentLaunchNote(feature);
+			const launchCommand = this.withLaunchContextNote(
+				baseCommand,
+				launchContextNote,
+			);
+			try {
 				// Snapshot the provider's existing sessions for this directory
 				// before the CLI starts, so a session created by THIS launch is the
 				// only one that can later be attributed to the agent.
@@ -295,17 +325,37 @@ export class TerminalController implements vscode.Disposable {
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
-			try {
-				const baseCommand = shouldResume
-					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
-					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
-				const launchContextNote = shouldResume
-					? undefined
-					: this.buildAgentLaunchNote(feature);
-				const launchCommand = this.withLaunchContextNote(
-					baseCommand,
-					launchContextNote,
+			let baseCommand: string;
+			if (shouldResume) {
+				// Same fail-closed guarantee as the sync path: never silently drop
+				// the user into a fresh empty conversation when a genuine resume
+				// cannot be proven.
+				const resumeCommand =
+					this.toolRegistry.buildStrictResumeLaunchCommand(
+						tool,
+						agent.sessionId,
+					) ?? this.tryAutoAttachAndResume(feature, agent, tool);
+				if (!resumeCommand) {
+					const message = this.buildResumeBlockedMessage(agent.name, tool.name);
+					this.recordAgentFailure(feature.id, agent.id, message);
+					void vscode.window.showErrorMessage(message);
+					return undefined;
+				}
+				baseCommand = resumeCommand;
+			} else {
+				baseCommand = this.toolRegistry.buildLaunchCommand(
+					tool,
+					agent.sessionId,
 				);
+			}
+			const launchContextNote = shouldResume
+				? undefined
+				: this.buildAgentLaunchNote(feature);
+			const launchCommand = this.withLaunchContextNote(
+				baseCommand,
+				launchContextNote,
+			);
+			try {
 				// Snapshot the provider's existing sessions for this directory
 				// before the CLI starts — identical ordering to the sync path —
 				// so a session created by THIS launch is the only one that can
@@ -622,6 +672,66 @@ export class TerminalController implements vscode.Disposable {
 		cwd: string,
 	): string {
 		return `Failed to start ${agentName} with ${toolName}. Check that the CLI is installed and launches from ${cwd}.`;
+	}
+
+	/**
+	 * Shown when a resume was requested, no session id was persisted for the
+	 * agent, and {@link tryAutoAttachAndResume} could not resolve one either
+	 * (no candidate, or more than one) — the same condition runtimeRestorer
+	 * reports as `blocked`. Never silently launches fresh.
+	 */
+	private buildResumeBlockedMessage(
+		agentName: string,
+		toolName: string,
+	): string {
+		return `Cannot resume "${agentName}": no genuine ${toolName} session could be proven for it. Close this agent and start a new one to continue.`;
+	}
+
+	/**
+	 * Recovery for a resume that `buildStrictResumeLaunchCommand` refused
+	 * because no sessionId is persisted (the common Codex/OpenCode case: the
+	 * provider only writes its session file once the agent's first prompt
+	 * lands, so binding never happened). Rather than block outright, look for
+	 * a session in the agent's worktree via the same worktree- and
+	 * ownership-checked list `Attach Provider Session` uses
+	 * (`sessionBinder.listAttachableSessions`): sessions from another
+	 * worktree or already claimed by a sibling Agent Space agent are already
+	 * excluded there.
+	 *
+	 * Only an unambiguous match (exactly one candidate) is auto-resolved: if
+	 * the agent's real session is still there, this makes resume "just
+	 * work" without a manual Attach step first. Two or more candidates are
+	 * left alone — auto-picking among several risks silently resuming into a
+	 * sibling agent's conversation, the exact hazard explicit attachment
+	 * exists to prevent. That case (and zero candidates) still falls through
+	 * to the blocked message, which is accurate: nothing here proves which
+	 * session belongs to this agent.
+	 */
+	private tryAutoAttachAndResume(
+		feature: Feature,
+		agent: Agent,
+		tool: CodingTool,
+	): string | undefined {
+		if (!this.sessionBinder) return undefined;
+		const candidates = this.sessionBinder.listAttachableSessions(
+			feature.id,
+			agent.id,
+		);
+		if (candidates.length !== 1) return undefined;
+		const [candidate] = candidates;
+		if (
+			!this.sessionBinder.attachExplicitly(
+				feature.id,
+				agent.id,
+				candidate.sessionId,
+			)
+		) {
+			return undefined;
+		}
+		return this.toolRegistry.buildStrictResumeLaunchCommand(
+			tool,
+			candidate.sessionId,
+		);
 	}
 
 	/**

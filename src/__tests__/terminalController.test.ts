@@ -5,13 +5,12 @@ const {
 	showErrorMessageMock,
 	onDidOpenTerminalMock,
 	onDidCloseTerminalMock,
-} =
-	vi.hoisted(() => ({
-		createTerminalMock: vi.fn(),
-		showErrorMessageMock: vi.fn(),
-		onDidOpenTerminalMock: vi.fn(() => ({ dispose: vi.fn() })),
-		onDidCloseTerminalMock: vi.fn(() => ({ dispose: vi.fn() })),
-	}));
+} = vi.hoisted(() => ({
+	createTerminalMock: vi.fn(),
+	showErrorMessageMock: vi.fn(),
+	onDidOpenTerminalMock: vi.fn(() => ({ dispose: vi.fn() })),
+	onDidCloseTerminalMock: vi.fn(() => ({ dispose: vi.fn() })),
+}));
 
 vi.mock("../utils/platform", () => ({
 	exec: vi.fn(),
@@ -93,6 +92,7 @@ describe("TerminalController", () => {
 	const resolveAgentTool = vi.fn();
 	const buildLaunchCommand = vi.fn();
 	const buildResumeLaunchCommand = vi.fn();
+	const buildStrictResumeLaunchCommand = vi.fn();
 	let closedTerminalHandler:
 		| ((terminal: {
 				show: ReturnType<typeof vi.fn>;
@@ -137,6 +137,7 @@ describe("TerminalController", () => {
 		});
 		buildLaunchCommand.mockReturnValue("claude");
 		buildResumeLaunchCommand.mockReturnValue("claude --resume session-1");
+		buildStrictResumeLaunchCommand.mockReturnValue("claude --resume session-1");
 		terminalInstance = { show: vi.fn(), dispose: vi.fn(), hide: vi.fn() };
 		createTerminalMock.mockReturnValue(terminalInstance);
 		showErrorMessageMock.mockResolvedValue(undefined);
@@ -158,6 +159,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -198,6 +200,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -234,6 +237,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -269,6 +273,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -299,6 +304,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -321,6 +327,290 @@ describe("TerminalController", () => {
 		expect(notifyChange).toHaveBeenCalledTimes(1);
 	});
 
+	it("resumes a started agent with the strict resume command when the session is provable", () => {
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		vi.mocked(exec).mockReturnValue("");
+
+		const terminal = controller.createTerminal(
+			feature,
+			{ ...agent, hasStarted: true },
+			0,
+			true,
+		);
+
+		expect(buildStrictResumeLaunchCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "claude" }),
+			"session-1",
+		);
+		expect(buildLaunchCommand).not.toHaveBeenCalled();
+		expect(terminal).toBe(terminalInstance);
+		expect(showErrorMessageMock).not.toHaveBeenCalled();
+	});
+
+	it("blocks instead of silently launching fresh when no genuine resume can be proven", () => {
+		buildStrictResumeLaunchCommand.mockReturnValue(undefined);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		const terminal = controller.createTerminal(
+			feature,
+			{ ...agent, hasStarted: true, sessionId: null },
+			0,
+			true,
+		);
+
+		expect(terminal).toBeUndefined();
+		expect(createTerminalMock).not.toHaveBeenCalled();
+		expect(vi.mocked(exec)).not.toHaveBeenCalled();
+		expect(buildLaunchCommand).not.toHaveBeenCalled();
+		expect(recordAgentFailure).toHaveBeenCalledWith(
+			"a1",
+			"f1",
+			'Cannot resume "Agent 1": no genuine Claude Code session could be proven for it. Close this agent and start a new one to continue.',
+			undefined,
+		);
+		expect(showErrorMessageMock).toHaveBeenCalledWith(
+			'Cannot resume "Agent 1": no genuine Claude Code session could be proven for it. Close this agent and start a new one to continue.',
+		);
+	});
+
+	it("blocks the async reopen path the same way when no genuine resume can be proven", async () => {
+		buildStrictResumeLaunchCommand.mockReturnValue(undefined);
+		const isSessionAliveAsync = vi.fn();
+		const adoptSessionAsync = vi.fn().mockResolvedValue(false);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				isSessionAliveAsync,
+				adoptSessionAsync,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		const terminal = await controller.focusOrCreateTerminalAsync(
+			feature,
+			{ ...agent, hasStarted: true, sessionId: null },
+			0,
+			true,
+		);
+
+		expect(terminal).toBeUndefined();
+		expect(vi.mocked(execAsync)).not.toHaveBeenCalled();
+		expect(vi.mocked(exec)).not.toHaveBeenCalled();
+		expect(createTerminalMock).not.toHaveBeenCalled();
+		expect(recordAgentFailure).toHaveBeenCalledWith(
+			"a1",
+			"f1",
+			'Cannot resume "Agent 1": no genuine Claude Code session could be proven for it. Close this agent and start a new one to continue.',
+			undefined,
+		);
+	});
+
+	it("auto-attaches and resumes when exactly one worktree session is unowned", () => {
+		const candidate = {
+			sessionId: "session-2",
+			prompt: "Recovered conversation",
+			created: "2026-08-13T05:54:00.000Z",
+			projectPath: "/repo/feature-one",
+		};
+		const listAttachableSessions = vi.fn().mockReturnValue([candidate]);
+		const attachExplicitly = vi.fn().mockReturnValue(true);
+		buildStrictResumeLaunchCommand.mockImplementation(
+			(_tool: unknown, sessionId?: string | null) =>
+				sessionId === "session-2" ? "codex resume session-2" : undefined,
+		);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+			{ listAttachableSessions, attachExplicitly } as never,
+		);
+
+		vi.mocked(exec).mockReturnValue("");
+
+		const terminal = controller.createTerminal(
+			feature,
+			{ ...agent, hasStarted: true, sessionId: null },
+			0,
+			true,
+		);
+
+		expect(listAttachableSessions).toHaveBeenCalledWith("f1", "a1");
+		expect(attachExplicitly).toHaveBeenCalledWith("f1", "a1", "session-2");
+		expect(buildStrictResumeLaunchCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "claude" }),
+			"session-2",
+		);
+		expect(terminal).toBe(terminalInstance);
+		expect(showErrorMessageMock).not.toHaveBeenCalled();
+		expect(recordAgentFailure).not.toHaveBeenCalled();
+	});
+
+	it("stays blocked (never auto-picks) when more than one worktree session is unowned", () => {
+		const listAttachableSessions = vi.fn().mockReturnValue([
+			{
+				sessionId: "session-2",
+				prompt: "A",
+				created: "2026-08-13T05:54:00.000Z",
+				projectPath: "/repo/feature-one",
+			},
+			{
+				sessionId: "session-3",
+				prompt: "B",
+				created: "2026-08-13T05:55:00.000Z",
+				projectPath: "/repo/feature-one",
+			},
+		]);
+		const attachExplicitly = vi.fn();
+		buildStrictResumeLaunchCommand.mockReturnValue(undefined);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+			{ listAttachableSessions, attachExplicitly } as never,
+		);
+
+		const terminal = controller.createTerminal(
+			feature,
+			{ ...agent, hasStarted: true, sessionId: null },
+			0,
+			true,
+		);
+
+		expect(terminal).toBeUndefined();
+		expect(attachExplicitly).not.toHaveBeenCalled();
+		expect(vi.mocked(exec)).not.toHaveBeenCalled();
+		expect(recordAgentFailure).toHaveBeenCalledWith(
+			"a1",
+			"f1",
+			'Cannot resume "Agent 1": no genuine Claude Code session could be proven for it. Close this agent and start a new one to continue.',
+			undefined,
+		);
+	});
+
+	it("auto-attaches and resumes on the async reopen path too", async () => {
+		const candidate = {
+			sessionId: "session-2",
+			prompt: "Recovered conversation",
+			created: "2026-08-13T05:54:00.000Z",
+			projectPath: "/repo/feature-one",
+		};
+		const listAttachableSessions = vi.fn().mockReturnValue([candidate]);
+		const attachExplicitly = vi.fn().mockReturnValue(true);
+		buildStrictResumeLaunchCommand.mockImplementation(
+			(_tool: unknown, sessionId?: string | null) =>
+				sessionId === "session-2" ? "codex resume session-2" : undefined,
+		);
+		const isSessionAliveAsync = vi.fn().mockResolvedValue(true);
+		const adoptSessionAsync = vi.fn().mockResolvedValue(false);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				isSessionAliveAsync,
+				adoptSessionAsync,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+			{ listAttachableSessions, attachExplicitly } as never,
+		);
+
+		vi.mocked(execAsync).mockResolvedValue({ stdout: "", stderr: "" });
+
+		const terminal = await controller.focusOrCreateTerminalAsync(
+			feature,
+			{ ...agent, hasStarted: true, sessionId: null },
+			0,
+			true,
+		);
+
+		expect(attachExplicitly).toHaveBeenCalledWith("f1", "a1", "session-2");
+		expect(terminal).toBe(terminalInstance);
+		expect(recordAgentFailure).not.toHaveBeenCalled();
+	});
+
 	it("records and surfaces unexpected agent exits after the terminal closes", () => {
 		const sessionAliveMock = vi
 			.fn()
@@ -341,6 +631,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -399,6 +690,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -626,8 +918,18 @@ describe("TerminalController", () => {
 			// can take the warm path (the map stays empty until resolution),
 			// and the second must reuse the in-flight reconciliation instead
 			// of starting a duplicate create.
-			const first = controller.focusOrCreateTerminalAsync(feature, agent, 0, true);
-			const second = controller.focusOrCreateTerminalAsync(feature, agent, 0, true);
+			const first = controller.focusOrCreateTerminalAsync(
+				feature,
+				agent,
+				0,
+				true,
+			);
+			const second = controller.focusOrCreateTerminalAsync(
+				feature,
+				agent,
+				0,
+				true,
+			);
 
 			const [terminalA, terminalB] = await Promise.all([first, second]);
 
@@ -659,6 +961,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
