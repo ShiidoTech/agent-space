@@ -881,7 +881,7 @@ export class FeatureManager {
 	getDeletionSafety(feature: Feature) {
 		const branches = this.reconcileFeatureBranches(feature);
 		const checkedOutBranch =
-			branches.checkout.status === "known" && branches.checkout.linked
+			branches.checkout.status === "known"
 				? branches.checkout.ref
 				: undefined;
 		return checkWorktreeDeletionSafety({

@@ -787,5 +787,37 @@ describe("FeatureManager", () => {
 			);
 			expect(String(removeCall?.[0])).not.toContain("--force");
 		});
+
+		it("deletes a clean feature when persisted links lag the active checkout", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const fm = configManager({ baseBranch: "main" });
+			const feature = fm.createFeature("stale-links", "shared", "feature");
+			feature.branch = "feature/old-stale-links";
+			feature.branchLinks = [
+				{
+					ref: feature.branch,
+					role: "primary",
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "legacy_record",
+				},
+			];
+
+			mockExecSync.mockReset();
+			mockExecSync.mockImplementation((command: string) => {
+				const value = String(command);
+				if (value.includes("symbolic-ref")) return "feature/current-stale-links\n";
+				if (value.includes("git status --porcelain")) return "";
+				if (value.includes('rev-parse --verify "feature/current-stale-links'))
+					return featureSha;
+				if (value.includes('rev-parse --verify "main')) return baseSha;
+				if (value.includes("merge-base --is-ancestor")) return "";
+				if (value.includes("rev-list --count")) return "0";
+				return "";
+			});
+
+			const result = fm.removeFeatureWorktreeForFinish(feature.id);
+
+			expect(result.deleted).toBe(true);
+		});
 	});
 });
