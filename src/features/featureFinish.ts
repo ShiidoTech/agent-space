@@ -221,9 +221,27 @@ function observeRegisteredBranch(
 		return currentBranch;
 	}
 	if (inventoryBranch) return inventoryBranch;
-	return symbolic.exitCode !== 1 && current.exitCode !== 0
-		? declaredBranch
-		: undefined;
+	if (symbolic.exitCode === 1 || current.exitCode === 1) {
+		const head = ctx.gitClient.readSync(["rev-parse", "--verify", "HEAD^{commit}"], {
+			cwd: worktreePath,
+		});
+		const declared = ctx.gitClient.readSync(
+			["rev-parse", "--verify", `${declaredBranch}^{commit}`],
+			{ cwd: ctx.project.repoPath },
+		);
+		const headSha = head.stdout.trim();
+		const declaredSha = declared.stdout.trim();
+		if (
+			head.exitCode === 0 &&
+			declared.exitCode === 0 &&
+			/^[0-9a-f]{40,64}$/iu.test(headSha) &&
+			/^[0-9a-f]{40,64}$/iu.test(declaredSha) &&
+			headSha.toLowerCase() === declaredSha.toLowerCase()
+		) {
+			return declaredBranch;
+		}
+	}
+	return undefined;
 }
 
 interface FinishDecision {
