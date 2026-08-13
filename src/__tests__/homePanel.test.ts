@@ -79,7 +79,10 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		const webviewPanel = {
 			visible: false,
 			title: "",
-			webview: { onDidReceiveMessage: receiveMessage },
+			webview: {
+				onDidReceiveMessage: receiveMessage,
+				asWebviewUri: vi.fn(() => ({})),
+			},
 			onDidChangeViewState: vi.fn(() => ({ dispose: vi.fn() })),
 			onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
 			reveal: vi.fn(),
@@ -322,6 +325,75 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(local).toContain("lifecycle-spinner");
 		expect(orphaned).toContain("Feature setup state unknown");
 		expect(orphaned).not.toContain("lifecycle-spinner");
+	});
+
+	it("renders the Feature page from the local record before any snapshot exists", () => {
+		const panel = buildPanel();
+		const render = (
+			panel as unknown as {
+				renderFeatureLocalHtml: (ctx: unknown, feature: Feature) => string;
+			}
+		).renderFeatureLocalHtml.bind(panel);
+		const provisioningFeature: Feature = {
+			...feature,
+			provisioning: {
+				state: "provisioning",
+				steps: [
+					{
+						id: "resolve-base",
+						label: "Preparing feature",
+						status: "running",
+					},
+					{
+						id: "create-worktree",
+						label: "Creating branch and worktree",
+						status: "pending",
+					},
+				],
+			},
+		};
+
+		const html = render(
+			{ featureManager: { isProvisioningActive: () => true } },
+			provisioningFeature,
+		);
+
+		expect(html).toContain("Feature One");
+		expect(html).toContain("Setting up feature");
+		expect(html).toContain("Observing Git state…");
+		expect(html).toContain("Finish Feature");
+	});
+
+	it("hides the Finish action while the local Feature setup failed", () => {
+		const panel = buildPanel();
+		const render = (
+			panel as unknown as {
+				renderFeatureLocalHtml: (ctx: unknown, feature: Feature) => string;
+			}
+		).renderFeatureLocalHtml.bind(panel);
+		const failedFeature: Feature = {
+			...feature,
+			provisioning: {
+				state: "failed",
+				steps: [
+					{
+						id: "resolve-base",
+						label: "Preparing feature",
+						status: "failed",
+					},
+				],
+				error: "git worktree add failed",
+			},
+		};
+
+		const html = render(
+			{ featureManager: { isProvisioningActive: () => false } },
+			failedFeature,
+		);
+
+		expect(html).toContain("Feature setup failed");
+		expect(html).toContain("git worktree add failed");
+		expect(html).not.toContain("Finish Feature");
 	});
 
 	it("uses the shared Feature summary and does not repeat its primary alert", () => {

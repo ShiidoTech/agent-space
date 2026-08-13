@@ -21,6 +21,7 @@ import {
 } from "./features/featureFinish";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
+import type { FeatureSnapshot } from "./features/featureSnapshot";
 import { FeatureStateCoordinator } from "./features/featureStateCoordinator";
 import {
 	buildGitHubCompareUrl,
@@ -44,6 +45,7 @@ import { ContextOnlyIsolation } from "./workspace/agentWorkspaceIsolation";
 
 let activeFeatureId: string | null = null;
 let featureActivationInProgress = false;
+const finishInProgress = new Set<string>();
 const execFileAsync = promisify(execFileCallback);
 
 function shortSessionId(sessionId: string): string {
@@ -724,6 +726,7 @@ export async function activate(
 						branchKind,
 					);
 					activeFeatureId = feature.id;
+					projectManager.notifyChange();
 					sidebarProvider.refresh();
 					await activateFeatureInCurrentWindow(feature.id);
 					// Let Git setup run while the optional agent choice is displayed.
@@ -1192,10 +1195,31 @@ export async function activate(
 				const feature = ctx.featureManager.getFeature(featureId);
 				if (!feature) return;
 
+				// Prevent a second Finish/Delete on the same Feature while one
+				// is already in progress (double-click, repeated command).
+				if (finishInProgress.has(featureId)) {
+					void vscode.window.showInformationMessage(
+						`Feature "${feature.name}" is already being finished.`,
+					);
+					return;
+				}
+				finishInProgress.add(featureId);
+
 				let assessment: FeatureFinishAssessment;
+				let snapshot: FeatureSnapshot | undefined;
 				try {
-					await featureStateCoordinator.reconcile();
-					const snapshot = featureStateCoordinator.getSnapshot(featureId);
+					// Use the coordinator's last observation when available instead
+					// of forcing a full reconcile (Git + GitHub network for every
+					// Feature in every project) before showing the confirmation.
+					// The snapshot is refreshed every poll cycle while any UI
+					// consumer is visible; assessFeatureFinish re-reads local Git
+					// worktree safety synchronously, so a stale GitHub observation
+					// cannot weaken the deletion decision.
+					snapshot = featureStateCoordinator.getSnapshot(featureId);
+					if (!snapshot) {
+						await featureStateCoordinator.reconcile();
+						snapshot = featureStateCoordinator.getSnapshot(featureId);
+					}
 					if (!snapshot) {
 						throw new Error("Feature integration evidence was not observed");
 					}
@@ -1203,6 +1227,7 @@ export async function activate(
 						integration: snapshot.integration,
 					});
 				} catch (error) {
+					finishInProgress.delete(featureId);
 					void vscode.window.showErrorMessage(
 						`Cannot assess "${feature.name}" safely: ${error instanceof Error ? error.message : String(error)}`,
 					);
@@ -1210,6 +1235,7 @@ export async function activate(
 				}
 
 				if (!assessment.safe && !assessment.forceable) {
+					finishInProgress.delete(featureId);
 					void vscode.window.showErrorMessage(
 						`Cannot finish "${feature.name}" because safety is unknown:\n\n${assessment.reasons.join("\n\n")}\n\nNo worktree, session or metadata was removed.`,
 					);
@@ -1228,116 +1254,144 @@ export async function activate(
 					action,
 					"Cancel",
 				);
-				if (confirm !== action) return;
+				if (confirm !== action) {
+					finishInProgress.delete(featureId);
+					return;
+				}
 
-				// Stop execution first, but preserve every record until Git cleanup succeeds.
-				const trackedSessions = new Set<string>();
-				for (const agent of ctx.agentManager.getAgents(featureId)) {
-					const session =
-						agent.tmuxSession ?? tmux.sessionName(featureId, agent.id);
-					trackedSessions.add(session);
-					trackedSessions.add(tmux.legacySessionName(featureId, agent.id));
-				}
-				for (const service of ctx.serviceManager.getServices(featureId)) {
-					trackedSessions.add(service.tmuxSession);
-				}
-				terminalController.killFeatureTerminals(featureId);
-				if (trackedSessions.size > 0) {
-					const stopVerification = verifySessionsStopped(
-						trackedSessions,
-						projectManager.observeTmuxSessions(),
-					);
-					if (stopVerification.status === "blocked") {
-						void vscode.window.showErrorMessage(
-							`Feature "${feature.name}" was not finished because ${stopVerification.reason}. No worktree or metadata was removed.`,
+				// The cleanup below is all local work (tmux + git); a full
+				// reconcile was deliberately NOT repeated here because stopping
+				// sessions cannot change Git/GitHub observation evidence. Real
+				// phases are reported so any perceptible step is visible.
+				await vscode.window.withProgress(
+					{
+						location: vscode.ProgressLocation.Notification,
+						title: `Finishing "${feature.name}"…`,
+					},
+					async (progress) => {
+						// Stop execution first, but preserve every record until Git cleanup succeeds.
+						progress.report({ message: "Stopping agents and services…" });
+						const trackedSessions = new Set<string>();
+						for (const agent of ctx.agentManager.getAgents(featureId)) {
+							const session =
+								agent.tmuxSession ?? tmux.sessionName(featureId, agent.id);
+							trackedSessions.add(session);
+							trackedSessions.add(tmux.legacySessionName(featureId, agent.id));
+						}
+						for (const service of ctx.serviceManager.getServices(featureId)) {
+							trackedSessions.add(service.tmuxSession);
+						}
+						terminalController.killFeatureTerminals(featureId);
+						if (trackedSessions.size > 0) {
+							const stopVerification = verifySessionsStopped(
+								trackedSessions,
+								projectManager.observeTmuxSessions(),
+							);
+							if (stopVerification.status === "blocked") {
+								finishInProgress.delete(featureId);
+								void vscode.window.showErrorMessage(
+									`Feature "${feature.name}" was not finished because ${stopVerification.reason}. No worktree or metadata was removed.`,
+								);
+								return;
+							}
+						}
+						// Reassess with the same observation evidence but fresh local Git
+						// safety (assessFeatureFinish re-reads worktree state
+						// synchronously). Stopping sessions cannot change Git/GitHub
+						// state, so a second full reconcile here would only add network
+						// latency without improving the safety fingerprint.
+						progress.report({ message: "Checking worktree safety…" });
+						let current: FeatureFinishAssessment;
+						try {
+							current = assessFeatureFinish(ctx, feature, {
+								integration: snapshot.integration,
+							});
+						} catch (error) {
+							finishInProgress.delete(featureId);
+							void vscode.window.showErrorMessage(
+								`Feature "${feature.name}" could not be reassessed after stopping sessions: ${error instanceof Error ? error.message : String(error)}. No worktree or metadata was removed.`,
+							);
+							return;
+						}
+						if (
+							current.fingerprint !== assessment.fingerprint ||
+							(!current.safe && !current.forceable)
+						) {
+							finishInProgress.delete(featureId);
+							void vscode.window.showErrorMessage(
+								`Feature "${feature.name}" changed after confirmation. Cleanup stopped before removing worktrees or metadata; review it and try again.`,
+							);
+							return;
+						}
+
+						const removalPlan = planFeatureFinishRemovals(current);
+						const featureRemovalPlan = removalPlan.find(
+							(entry) => entry.kind === "feature",
 						);
-						return;
-					}
-				}
-				let current: FeatureFinishAssessment;
-				try {
-					await featureStateCoordinator.reconcile();
-					const snapshot = featureStateCoordinator.getSnapshot(featureId);
-					if (!snapshot) {
-						throw new Error("Feature integration evidence was not observed");
-					}
-					current = assessFeatureFinish(ctx, feature, {
-						integration: snapshot.integration,
-					});
-				} catch (error) {
-					void vscode.window.showErrorMessage(
-						`Feature "${feature.name}" could not be reassessed after stopping sessions: ${error instanceof Error ? error.message : String(error)}. No worktree or metadata was removed.`,
-					);
-					return;
-				}
-				if (
-					current.fingerprint !== assessment.fingerprint ||
-					(!current.safe && !current.forceable)
-				) {
-					void vscode.window.showErrorMessage(
-						`Feature "${feature.name}" changed after confirmation. Cleanup stopped before removing worktrees or metadata; review it and try again.`,
-					);
-					return;
-				}
+						if (featureRemovalPlan) {
+							progress.report({ message: "Removing worktrees…" });
+							let featureRemoval: ReturnType<
+								typeof ctx.featureManager.removeFeatureWorktreeForFinish
+							>;
+							try {
+								featureRemoval =
+									ctx.featureManager.removeFeatureWorktreeForFinish(featureId, {
+										force: featureRemovalPlan.force,
+										...(featureRemovalPlan.acceptedPullRequestHeadSha
+											? {
+													acceptedPullRequestHeadSha:
+														featureRemovalPlan.acceptedPullRequestHeadSha,
+												}
+											: {}),
+									});
+							} catch (error) {
+								finishInProgress.delete(featureId);
+								void vscode.window.showErrorMessage(
+									`Feature "${feature.name}" was not finished: ${error instanceof Error ? error.message : String(error)}. All Agent Space records were preserved.`,
+								);
+								return;
+							}
+							if (!featureRemoval.deleted) {
+								finishInProgress.delete(featureId);
+								void vscode.window.showErrorMessage(
+									`Feature "${feature.name}" was not finished:\n\n${featureRemoval.reasons.join("\n")}\n\nAll Agent Space records were preserved.`,
+								);
+								return;
+							}
+						}
+						for (const entry of removalPlan) {
+							if (entry.kind !== "agent" || !entry.agentId) continue;
+							const removal = ctx.agentManager.removeAgentWorktreeForFinish(
+								entry.agentId,
+								featureId,
+								entry.force,
+							);
+							if (!removal.removed) {
+								finishInProgress.delete(featureId);
+								void vscode.window.showErrorMessage(
+									`Feature "${feature.name}" was not finished: ${removal.reason ?? "an agent worktree could not be removed"}. Feature, agent and service records were preserved.`,
+								);
+								return;
+							}
+						}
 
-				const removalPlan = planFeatureFinishRemovals(current);
-				const featureRemovalPlan = removalPlan.find(
-					(entry) => entry.kind === "feature",
+						finishInProgress.delete(featureId);
+						progress.report({ message: "Finalizing…" });
+						ctx.featureManager.forgetFinishedFeature(featureId);
+						sessionNameSyncer.clearFeature(featureId);
+						// Invalidate the coordinator so the finished Feature leaves
+						// every snapshot-driven surface (sidebar, home) deterministically
+						// without waiting for the next poll cycle.
+						projectManager.notifyChange();
+						sidebarProvider.refresh();
+
+						if (activeFeatureId === featureId) {
+							activeFeatureId = null;
+						}
+						const home = HomePanel.getInstance();
+						if (home) home.showWelcome();
+					},
 				);
-				if (featureRemovalPlan) {
-					let featureRemoval: ReturnType<
-						typeof ctx.featureManager.removeFeatureWorktreeForFinish
-					>;
-					try {
-						featureRemoval = ctx.featureManager.removeFeatureWorktreeForFinish(
-							featureId,
-							{
-								force: featureRemovalPlan.force,
-								...(featureRemovalPlan.acceptedPullRequestHeadSha
-									? {
-											acceptedPullRequestHeadSha:
-												featureRemovalPlan.acceptedPullRequestHeadSha,
-										}
-									: {}),
-							},
-						);
-					} catch (error) {
-						void vscode.window.showErrorMessage(
-							`Feature "${feature.name}" was not finished: ${error instanceof Error ? error.message : String(error)}. All Agent Space records were preserved.`,
-						);
-						return;
-					}
-					if (!featureRemoval.deleted) {
-						void vscode.window.showErrorMessage(
-							`Feature "${feature.name}" was not finished:\n\n${featureRemoval.reasons.join("\n")}\n\nAll Agent Space records were preserved.`,
-						);
-						return;
-					}
-				}
-				for (const entry of removalPlan) {
-					if (entry.kind !== "agent" || !entry.agentId) continue;
-					const removal = ctx.agentManager.removeAgentWorktreeForFinish(
-						entry.agentId,
-						featureId,
-						entry.force,
-					);
-					if (!removal.removed) {
-						void vscode.window.showErrorMessage(
-							`Feature "${feature.name}" was not finished: ${removal.reason ?? "an agent worktree could not be removed"}. Feature, agent and service records were preserved.`,
-						);
-						return;
-					}
-				}
-
-				ctx.featureManager.forgetFinishedFeature(featureId);
-				sessionNameSyncer.clearFeature(featureId);
-				sidebarProvider.refresh();
-
-				if (activeFeatureId === featureId) {
-					activeFeatureId = null;
-				}
-				const home = HomePanel.getInstance();
-				if (home) home.showWelcome();
 			},
 		),
 	);

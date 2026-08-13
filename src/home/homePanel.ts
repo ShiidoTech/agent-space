@@ -11,7 +11,10 @@ import {
 } from "../features/featureCockpitPresentation";
 import type { FeatureSnapshot } from "../features/featureSnapshot";
 import type { FeatureStateCoordinator } from "../features/featureStateCoordinator";
-import type { ProjectManager } from "../projects/projectManager";
+import type {
+	ProjectContext,
+	ProjectManager,
+} from "../projects/projectManager";
 import type { GlobalStore } from "../storage/globalStore";
 import type { Agent, Feature, Service } from "../types";
 
@@ -1071,7 +1074,9 @@ export class HomePanel {
 		if (!resolved) return this.emptyHtml("Feature not found");
 
 		const snapshot = this.featureStateCoordinator.getSnapshot(featureId);
-		if (!snapshot) return this.emptyHtml("Feature state is being observed");
+		if (!snapshot) {
+			return this.renderFeatureLocalHtml(resolved.ctx, resolved.feature);
+		}
 		const { ctx } = resolved;
 		const feature = snapshot.feature as Feature;
 		const agents = this.snapshotAgents(snapshot);
@@ -1186,6 +1191,70 @@ export class HomePanel {
 .agent-status-dot.primary-state-error { background: var(--vscode-errorForeground); }
 .agent-status-dot.primary-state-normal { background: var(--vscode-charts-blue, var(--vscode-focusBorder)); }
 .agent-status-dot.primary-state-muted { background: var(--vscode-disabledForeground); }
+</style>
+</head>
+<body>
+	${body}
+	<script src="${jsUri}"></script>
+</body>
+</html>`;
+	}
+
+	/**
+	 * Render a Feature page from the local lifecycle record only, before any
+	 * observation snapshot exists. The local lifecycle (creating, provisioning,
+	 * failed, ready) is rendered immediately; observation sections that need a
+	 * `FeatureSnapshot` (Git, GitHub/PR, runtime) are announced as pending and
+	 * enriched progressively when the coordinator publishes them.
+	 */
+	private renderFeatureLocalHtml(
+		ctx: ProjectContext,
+		feature: Feature,
+	): string {
+		const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
+		const cssUri = this.panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.css"),
+		);
+		const jsUri = this.panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.js"),
+		);
+		const provisioning = this.renderFeatureProvisioning(
+			feature,
+			ctx.featureManager?.isProvisioningActive?.(feature.id) ?? false,
+		);
+		const body = `
+		<button class="home-nav-bar" onclick="goHome()" title="Back to Agent Space">&#8592; Agent Space</button>
+		<div class="workspace-header">
+			<div class="header-color-dot" style="background: ${dotColor}"></div>
+			<div class="header-info">
+				<div class="header-title">${this.escapeHtml(feature.name)}</div>
+				<div class="header-branch">Checkout · ${this.escapeHtml(feature.branch)}</div>
+				${feature.primaryBranchRef && feature.primaryBranchRef !== feature.branch ? `<div class="header-branch">Delivery · ${this.escapeHtml(feature.primaryBranchRef)}</div>` : ""}
+			</div>
+		</div>
+		<div class="workspace-content">
+			${provisioning}
+			<div class="activity-empty">Observing Git state…</div>
+			${feature.provisioning?.state === "failed" ? "" : this.renderFeatureActions(feature)}
+		</div>`;
+
+		return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${cssUri}">
+<style>
+.lifecycle-card { margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: color-mix(in srgb, var(--vscode-editorInfo-background) 35%, transparent); }
+.lifecycle-card.failed { border-color: var(--vscode-errorForeground); }
+.lifecycle-steps { display: grid; gap: 6px; margin-top: 10px; }
+.lifecycle-step { display: grid; grid-template-columns: 18px 1fr; gap: 7px; color: var(--vscode-descriptionForeground); font-size: 12px; }
+.lifecycle-step.completed { color: var(--vscode-testing-iconPassed); }
+.lifecycle-step.running { color: var(--vscode-foreground); }
+.lifecycle-step.failed, .lifecycle-card p { color: var(--vscode-errorForeground); overflow-wrap: anywhere; }
+.lifecycle-step small { grid-column: 2; }
+.lifecycle-spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--vscode-progressBar-background); border-right-color: transparent; border-radius: 50%; animation: lifecycle-spin .8s linear infinite; }
+@keyframes lifecycle-spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
