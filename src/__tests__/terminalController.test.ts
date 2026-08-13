@@ -84,6 +84,7 @@ describe("TerminalController", () => {
 	const recordAgentFailure = vi.fn();
 	const notifyChange = vi.fn();
 	const findContextByFeatureId = vi.fn();
+	const getAgent = vi.fn();
 	const adoptSession = vi.fn();
 	const createCommand = vi.fn();
 	const configureSession = vi.fn();
@@ -111,6 +112,7 @@ describe("TerminalController", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		vi.mocked(exec).mockImplementation(() => "");
 		onDidCloseTerminalMock.mockImplementation(((
 			callback: typeof closedTerminalHandler,
 		) => {
@@ -124,8 +126,9 @@ describe("TerminalController", () => {
 			return { dispose: vi.fn() };
 		}) as never);
 		findContextByFeatureId.mockReturnValue({
-			agentManager: { markAgentStarted, recordAgentFailure },
+			agentManager: { getAgent, markAgentStarted, recordAgentFailure },
 		});
+		getAgent.mockReturnValue({ ...agent, status: "stopped" });
 		adoptSession.mockReturnValue(false);
 		createCommand.mockReturnValue('tmux new-session -d -s "session" "claude"');
 		isSessionAlive.mockReturnValue(true);
@@ -182,6 +185,41 @@ describe("TerminalController", () => {
 		expect(showErrorMessageMock).toHaveBeenCalledWith(
 			"Failed to start Agent 1 with Claude Code. Check that the CLI is installed and launches from /repo/feature-one.",
 		);
+	});
+
+	it("waits for the terminal-open event after createTerminal returns", async () => {
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		controller.createTerminal(feature, agent, 0);
+		const ready = controller.waitForAgentTerminalReady("f1", "a1");
+		let settled = false;
+		void ready.then(() => {
+			settled = true;
+		});
+		await Promise.resolve();
+		expect(settled).toBe(false);
+
+		openedTerminalHandler?.(terminalInstance);
+		await ready;
+		expect(markAgentStarted).toHaveBeenCalledWith("a1", "f1");
+		controller.dispose();
 	});
 
 	it("attaches an existing session without adoption or process creation", () => {

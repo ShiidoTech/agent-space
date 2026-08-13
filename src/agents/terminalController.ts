@@ -33,6 +33,10 @@ export class TerminalController implements vscode.Disposable {
 	private terminalMetadata = new Map<vscode.Terminal, TerminalMetadata>();
 	private disposables: vscode.Disposable[] = [];
 	private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private terminalReadyWaiters = new Map<
+		string,
+		{ resolve: () => void; timer: ReturnType<typeof setTimeout> }
+	>();
 	/** Coalesces concurrent cold reconciliations so two clicks on the same
 	 *  untracked agent can never create two terminals. */
 	private terminalReconciliations = new Map<
@@ -238,6 +242,27 @@ export class TerminalController implements vscode.Disposable {
 			return existing;
 		}
 		return this.createTerminal(feature, agent, agentIndex, resume);
+	}
+
+	waitForAgentTerminalReady(
+		featureId: string,
+		agentId: string,
+		timeoutMs = 30_000,
+	): Promise<void> {
+		const agent = this.projectManager
+			.findContextByFeatureId(featureId)
+			?.agentManager.getAgent(featureId, agentId);
+		if (agent?.status === "running") return Promise.resolve();
+
+		const previous = this.terminalReadyWaiters.get(agentId);
+		if (previous) clearTimeout(previous.timer);
+		return new Promise<void>((resolve) => {
+			const timer = setTimeout(() => {
+				this.terminalReadyWaiters.delete(agentId);
+				resolve();
+			}, timeoutMs);
+			this.terminalReadyWaiters.set(agentId, { resolve, timer });
+		});
 	}
 
 	/**
@@ -644,6 +669,11 @@ export class TerminalController implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		for (const waiter of this.terminalReadyWaiters.values()) {
+			clearTimeout(waiter.timer);
+			waiter.resolve();
+		}
+		this.terminalReadyWaiters.clear();
 		for (const d of this.disposables) {
 			d.dispose();
 		}
@@ -791,6 +821,12 @@ export class TerminalController implements vscode.Disposable {
 		const ctx = this.projectManager.findContextByFeatureId(metadata.featureId);
 		if (!ctx) return;
 		ctx.agentManager.markAgentStarted(metadata.id, metadata.featureId);
+		const waiter = this.terminalReadyWaiters.get(metadata.id);
+		if (waiter) {
+			clearTimeout(waiter.timer);
+			this.terminalReadyWaiters.delete(metadata.id);
+			waiter.resolve();
+		}
 		if (metadata.justLaunched && metadata.feature && metadata.agent) {
 			this.afterLaunchCallback?.(metadata.feature, metadata.agent);
 		}
