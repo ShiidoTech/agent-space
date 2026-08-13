@@ -1256,6 +1256,20 @@ export async function activate(
 						unmarkInProgress: (id) => {
 							finishInProgress.delete(id);
 						},
+						openWorktree: (worktreePath) => {
+							void vscode.commands.executeCommand(
+								"vscode.openFolder",
+								vscode.Uri.file(worktreePath),
+								{ forceNewWindow: true },
+							);
+						},
+						removeWorktreeResidue: (worktreePath) => {
+							const result = ctx.featureManager.removeWorktreeResidue(worktreePath);
+							return {
+								removed: result.deleted,
+								reason: result.reasons.join(" ") || undefined,
+							};
+						},
 					},
 					{
 						showInformationMessage: (message) =>

@@ -197,6 +197,51 @@ describe("runFeatureFinish command flow", () => {
 		expect(inProgress.has("f1")).toBe(false);
 	});
 
+	it("offers explicit residue removal without forgetting the feature", async () => {
+		const { deps } = buildDeps({
+			removeWorktreeResidue: vi.fn(() => ({ removed: true })),
+		});
+		deps.assess = () => ({
+			checks: [
+				{
+					kind: "feature",
+					worktreePath: "/repo/.worktrees/f1",
+					disposition: "residue",
+					safe: false,
+					forceable: false,
+					requiresForce: false,
+					reasons: ["files remain on disk"],
+				},
+			],
+			reasons: ["files remain on disk"],
+			safe: false,
+			forceable: false,
+			fingerprint: "residue",
+		});
+		const { ui } = buildUi({ confirmed: "Remove residue" });
+		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
+			typeof vi.fn
+		>;
+		getSnapshot.mockReturnValue({
+			integration: { status: "unknown", reason: "integration_unknown", evidence: {} },
+		});
+		const forget = vi.fn();
+		const ctx = {
+			project: { repoPath: "/repo" },
+			agentManager: { getAgents: () => [] },
+			serviceManager: { getServices: () => [] },
+			featureManager: { forgetFinishedFeature: forget },
+		} as never;
+
+		const outcome = await runFeatureFinish(ctx, feature(), deps, ui);
+
+		expect(outcome.status).toBe("blocked");
+		expect(deps.removeWorktreeResidue).toHaveBeenCalledWith(
+			"/repo/.worktrees/f1",
+		);
+		expect(forget).not.toHaveBeenCalled();
+	});
+
 	it("cancels cleanly when the user does not confirm and does not touch metadata", async () => {
 		const { deps, inProgress } = buildDeps();
 		deps.assess = () => ({
