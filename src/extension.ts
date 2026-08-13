@@ -725,53 +725,60 @@ export async function activate(
 					await activateFeatureInCurrentWindow(feature.id);
 					// Let Git setup run while the optional agent choice is displayed.
 					const provisioning = ctx.featureManager.provisionFeature(feature.id);
-
-					const initialTool = toolRegistry.getPreferredAvailableTool(
-						ctx.config,
-					);
-					let launchInitialAgent = false;
-					let initialAgent:
-						| ReturnType<typeof ctx.agentManager.createAgent>
-						| undefined;
-					if (initialTool) {
-						const launchNow = await vscode.window.showQuickPick(
-							[
-								{
-									label: `Launch ${initialTool.name} now`,
-									description: `Start the agent immediately (uses ${initialTool.name})`,
-									value: true as const,
-								},
-								{
-									label: "Create feature without agent",
-									description:
-										"No tool session is started; add an agent later with 'Add Agent'",
-									value: false as const,
-								},
-							],
-							{
-								placeHolder: `Launch ${initialTool.name} now?`,
-							},
-						);
-						launchInitialAgent = launchNow?.value === true;
-						if (launchInitialAgent) {
-							initialAgent = ctx.agentManager.createAgent(
-								feature,
-								initialTool.id,
+					await vscode.window.withProgress(
+						{
+							location: vscode.ProgressLocation.Notification,
+							title: `Creating feature "${feature.name}"…`,
+							cancellable: false,
+						},
+						async (progress) => {
+							progress.report({ message: "Creating branch and worktree…" });
+							const initialTool = toolRegistry.getPreferredAvailableTool(
+								ctx.config,
 							);
-							ctx.agentManager.beginAgentStartup(
-								initialAgent.id,
-								feature.id,
-								true,
-							);
-							projectManager.notifyChange();
-						}
-					} else {
-						vscode.window.showErrorMessage(
-							"Feature created, but no coding tools are available. Add an agent later with 'Add Agent'.",
-						);
-					}
-					void provisioning
-						.then(() => {
+							let launchInitialAgent = false;
+							let initialAgent:
+								| ReturnType<typeof ctx.agentManager.createAgent>
+								| undefined;
+							if (initialTool) {
+								const launchNow = await vscode.window.showQuickPick(
+									[
+										{
+											label: `Launch ${initialTool.name} now`,
+											description: `Start the agent immediately (uses ${initialTool.name})`,
+											value: true as const,
+										},
+										{
+											label: "Create feature without agent",
+											description:
+												"No tool session is started; add an agent later with 'Add Agent'",
+											value: false as const,
+										},
+									],
+									{
+										placeHolder: `Launch ${initialTool.name} now?`,
+									},
+								);
+								launchInitialAgent = launchNow?.value === true;
+								if (launchInitialAgent) {
+									initialAgent = ctx.agentManager.createAgent(
+										feature,
+										initialTool.id,
+									);
+									ctx.agentManager.beginAgentStartup(
+										initialAgent.id,
+										feature.id,
+										true,
+									);
+									projectManager.notifyChange();
+								}
+							} else {
+								vscode.window.showErrorMessage(
+									"Feature created, but no coding tools are available. Add an agent later with 'Add Agent'.",
+								);
+							}
+							await provisioning;
+							progress.report({ message: "Feature worktree ready" });
 							if (launchInitialAgent && initialAgent) {
 								const agents = ctx.agentManager.getAgents(feature.id);
 								terminalController.createTerminal(
@@ -782,12 +789,8 @@ export async function activate(
 							}
 							sidebarProvider.refresh();
 							HomePanel.refreshAll();
-						})
-						.catch((error) =>
-							vscode.window.showErrorMessage(
-								`Feature setup failed: ${error instanceof Error ? error.message : String(error)}`,
-							),
-						);
+						},
+					);
 				} catch (err) {
 					const msg =
 						err instanceof Error ? err.message : "Failed to create feature";
@@ -878,28 +881,50 @@ export async function activate(
 				if (!toolPick) return;
 
 				try {
-					const agents = ctx.agentManager.getAgents(featureId);
-					const agent = ctx.agentManager.createAgent(feature, toolPick.toolId);
-					ctx.agentManager.beginAgentStartup(agent.id, featureId);
-					sidebarProvider.refresh();
-					HomePanel.refreshAll();
-					// Let the Feature page paint the materialized agent and its
-					// startup indicator before tmux/provider setup can block.
-					setTimeout(() => {
-						try {
-							terminalController.createTerminal(feature, agent, agents.length);
-						} catch (err) {
-							const message =
-								err instanceof Error
-									? err.message
-									: "Failed to create agent terminal";
-							ctx.agentManager.recordAgentFailure(agent.id, featureId, message);
-							projectManager.notifyChange();
-							void vscode.window.showErrorMessage(
-								`Add agent failed: ${message}`,
+					await vscode.window.withProgress(
+						{
+							location: vscode.ProgressLocation.Notification,
+							title: `Starting agent "${toolPick.label}"…`,
+							cancellable: false,
+						},
+						async (progress) => {
+							const agents = ctx.agentManager.getAgents(featureId);
+							const agent = ctx.agentManager.createAgent(
+								feature,
+								toolPick.toolId,
 							);
-						}
-					}, 0);
+							ctx.agentManager.beginAgentStartup(agent.id, featureId);
+							sidebarProvider.refresh();
+							HomePanel.refreshAll();
+							progress.report({ message: "Starting provider session…" });
+							// Let the Feature page paint the materialized agent and its
+							// startup indicator before tmux/provider setup can block.
+							await new Promise<void>((resolve) => setTimeout(resolve, 0));
+							try {
+								const terminal = terminalController.createTerminal(
+									feature,
+									agent,
+									agents.length,
+								);
+								if (!terminal) return;
+								progress.report({ message: "Agent terminal ready" });
+							} catch (err) {
+								const message =
+									err instanceof Error
+										? err.message
+										: "Failed to create agent terminal";
+								ctx.agentManager.recordAgentFailure(
+									agent.id,
+									featureId,
+									message,
+								);
+								projectManager.notifyChange();
+								void vscode.window.showErrorMessage(
+									`Add agent failed: ${message}`,
+								);
+							}
+						},
+					);
 				} catch (err) {
 					const message =
 						err instanceof Error ? err.message : "Failed to create agent";
