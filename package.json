@@ -3,7 +3,7 @@
 	"displayName": "Agent Space",
 	"publisher": "ShiidoTech",
 	"description": "Use different coding agents on the same feature with isolated Git worktrees and persistent sessions in VS Code",
-	"version": "0.6.2",
+	"version": "0.6.3",
 	"agentSpaceBuild": 2,
 	"icon": "media/marketplace/icon.png",
 	"license": "MIT",
