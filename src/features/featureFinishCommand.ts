@@ -165,7 +165,6 @@ export async function runFeatureFinish(
 							{ modal: true },
 							...(deps.openWorktree ? ["Inspect residue"] : []),
 							...(deps.removeWorktreeResidue ? ["Remove residue"] : []),
-							"Cancel",
 						);
 						if (action === "Inspect residue") {
 							deps.openWorktree?.(residue.worktreePath);
@@ -201,7 +200,6 @@ export async function runFeatureFinish(
 					`Finish feature "${feature.name}"?\n\nThis stops its ${ctx.agentManager.getAgents(feature.id).length} agent(s) and ${ctx.serviceManager.getServices(feature.id).length} service(s), removes ${assessment.checks.length} worktree(s), then removes the Agent Space feature record. Git branches are preserved.${risks}`,
 					{ modal: true },
 					action,
-					"Cancel",
 				);
 				if (confirm !== action) return { status: "cancelled" };
 

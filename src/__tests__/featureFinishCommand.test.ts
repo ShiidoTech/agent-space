@@ -380,6 +380,11 @@ describe("runFeatureFinish command flow", () => {
 		expect(spy.reports).toContain("Checking feature…");
 		expect(spy.reports).toContain("Removing worktrees…");
 		expect(spy.reports).toContain("Finalizing…");
+		expect(ui.showWarningMessage).toHaveBeenCalledWith(
+		expect.stringContaining('Finish feature "f1"?'),
+		expect.objectContaining({ modal: true }),
+		"Finish Feature",
+	);
 		expect(forget).toHaveBeenCalledWith("f1");
 		expect(deps.projectManager.notifyChange).toHaveBeenCalled();
 		expect(deps.sidebarProvider.refresh).toHaveBeenCalled();
