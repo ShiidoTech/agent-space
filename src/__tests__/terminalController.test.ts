@@ -93,6 +93,7 @@ describe("TerminalController", () => {
 	const resolveAgentTool = vi.fn();
 	const buildLaunchCommand = vi.fn();
 	const buildResumeLaunchCommand = vi.fn();
+	const buildStrictResumeLaunchCommand = vi.fn();
 	let closedTerminalHandler:
 		| ((terminal: {
 				show: ReturnType<typeof vi.fn>;
@@ -137,6 +138,7 @@ describe("TerminalController", () => {
 		});
 		buildLaunchCommand.mockReturnValue("claude");
 		buildResumeLaunchCommand.mockReturnValue("claude --resume session-1");
+		buildStrictResumeLaunchCommand.mockReturnValue("claude --resume session-1");
 		terminalInstance = { show: vi.fn(), dispose: vi.fn(), hide: vi.fn() };
 		createTerminalMock.mockReturnValue(terminalInstance);
 		showErrorMessageMock.mockResolvedValue(undefined);
@@ -158,6 +160,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -198,6 +201,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -234,6 +238,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -269,6 +274,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -299,6 +305,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -321,6 +328,131 @@ describe("TerminalController", () => {
 		expect(notifyChange).toHaveBeenCalledTimes(1);
 	});
 
+	it("resumes a started agent with the strict resume command when the session is provable", () => {
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		vi.mocked(exec).mockReturnValue("");
+
+		const terminal = controller.createTerminal(
+			feature,
+			{ ...agent, hasStarted: true },
+			0,
+			true,
+		);
+
+		expect(buildStrictResumeLaunchCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ id: "claude" }),
+			"session-1",
+		);
+		expect(buildLaunchCommand).not.toHaveBeenCalled();
+		expect(terminal).toBe(terminalInstance);
+		expect(showErrorMessageMock).not.toHaveBeenCalled();
+	});
+
+	it("blocks instead of silently launching fresh when no genuine resume can be proven", () => {
+		buildStrictResumeLaunchCommand.mockReturnValue(undefined);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		const terminal = controller.createTerminal(
+			feature,
+			{ ...agent, hasStarted: true, sessionId: null },
+			0,
+			true,
+		);
+
+		expect(terminal).toBeUndefined();
+		expect(createTerminalMock).not.toHaveBeenCalled();
+		expect(vi.mocked(exec)).not.toHaveBeenCalled();
+		expect(buildLaunchCommand).not.toHaveBeenCalled();
+		expect(recordAgentFailure).toHaveBeenCalledWith(
+			"a1",
+			"f1",
+			'Cannot resume "Agent 1": no genuine Claude Code session could be proven for it. Close this agent and start a new one to continue.',
+			undefined,
+		);
+		expect(showErrorMessageMock).toHaveBeenCalledWith(
+			'Cannot resume "Agent 1": no genuine Claude Code session could be proven for it. Close this agent and start a new one to continue.',
+		);
+	});
+
+	it("blocks the async reopen path the same way when no genuine resume can be proven", async () => {
+		buildStrictResumeLaunchCommand.mockReturnValue(undefined);
+		const isSessionAliveAsync = vi.fn();
+		const adoptSessionAsync = vi.fn().mockResolvedValue(false);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				isSessionAliveAsync,
+				adoptSessionAsync,
+				getPaneStatus,
+			} as never,
+			{
+				resolveAgentTool,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		const terminal = await controller.focusOrCreateTerminalAsync(
+			feature,
+			{ ...agent, hasStarted: true, sessionId: null },
+			0,
+			true,
+		);
+
+		expect(terminal).toBeUndefined();
+		expect(vi.mocked(execAsync)).not.toHaveBeenCalled();
+		expect(vi.mocked(exec)).not.toHaveBeenCalled();
+		expect(createTerminalMock).not.toHaveBeenCalled();
+		expect(recordAgentFailure).toHaveBeenCalledWith(
+			"a1",
+			"f1",
+			'Cannot resume "Agent 1": no genuine Claude Code session could be proven for it. Close this agent and start a new one to continue.',
+			undefined,
+		);
+	});
+
 	it("records and surfaces unexpected agent exits after the terminal closes", () => {
 		const sessionAliveMock = vi
 			.fn()
@@ -341,6 +473,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -399,6 +532,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 
@@ -659,6 +793,7 @@ describe("TerminalController", () => {
 				resolveAgentTool,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
 			} as never,
 		);
 

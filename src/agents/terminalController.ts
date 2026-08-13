@@ -118,20 +118,44 @@ export class TerminalController implements vscode.Disposable {
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
-			try {
-				const baseCommand = shouldResume
-					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
-					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
-				// Fresh launches get the project's operational knowledge note so
-				// the agent's launch context shows which instructions/runbooks
-				// were made available. Resume/attach launches stay quiet.
-				const launchContextNote = shouldResume
-					? undefined
-					: this.buildAgentLaunchNote(feature);
-				const launchCommand = this.withLaunchContextNote(
-					baseCommand,
-					launchContextNote,
+			let baseCommand: string;
+			if (shouldResume) {
+				// A silent fresh launch here would drop the agent into a brand-new
+				// empty conversation while the user believes they are resuming one
+				// — the same failure mode runtimeRestorer's strict resume exists to
+				// prevent. Apply the same fail-closed guarantee to the manual click
+				// path: block explicitly instead of guessing.
+				const resumeCommand = this.toolRegistry.buildStrictResumeLaunchCommand(
+					tool,
+					agent.sessionId,
 				);
+				if (!resumeCommand) {
+					const message = this.buildResumeBlockedMessage(
+						agent.name,
+						tool.name,
+					);
+					this.recordAgentFailure(feature.id, agent.id, message);
+					void vscode.window.showErrorMessage(message);
+					return undefined;
+				}
+				baseCommand = resumeCommand;
+			} else {
+				baseCommand = this.toolRegistry.buildLaunchCommand(
+					tool,
+					agent.sessionId,
+				);
+			}
+			// Fresh launches get the project's operational knowledge note so
+			// the agent's launch context shows which instructions/runbooks
+			// were made available. Resume/attach launches stay quiet.
+			const launchContextNote = shouldResume
+				? undefined
+				: this.buildAgentLaunchNote(feature);
+			const launchCommand = this.withLaunchContextNote(
+				baseCommand,
+				launchContextNote,
+			);
+			try {
 				// Snapshot the provider's existing sessions for this directory
 				// before the CLI starts, so a session created by THIS launch is the
 				// only one that can later be attributed to the agent.
@@ -295,17 +319,39 @@ export class TerminalController implements vscode.Disposable {
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
 			const shouldResume = resume && agent.hasStarted === true;
-			try {
-				const baseCommand = shouldResume
-					? this.toolRegistry.buildResumeLaunchCommand(tool, agent.sessionId)
-					: this.toolRegistry.buildLaunchCommand(tool, agent.sessionId);
-				const launchContextNote = shouldResume
-					? undefined
-					: this.buildAgentLaunchNote(feature);
-				const launchCommand = this.withLaunchContextNote(
-					baseCommand,
-					launchContextNote,
+			let baseCommand: string;
+			if (shouldResume) {
+				// Same fail-closed guarantee as the sync path: never silently drop
+				// the user into a fresh empty conversation when a genuine resume
+				// cannot be proven.
+				const resumeCommand = this.toolRegistry.buildStrictResumeLaunchCommand(
+					tool,
+					agent.sessionId,
 				);
+				if (!resumeCommand) {
+					const message = this.buildResumeBlockedMessage(
+						agent.name,
+						tool.name,
+					);
+					this.recordAgentFailure(feature.id, agent.id, message);
+					void vscode.window.showErrorMessage(message);
+					return undefined;
+				}
+				baseCommand = resumeCommand;
+			} else {
+				baseCommand = this.toolRegistry.buildLaunchCommand(
+					tool,
+					agent.sessionId,
+				);
+			}
+			const launchContextNote = shouldResume
+				? undefined
+				: this.buildAgentLaunchNote(feature);
+			const launchCommand = this.withLaunchContextNote(
+				baseCommand,
+				launchContextNote,
+			);
+			try {
 				// Snapshot the provider's existing sessions for this directory
 				// before the CLI starts — identical ordering to the sync path —
 				// so a session created by THIS launch is the only one that can
@@ -622,6 +668,16 @@ export class TerminalController implements vscode.Disposable {
 		cwd: string,
 	): string {
 		return `Failed to start ${agentName} with ${toolName}. Check that the CLI is installed and launches from ${cwd}.`;
+	}
+
+	/**
+	 * Shown when a resume was requested but no genuine ${toolName} resume
+	 * could be proven for the agent's persisted session (no session id, no
+	 * resume capability, or no resume args) — the same condition
+	 * runtimeRestorer reports as `blocked`. Never silently launches fresh.
+	 */
+	private buildResumeBlockedMessage(agentName: string, toolName: string): string {
+		return `Cannot resume "${agentName}": no genuine ${toolName} session could be proven for it. Close this agent and start a new one to continue.`;
 	}
 
 	/**
