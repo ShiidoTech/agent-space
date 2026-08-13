@@ -199,11 +199,10 @@ export class FeatureStateCoordinator implements Disposable {
 		if (this.disposed) return Promise.resolve();
 		if (this.inFlight) return this.inFlight;
 		this.inFlight = (async () => {
-			await this.reconcileOnce();
-			if (this.reconcileAfterFlight && !this.disposed) {
+			do {
 				this.reconcileAfterFlight = false;
 				await this.reconcileOnce();
-			}
+			} while (this.reconcileAfterFlight && !this.disposed);
 		})().finally(() => {
 			this.inFlight = undefined;
 		});

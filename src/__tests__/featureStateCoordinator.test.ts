@@ -331,6 +331,24 @@ describe("FeatureStateCoordinator", () => {
 		expect(inspect).toHaveBeenCalledTimes(2);
 	});
 
+	it("drains an invalidation that arrives during the queued second pass", async () => {
+		let coordinator: FeatureStateCoordinator;
+		let calls = 0;
+		const inspect = vi.fn(
+			async ({ featureBranch }: { featureBranch: string }) => {
+				calls += 1;
+				if (calls === 1 || calls === 3) coordinator.invalidate("f1");
+				return git(featureBranch === "main" ? baseFeature() : feature());
+			},
+		);
+		const fixture = setup(inspect);
+		coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcile();
+
+		expect(inspect).toHaveBeenCalledTimes(6);
+		coordinator.dispose();
+	});
+
 	it("publishes local snapshots without waiting for a slow remote head", async () => {
 		const fixture = setup();
 		const remoteNeverResolves = new Promise<never>(() => undefined);
@@ -741,8 +759,7 @@ describe("FeatureStateCoordinator", () => {
 					pulls: [
 						{
 							number: 1203,
-							html_url:
-								"https://github.com/ShiidoTech/agent-space/pull/1203",
+							html_url: "https://github.com/ShiidoTech/agent-space/pull/1203",
 							state: "closed" as const,
 							merged: true,
 							merged_at: "2026-08-12T10:00:00.000Z",
@@ -844,21 +861,23 @@ describe("FeatureStateCoordinator", () => {
 				},
 			],
 		};
-		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
-			if (featureBranch === "dev/improvements") {
-				return {
-					...git(active),
-					feature: known({ ref: "dev/improvements", sha: activeSha }),
-					head: known({ ref: "dev/improvements", sha: activeSha }),
-					featureInBase: known({
-						ancestor: { ref: "dev/improvements", sha: activeSha },
-						descendant: { ref: "main", sha: "3".repeat(40) },
-						isAncestor: false,
-					}),
-				};
-			}
-			return git(featureBranch === "main" ? baseFeature() : feature());
-		});
+		const inspect = vi.fn(
+			async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "dev/improvements") {
+					return {
+						...git(active),
+						feature: known({ ref: "dev/improvements", sha: activeSha }),
+						head: known({ ref: "dev/improvements", sha: activeSha }),
+						featureInBase: known({
+							ancestor: { ref: "dev/improvements", sha: activeSha },
+							descendant: { ref: "main", sha: "3".repeat(40) },
+							isAncestor: false,
+						}),
+					};
+				}
+				return git(featureBranch === "main" ? baseFeature() : feature());
+			},
+		);
 		const fixture = setup(inspect);
 		fixture.setFeatures([active]);
 		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
@@ -890,8 +909,7 @@ describe("FeatureStateCoordinator", () => {
 					pulls: [
 						{
 							number: 1203,
-							html_url:
-								"https://github.com/ShiidoTech/agent-space/pull/1203",
+							html_url: "https://github.com/ShiidoTech/agent-space/pull/1203",
 							state: "closed" as const,
 							merged: true,
 							merged_at: "2026-08-12T10:00:00.000Z",
@@ -978,21 +996,23 @@ describe("FeatureStateCoordinator", () => {
 				},
 			],
 		};
-		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
-			if (featureBranch === "dev/improvements") {
-				return {
-					...git(active),
-					feature: known({ ref: "dev/improvements", sha: activeSha }),
-					head: known({ ref: "dev/improvements", sha: activeSha }),
-					featureInBase: known({
-						ancestor: { ref: "dev/improvements", sha: activeSha },
-						descendant: { ref: "main", sha: "3".repeat(40) },
-						isAncestor: false,
-					}),
-				};
-			}
-			return git(featureBranch === "main" ? baseFeature() : feature());
-		});
+		const inspect = vi.fn(
+			async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "dev/improvements") {
+					return {
+						...git(active),
+						feature: known({ ref: "dev/improvements", sha: activeSha }),
+						head: known({ ref: "dev/improvements", sha: activeSha }),
+						featureInBase: known({
+							ancestor: { ref: "dev/improvements", sha: activeSha },
+							descendant: { ref: "main", sha: "3".repeat(40) },
+							isAncestor: false,
+						}),
+					};
+				}
+				return git(featureBranch === "main" ? baseFeature() : feature());
+			},
+		);
 		const fixture = setup(inspect);
 		fixture.setFeatures([active]);
 		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
@@ -1014,8 +1034,7 @@ describe("FeatureStateCoordinator", () => {
 					pulls: [
 						{
 							number: 1203,
-							html_url:
-								"https://github.com/ShiidoTech/agent-space/pull/1203",
+							html_url: "https://github.com/ShiidoTech/agent-space/pull/1203",
 							state: "closed" as const,
 							merged: true,
 							merged_at: "2026-08-12T10:00:00.000Z",
@@ -1107,21 +1126,23 @@ describe("FeatureStateCoordinator", () => {
 				},
 			],
 		};
-		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
-			if (featureBranch === "dev/improvements") {
-				return {
-					...git(active),
-					feature: known({ ref: "dev/improvements", sha: activeSha }),
-					head: known({ ref: "dev/improvements", sha: activeSha }),
-					featureInBase: known({
-						ancestor: { ref: "dev/improvements", sha: activeSha },
-						descendant: { ref: "main", sha: "3".repeat(40) },
-						isAncestor: false,
-					}),
-				};
-			}
-			return git(featureBranch === "main" ? baseFeature() : feature());
-		});
+		const inspect = vi.fn(
+			async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "dev/improvements") {
+					return {
+						...git(active),
+						feature: known({ ref: "dev/improvements", sha: activeSha }),
+						head: known({ ref: "dev/improvements", sha: activeSha }),
+						featureInBase: known({
+							ancestor: { ref: "dev/improvements", sha: activeSha },
+							descendant: { ref: "main", sha: "3".repeat(40) },
+							isAncestor: false,
+						}),
+					};
+				}
+				return git(featureBranch === "main" ? baseFeature() : feature());
+			},
+		);
 		const fixture = setup(inspect);
 		fixture.setFeatures([active]);
 		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
@@ -1144,8 +1165,7 @@ describe("FeatureStateCoordinator", () => {
 					pulls: [
 						{
 							number: 900,
-							html_url:
-								"https://github.com/ShiidoTech/agent-space/pull/900",
+							html_url: "https://github.com/ShiidoTech/agent-space/pull/900",
 							state: "closed" as const,
 							merged: true,
 							merged_at: "2026-08-11T10:00:00.000Z",
@@ -1162,8 +1182,7 @@ describe("FeatureStateCoordinator", () => {
 					pulls: [
 						{
 							number: 1203,
-							html_url:
-								"https://github.com/ShiidoTech/agent-space/pull/1203",
+							html_url: "https://github.com/ShiidoTech/agent-space/pull/1203",
 							state: "closed" as const,
 							merged: true,
 							merged_at: "2026-08-12T10:00:00.000Z",
