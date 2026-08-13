@@ -175,36 +175,30 @@ export class FeatureGitInspector {
 						path: targetPath,
 					});
 
-		const base = input.baseRef
-			? await this.resolveCommit(input.baseRef, input.repoRoot, "base")
-			: unknown("base_unknown", "No base ref was observed");
-		const feature = await this.resolveCommit(
-			input.featureBranch,
-			input.repoRoot,
-			"feature",
-		);
-		const creationPoint = input.createdFromSha
-			? await this.resolveCommit(
-					input.createdFromSha,
-					input.repoRoot,
-					"creation",
-				)
-			: unknown("creation_point_unknown");
-		const creationPointInFeature = await this.observeAncestry(
-			creationPoint,
-			feature,
-			input.repoRoot,
-		);
-		const featureDelta = await this.compare(base, feature, input.repoRoot);
-		const featureDiff = await this.observeFeatureDiff(
-			base,
-			feature,
-			input.repoRoot,
-		);
-		const upstream = await this.observeUpstream(
-			input.featureBranch,
-			input.repoRoot,
-		);
+		// These reads are independent. Keeping them serial made the first snapshot
+		// unnecessarily expensive, especially for repositories with large graphs.
+		const [base, feature, creationPoint] = await Promise.all([
+			input.baseRef
+				? this.resolveCommit(input.baseRef, input.repoRoot, "base")
+				: Promise.resolve(unknown("base_unknown", "No base ref was observed")),
+			this.resolveCommit(input.featureBranch, input.repoRoot, "feature"),
+			input.createdFromSha
+				? this.resolveCommit(input.createdFromSha, input.repoRoot, "creation")
+				: Promise.resolve(unknown("creation_point_unknown")),
+		]);
+		const [
+			creationPointInFeature,
+			featureDelta,
+			featureDiff,
+			upstream,
+			featureInBase,
+		] = await Promise.all([
+			this.observeAncestry(creationPoint, feature, input.repoRoot),
+			this.compare(base, feature, input.repoRoot),
+			this.observeFeatureDiff(base, feature, input.repoRoot),
+			this.observeUpstream(input.featureBranch, input.repoRoot),
+			this.observeAncestry(feature, base, input.repoRoot),
+		]);
 		const upstreamDivergence =
 			upstream.status === "known" && upstream.value.upstream === null
 				? known(null)
@@ -215,12 +209,6 @@ export class FeatureGitInspector {
 							input.repoRoot,
 						)
 					: upstream;
-		const featureInBase = await this.observeAncestry(
-			feature,
-			base,
-			input.repoRoot,
-		);
-
 		if (worktree.status === "unknown" || !worktree.value.present) {
 			const missing =
 				worktree.status === "unknown"

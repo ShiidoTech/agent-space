@@ -204,6 +204,34 @@ describe("presentFeatureCockpit", () => {
 		});
 	});
 
+	it("does not call work with no commits not started when the worktree changed", () => {
+		const base = snapshot({
+			integration: {
+				status: "known",
+				outcome: "no_feature_commits",
+				evidence: { feature: { ref: "feat/x", sha: SHA.feature } },
+			},
+		});
+		const result = presentFeatureCockpit({
+			...base,
+			git: {
+				...base.git,
+				workingTree: known({
+					staged: [],
+					unstaged: ["src/changed.ts"],
+					untracked: [],
+					conflicted: [],
+				}),
+			},
+		});
+
+		expect(result.summary).toEqual({
+			label: "In progress",
+			tone: "normal",
+			detail: "The worktree contains changes that are not committed yet.",
+		});
+	});
+
 	it("never turns unknown work evidence into clean or zero", () => {
 		const base = snapshot();
 		const result = presentFeatureCockpit({

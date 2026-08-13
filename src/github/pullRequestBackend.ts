@@ -77,7 +77,9 @@ export class HttpGitHubBackend implements PullRequestBackend {
 		try {
 			const result = await execFileAsync("gh", ["auth", "token"], {
 				encoding: "utf8",
-				timeout: 10_000,
+				// Authentication is optional background evidence. Do not let a slow or
+				// unavailable gh installation block the local feature snapshot.
+				timeout: 2_000,
 				windowsHide: true,
 			});
 			const token = result.stdout.trim();

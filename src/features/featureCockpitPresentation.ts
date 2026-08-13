@@ -157,6 +157,19 @@ function presentSummary(
 			detail: `${primaryAlert.summary} — ${primaryAlert.detail}`,
 		};
 	}
+	if (
+		snapshot.git.workingTree.status === "known" &&
+		(snapshot.git.workingTree.value.staged.length > 0 ||
+			snapshot.git.workingTree.value.unstaged.length > 0 ||
+			snapshot.git.workingTree.value.untracked.length > 0 ||
+			snapshot.git.workingTree.value.conflicted.length > 0)
+	) {
+		return {
+			label: "In progress",
+			tone: "normal",
+			detail: "The worktree contains changes that are not committed yet.",
+		};
+	}
 
 	switch (primaryAction.kind) {
 		case "refresh_evidence":
