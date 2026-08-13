@@ -316,6 +316,49 @@ describe("presentFeatureCockpit", () => {
 		});
 	});
 
+	it("presents an explicitly modeled deliveredVia source with neutral tone", () => {
+		const base = snapshot();
+		const deliverySha = "5".repeat(40);
+		const viaSha = "6".repeat(40);
+		const via = {
+			ref: "dev/improvements",
+			sha: viaSha,
+		};
+		const result = presentFeatureCockpit({
+			...base,
+			feature: {
+				...base.feature,
+				branch: "dev/improvements",
+				primaryBranchRef: "fix/1203",
+			},
+			delivery: {
+				branchRef: "fix/1203",
+				head: known({ ref: "fix/1203", sha: deliverySha }),
+				activeRelation: known({
+					ancestor: { ref: "fix/1203", sha: deliverySha },
+					descendant: via,
+					isAncestor: true,
+				}),
+				commitsAfter: known({
+					ancestorSha: deliverySha,
+					descendantSha: viaSha,
+					count: 18,
+				}),
+				deliveredVia: {
+					branchRef: "dev/improvements",
+					head: via,
+					pullNumber: 1203,
+				},
+			},
+		});
+
+		expect(result.delivery.source).toEqual({
+			label: `fix/1203 @${deliverySha.slice(0, 12)}`,
+			tone: "normal",
+			detail: `Delivered via dev/improvements @${viaSha.slice(0, 12)} · PR #1203 · 18 commits on dev/improvements beyond fix/1203`,
+		});
+	});
+
 	it("keeps an unknown continuation relation unknown", () => {
 		const base = snapshot();
 		const result = presentFeatureCockpit({

@@ -154,4 +154,80 @@ describe("AttentionEvaluator", () => {
 			),
 		).toEqual(["agent_runtime_unknown", "service_runtime_unknown"]);
 	});
+
+	it("does not raise continuation_outside_delivery when integration is proven", () => {
+		const deliverySha = "5".repeat(40);
+		const runtime = observeFeatureRuntime({
+			agents: knownRuntime([agent()]),
+			services: knownRuntime([service()]),
+		});
+		const input = {
+			git: git(),
+			runtime,
+			delivery: {
+				branchRef: "fix/1203",
+				head: known({ ref: "fix/1203", sha: deliverySha }),
+				activeRelation: known({
+					ancestor: { ref: "fix/1203", sha: deliverySha },
+					descendant: feature,
+					isAncestor: true,
+				}),
+				commitsAfter: known({
+					ancestorSha: deliverySha,
+					descendantSha: feature.sha,
+					count: 18,
+				}),
+			},
+		};
+		for (const outcome of [
+			"integrated_by_ancestry",
+			"integrated_by_pull_request",
+		] as const) {
+			const problems = evaluateAttention({
+				...input,
+				integration: {
+					status: "known" as const,
+					outcome,
+					evidence: { feature, base },
+				},
+			});
+			expect(problems.map((entry) => entry.code)).not.toContain(
+				"continuation_outside_delivery",
+			);
+		}
+	});
+
+	it("raises continuation_outside_delivery when commits are not proven integrated", () => {
+		const deliverySha = "5".repeat(40);
+		const runtime = observeFeatureRuntime({
+			agents: knownRuntime([agent()]),
+			services: knownRuntime([service()]),
+		});
+		const problems = evaluateAttention({
+			git: git(),
+			runtime,
+			integration: {
+				status: "known",
+				outcome: "not_integrated",
+				evidence: { feature, base },
+			},
+			delivery: {
+				branchRef: "fix/1203",
+				head: known({ ref: "fix/1203", sha: deliverySha }),
+				activeRelation: known({
+					ancestor: { ref: "fix/1203", sha: deliverySha },
+					descendant: feature,
+					isAncestor: true,
+				}),
+				commitsAfter: known({
+					ancestorSha: deliverySha,
+					descendantSha: feature.sha,
+					count: 18,
+				}),
+			},
+		});
+		expect(problems.map((entry) => entry.code)).toContain(
+			"continuation_outside_delivery",
+		);
+	});
 });

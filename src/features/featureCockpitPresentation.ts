@@ -348,6 +348,22 @@ function presentDeliverySource(
 		};
 	}
 	const head = `@${delivery.head.value.sha.slice(0, 12)}`;
+	const via = delivery.deliveredVia;
+	if (via && via.branchRef !== delivery.branchRef) {
+		const count =
+			delivery.commitsAfter.status === "known"
+				? delivery.commitsAfter.value.count
+				: undefined;
+		const beyond =
+			count !== undefined && count > 0
+				? ` · ${count} commit${count === 1 ? "" : "s"} on ${snapshot.feature.branch} beyond ${delivery.branchRef}`
+				: "";
+		return {
+			label: `${delivery.branchRef} ${head}`,
+			tone: "normal",
+			detail: `Delivered via ${via.branchRef} @${via.head.sha.slice(0, 12)} · PR #${via.pullNumber}${beyond}`,
+		};
+	}
 	if (delivery.activeRelation.status === "unknown") {
 		return {
 			label: `${delivery.branchRef} ${head}`,

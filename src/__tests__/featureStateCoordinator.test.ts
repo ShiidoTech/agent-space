@@ -670,4 +670,560 @@ describe("FeatureStateCoordinator", () => {
 				?.attention.some((item) => item.code === "pull_request_head_mismatch"),
 		).toBe(false);
 	});
+
+	it("selects the merged PR from the active branch and models deliveredVia", async () => {
+		const readResult = (stdout: string) => ({
+			argv: [],
+			cwd: "/repo",
+			exitCode: 0,
+			signal: null,
+			stdout,
+			stderr: "",
+		});
+		const activeSha = "7".repeat(40);
+		const deliverySha = "8".repeat(40);
+		const active = {
+			...feature(),
+			branch: "dev/improvements",
+			primaryBranchRef: "fix/1203",
+			branchLinks: [
+				{
+					ref: "fix/1203",
+					role: "primary" as const,
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "feature_created" as const,
+				},
+				{
+					ref: "dev/improvements",
+					role: "continuation" as const,
+					linkedAt: "2026-08-12T09:35:00.000Z",
+					source: "reflog_checkout" as const,
+					relation: {
+						kind: "descends_from" as const,
+						ref: "fix/1203",
+					},
+				},
+			],
+		};
+		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+			if (featureBranch === "dev/improvements") {
+				return {
+					...git(active),
+					feature: known({ ref: "dev/improvements", sha: activeSha }),
+					head: known({ ref: "dev/improvements", sha: activeSha }),
+					featureInBase: known({
+						ancestor: { ref: "dev/improvements", sha: activeSha },
+						descendant: { ref: "main", sha: "3".repeat(40) },
+						isAncestor: false,
+					}),
+				};
+			}
+			return git(featureBranch === "main" ? baseFeature() : feature());
+		});
+		const fixture = setup(inspect);
+		fixture.setFeatures([active]);
+		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
+		fixture.context.gitClient.read = vi.fn(async (args: readonly string[]) => {
+			if (args[0] === "config") {
+				return readResult(
+					"remote.origin.url https://github.com/ShiidoTech/agent-space.git\n",
+				);
+			}
+			if (args[0] === "rev-parse" && args[2]?.startsWith("fix/1203")) {
+				return readResult(`${deliverySha}\n`);
+			}
+			return readResult("main\n");
+		});
+		const listPullRequests = vi.fn(async ({ head }: { head: string }) => {
+			if (head === "dev/improvements") {
+				return {
+					status: "ok" as const,
+					pulls: [
+						{
+							number: 1203,
+							html_url:
+								"https://github.com/ShiidoTech/agent-space/pull/1203",
+							state: "closed" as const,
+							merged: true,
+							merged_at: "2026-08-12T10:00:00.000Z",
+							draft: false,
+							head: { ref: "dev/improvements", sha: activeSha },
+							base: { ref: "main" },
+						},
+					],
+				};
+			}
+			return { status: "ok" as const, pulls: [] };
+		});
+		const backend = {
+			auth: vi.fn(async () => ({
+				state: "authenticated" as const,
+				source: "env" as const,
+				token: "test",
+			})),
+			listPullRequests,
+		} satisfies PullRequestBackend;
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			createGithubBackend: () => backend,
+			referenceBranchRemote: {
+				observe: vi.fn(async () => ({
+					status: "missing" as const,
+					observedAt: "2026-08-12T00:00:00.000Z",
+					provenance: {
+						source: "remote_head" as const,
+						ref: "refs/heads/main",
+						backend: "test",
+					},
+				})),
+			},
+		});
+
+		await coordinator.reconcile();
+
+		expect(listPullRequests).toHaveBeenCalledWith(
+			expect.objectContaining({ head: "dev/improvements" }),
+		);
+		expect(listPullRequests).toHaveBeenCalledWith(
+			expect.objectContaining({ head: "fix/1203" }),
+		);
+		const snapshot = coordinator.getSnapshot("f1");
+		expect(snapshot?.github).toMatchObject({
+			queriedBranch: "dev/improvements",
+			queriedHeadSha: activeSha,
+		});
+		expect(snapshot?.delivery).toMatchObject({
+			branchRef: "fix/1203",
+			deliveredVia: {
+				branchRef: "dev/improvements",
+				head: { ref: "dev/improvements", sha: activeSha },
+				pullNumber: 1203,
+			},
+		});
+		expect(snapshot?.integration).toMatchObject({
+			status: "known",
+			outcome: "integrated_by_pull_request",
+		});
+		expect(
+			snapshot?.attention.some(
+				(item) => item.code === "continuation_outside_delivery",
+			),
+		).toBe(false);
+	});
+
+	it("ignores a merged PR on the active branch when it is not a proven continuation", async () => {
+		const readResult = (stdout: string) => ({
+			argv: [],
+			cwd: "/repo",
+			exitCode: 0,
+			signal: null,
+			stdout,
+			stderr: "",
+		});
+		const activeSha = "7".repeat(40);
+		const deliverySha = "8".repeat(40);
+		const active = {
+			...feature(),
+			branch: "dev/improvements",
+			primaryBranchRef: "fix/1203",
+			branchLinks: [
+				{
+					ref: "fix/1203",
+					role: "primary" as const,
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "feature_created" as const,
+				},
+				{
+					ref: "dev/improvements",
+					role: "continuation" as const,
+					linkedAt: "2026-08-12T09:35:00.000Z",
+					source: "reflog_checkout" as const,
+					relation: {
+						kind: "descends_from" as const,
+						ref: "fix/1203",
+					},
+				},
+			],
+		};
+		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+			if (featureBranch === "dev/improvements") {
+				return {
+					...git(active),
+					feature: known({ ref: "dev/improvements", sha: activeSha }),
+					head: known({ ref: "dev/improvements", sha: activeSha }),
+					featureInBase: known({
+						ancestor: { ref: "dev/improvements", sha: activeSha },
+						descendant: { ref: "main", sha: "3".repeat(40) },
+						isAncestor: false,
+					}),
+				};
+			}
+			return git(featureBranch === "main" ? baseFeature() : feature());
+		});
+		const fixture = setup(inspect);
+		fixture.setFeatures([active]);
+		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
+		// The active branch does NOT descend from the delivery branch, so a PR
+		// merged from it is not proof that the historical work was delivered.
+		fixture.context.featureGitInspector.isCommitAncestor = vi.fn(
+			async (ancestorSha: string, descendantSha: string) =>
+				known({
+					ancestor: { ref: ancestorSha, sha: ancestorSha },
+					descendant: { ref: descendantSha, sha: descendantSha },
+					isAncestor: false,
+				}),
+		);
+		fixture.context.gitClient.read = vi.fn(async (args: readonly string[]) => {
+			if (args[0] === "config") {
+				return readResult(
+					"remote.origin.url https://github.com/ShiidoTech/agent-space.git\n",
+				);
+			}
+			if (args[0] === "rev-parse" && args[2]?.startsWith("fix/1203")) {
+				return readResult(`${deliverySha}\n`);
+			}
+			return readResult("main\n");
+		});
+		const listPullRequests = vi.fn(async ({ head }: { head: string }) => {
+			if (head === "dev/improvements") {
+				return {
+					status: "ok" as const,
+					pulls: [
+						{
+							number: 1203,
+							html_url:
+								"https://github.com/ShiidoTech/agent-space/pull/1203",
+							state: "closed" as const,
+							merged: true,
+							merged_at: "2026-08-12T10:00:00.000Z",
+							draft: false,
+							head: { ref: "dev/improvements", sha: activeSha },
+							base: { ref: "main" },
+						},
+					],
+				};
+			}
+			return { status: "ok" as const, pulls: [] };
+		});
+		const backend = {
+			auth: vi.fn(async () => ({
+				state: "authenticated" as const,
+				source: "env" as const,
+				token: "test",
+			})),
+			listPullRequests,
+		} satisfies PullRequestBackend;
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			createGithubBackend: () => backend,
+			referenceBranchRemote: {
+				observe: vi.fn(async () => ({
+					status: "missing" as const,
+					observedAt: "2026-08-12T00:00:00.000Z",
+					provenance: {
+						source: "remote_head" as const,
+						ref: "refs/heads/main",
+						backend: "test",
+					},
+				})),
+			},
+		});
+
+		await coordinator.reconcile();
+
+		// The active branch is not a proven continuation, so it must not be
+		// considered as a delivery vector at all.
+		expect(listPullRequests).toHaveBeenCalledWith(
+			expect.objectContaining({ head: "fix/1203" }),
+		);
+		expect(listPullRequests).not.toHaveBeenCalledWith(
+			expect.objectContaining({ head: "dev/improvements" }),
+		);
+		const snapshot = coordinator.getSnapshot("f1");
+		expect(snapshot?.delivery).toMatchObject({
+			branchRef: "fix/1203",
+		});
+		expect(snapshot?.delivery?.deliveredVia).toBeUndefined();
+	});
+
+	it("does not model deliveredVia when the continuation PR targets another base", async () => {
+		const readResult = (stdout: string) => ({
+			argv: [],
+			cwd: "/repo",
+			exitCode: 0,
+			signal: null,
+			stdout,
+			stderr: "",
+		});
+		const activeSha = "7".repeat(40);
+		const deliverySha = "8".repeat(40);
+		const active = {
+			...feature(),
+			branch: "dev/improvements",
+			primaryBranchRef: "fix/1203",
+			branchLinks: [
+				{
+					ref: "fix/1203",
+					role: "primary" as const,
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "feature_created" as const,
+				},
+				{
+					ref: "dev/improvements",
+					role: "continuation" as const,
+					linkedAt: "2026-08-12T09:35:00.000Z",
+					source: "reflog_checkout" as const,
+					relation: {
+						kind: "descends_from" as const,
+						ref: "fix/1203",
+					},
+				},
+			],
+		};
+		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+			if (featureBranch === "dev/improvements") {
+				return {
+					...git(active),
+					feature: known({ ref: "dev/improvements", sha: activeSha }),
+					head: known({ ref: "dev/improvements", sha: activeSha }),
+					featureInBase: known({
+						ancestor: { ref: "dev/improvements", sha: activeSha },
+						descendant: { ref: "main", sha: "3".repeat(40) },
+						isAncestor: false,
+					}),
+				};
+			}
+			return git(featureBranch === "main" ? baseFeature() : feature());
+		});
+		const fixture = setup(inspect);
+		fixture.setFeatures([active]);
+		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
+		fixture.context.gitClient.read = vi.fn(async (args: readonly string[]) => {
+			if (args[0] === "config") {
+				return readResult(
+					"remote.origin.url https://github.com/ShiidoTech/agent-space.git\n",
+				);
+			}
+			if (args[0] === "rev-parse" && args[2]?.startsWith("fix/1203")) {
+				return readResult(`${deliverySha}\n`);
+			}
+			return readResult("main\n");
+		});
+		const listPullRequests = vi.fn(async ({ head }: { head: string }) => {
+			if (head === "dev/improvements") {
+				return {
+					status: "ok" as const,
+					pulls: [
+						{
+							number: 1203,
+							html_url:
+								"https://github.com/ShiidoTech/agent-space/pull/1203",
+							state: "closed" as const,
+							merged: true,
+							merged_at: "2026-08-12T10:00:00.000Z",
+							draft: false,
+							head: { ref: "dev/improvements", sha: activeSha },
+							base: { ref: "release" },
+						},
+					],
+				};
+			}
+			return { status: "ok" as const, pulls: [] };
+		});
+		const backend = {
+			auth: vi.fn(async () => ({
+				state: "authenticated" as const,
+				source: "env" as const,
+				token: "test",
+			})),
+			listPullRequests,
+		} satisfies PullRequestBackend;
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			createGithubBackend: () => backend,
+			referenceBranchRemote: {
+				observe: vi.fn(async () => ({
+					status: "missing" as const,
+					observedAt: "2026-08-12T00:00:00.000Z",
+					provenance: {
+						source: "remote_head" as const,
+						ref: "refs/heads/main",
+						backend: "test",
+					},
+				})),
+			},
+		});
+
+		await coordinator.reconcile();
+
+		const snapshot = coordinator.getSnapshot("f1");
+		// The continuation is proven and the PR is merged, but it targeted
+		// another base, so it must not be modeled as the delivery vector.
+		expect(snapshot?.delivery).toMatchObject({
+			branchRef: "fix/1203",
+		});
+		expect(snapshot?.delivery?.deliveredVia).toBeUndefined();
+		expect(snapshot?.integration).toMatchObject({
+			status: "known",
+			outcome: "integrated_to_other_base",
+		});
+		// Merging into another base no longer suppresses the continuation
+		// warning: the work is not proven integrated into the expected base.
+		expect(
+			snapshot?.attention.some(
+				(item) => item.code === "continuation_outside_delivery",
+			),
+		).toBe(true);
+	});
+
+	it("prefers a merged continuation PR matching the active head over a historical merged PR", async () => {
+		const readResult = (stdout: string) => ({
+			argv: [],
+			cwd: "/repo",
+			exitCode: 0,
+			signal: null,
+			stdout,
+			stderr: "",
+		});
+		const activeSha = "7".repeat(40);
+		const deliverySha = "8".repeat(40);
+		const active = {
+			...feature(),
+			branch: "dev/improvements",
+			primaryBranchRef: "fix/1203",
+			branchLinks: [
+				{
+					ref: "fix/1203",
+					role: "primary" as const,
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "feature_created" as const,
+				},
+				{
+					ref: "dev/improvements",
+					role: "continuation" as const,
+					linkedAt: "2026-08-12T09:35:00.000Z",
+					source: "reflog_checkout" as const,
+					relation: {
+						kind: "descends_from" as const,
+						ref: "fix/1203",
+					},
+				},
+			],
+		};
+		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+			if (featureBranch === "dev/improvements") {
+				return {
+					...git(active),
+					feature: known({ ref: "dev/improvements", sha: activeSha }),
+					head: known({ ref: "dev/improvements", sha: activeSha }),
+					featureInBase: known({
+						ancestor: { ref: "dev/improvements", sha: activeSha },
+						descendant: { ref: "main", sha: "3".repeat(40) },
+						isAncestor: false,
+					}),
+				};
+			}
+			return git(featureBranch === "main" ? baseFeature() : feature());
+		});
+		const fixture = setup(inspect);
+		fixture.setFeatures([active]);
+		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
+		fixture.context.gitClient.read = vi.fn(async (args: readonly string[]) => {
+			if (args[0] === "config") {
+				return readResult(
+					"remote.origin.url https://github.com/ShiidoTech/agent-space.git\n",
+				);
+			}
+			if (args[0] === "rev-parse" && args[2]?.startsWith("fix/1203")) {
+				return readResult(`${deliverySha}\n`);
+			}
+			return readResult("main\n");
+		});
+		const listPullRequests = vi.fn(async ({ head }: { head: string }) => {
+			const base = { ref: "main" };
+			if (head === "fix/1203") {
+				return {
+					status: "ok" as const,
+					pulls: [
+						{
+							number: 900,
+							html_url:
+								"https://github.com/ShiidoTech/agent-space/pull/900",
+							state: "closed" as const,
+							merged: true,
+							merged_at: "2026-08-11T10:00:00.000Z",
+							draft: false,
+							head: { ref: "fix/1203", sha: deliverySha },
+							base,
+						},
+					],
+				};
+			}
+			if (head === "dev/improvements") {
+				return {
+					status: "ok" as const,
+					pulls: [
+						{
+							number: 1203,
+							html_url:
+								"https://github.com/ShiidoTech/agent-space/pull/1203",
+							state: "closed" as const,
+							merged: true,
+							merged_at: "2026-08-12T10:00:00.000Z",
+							draft: false,
+							head: { ref: "dev/improvements", sha: activeSha },
+							base,
+						},
+					],
+				};
+			}
+			return { status: "ok" as const, pulls: [] };
+		});
+		const backend = {
+			auth: vi.fn(async () => ({
+				state: "authenticated" as const,
+				source: "env" as const,
+				token: "test",
+			})),
+			listPullRequests,
+		} satisfies PullRequestBackend;
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			createGithubBackend: () => backend,
+			referenceBranchRemote: {
+				observe: vi.fn(async () => ({
+					status: "missing" as const,
+					observedAt: "2026-08-12T00:00:00.000Z",
+					provenance: {
+						source: "remote_head" as const,
+						ref: "refs/heads/main",
+						backend: "test",
+					},
+				})),
+			},
+		});
+
+		await coordinator.reconcile();
+
+		const snapshot = coordinator.getSnapshot("f1");
+		// Both PRs are merged into the expected base, but the continuation PR
+		// proves the exact active head, so it wins as the delivery vector.
+		expect(snapshot?.github).toMatchObject({
+			queriedBranch: "dev/improvements",
+			queriedHeadSha: activeSha,
+		});
+		expect(snapshot?.delivery).toMatchObject({
+			branchRef: "fix/1203",
+			deliveredVia: {
+				branchRef: "dev/improvements",
+				head: { ref: "dev/improvements", sha: activeSha },
+				pullNumber: 1203,
+			},
+		});
+		expect(snapshot?.integration).toMatchObject({
+			status: "known",
+			outcome: "integrated_by_pull_request",
+		});
+		expect(
+			snapshot?.attention.some(
+				(item) => item.code === "continuation_outside_delivery",
+			),
+		).toBe(false);
+	});
 });

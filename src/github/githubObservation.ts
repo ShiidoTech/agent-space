@@ -57,6 +57,8 @@ export interface GitHubKnownObservation extends GitHubObservationShared {
 	readonly queriedHeadSha?: string;
 	/** Agent Space's expected base branch when observed. */
 	readonly expectedBaseRef?: string;
+	/** The branch the PR query was made for; identifies the delivery vector. */
+	readonly queriedBranch?: string;
 	readonly authSource?: "env" | "gh-cli";
 }
 
@@ -79,6 +81,7 @@ export interface GitHubUnknownObservation extends GitHubObservationShared {
 	readonly pulls?: readonly PullRequestObservation[];
 	readonly queriedHeadSha?: string;
 	readonly expectedBaseRef?: string;
+	readonly queriedBranch?: string;
 }
 
 export interface GitHubErrorObservation extends GitHubObservationShared {

@@ -288,11 +288,16 @@ export function evaluateAttention(
 
 	if (!input.isBaseFeature && input.delivery) {
 		const delivery = input.delivery;
+		const provenIntegrated =
+			input.integration.status === "known" &&
+			(input.integration.outcome === "integrated_by_ancestry" ||
+				input.integration.outcome === "integrated_by_pull_request");
 		if (
 			delivery.activeRelation.status === "known" &&
 			delivery.activeRelation.value.isAncestor &&
 			delivery.commitsAfter.status === "known" &&
-			delivery.commitsAfter.value.count > 0
+			delivery.commitsAfter.value.count > 0 &&
+			!provenIntegrated
 		) {
 			problems.push(
 				problem(

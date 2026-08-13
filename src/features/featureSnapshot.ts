@@ -34,6 +34,20 @@ export interface FeatureDeliveryObservation {
 		readonly descendantSha: string;
 		readonly count: number;
 	}>;
+	/**
+	 * Explicit delivery source: the branch through which the delivered work was
+	 * actually carried and proven integrated by a merged pull request. The
+	 * delivery `branchRef` remains the feature's historical branch; `deliveredVia`
+	 * records the branch that GitHub proved as the merged PR head (e.g. an agent
+	 * checked out a continuation branch and delivered there).
+	 */
+	readonly deliveredVia?: FeatureDeliveredVia;
+}
+
+export interface FeatureDeliveredVia {
+	readonly branchRef: string;
+	readonly head: ObservedCommit;
+	readonly pullNumber: number;
 }
 
 export type FeatureSnapshotSource =
