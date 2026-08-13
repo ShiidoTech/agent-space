@@ -63,15 +63,12 @@ export function assessFeatureFinish(
 	const featurePath = path.resolve(feature.worktreePath);
 	let activeFeatureBranch: string | undefined = feature.branch;
 	if (registeredPaths.has(featurePath)) {
-		const observed = ctx.gitClient.readSync(
-			["symbolic-ref", "--quiet", "--short", "HEAD"],
-			{ cwd: feature.worktreePath },
+		const branch = observeRegisteredBranch(
+			ctx,
+			feature.worktreePath,
+			registeredBranches.get(featurePath),
+			feature.branch,
 		);
-		const branch =
-			observed.exitCode === 0 && !observed.error
-				? observed.stdout.trim() || undefined
-				: registeredBranches.get(featurePath) ??
-					(observed.exitCode !== 1 ? feature.branch : undefined);
 		const linked = branch
 			? branch === feature.branch ||
 				(feature.branchLinks?.some((entry) => entry.ref === branch) ?? false)
@@ -143,20 +140,12 @@ export function assessFeatureFinish(
 		const registered = registeredPaths.has(path.resolve(agent.worktreePath));
 		const resolvedAgentPath = path.resolve(agent.worktreePath);
 		const branch = registered
-			? (() => {
-					const observed = ctx.gitClient.readSync(
-						["symbolic-ref", "--quiet", "--short", "HEAD"],
-						{
-					cwd: agent.worktreePath,
-						},
-					);
-					return observed.exitCode === 0 && !observed.error
-						? observed.stdout.trim() || undefined
-						: registeredBranches.get(resolvedAgentPath) ??
-							(observed.exitCode !== 1
-								? ctx.agentManager.getAgentBranchName(feature, agent.id)
-								: undefined);
-				})()
+			? observeRegisteredBranch(
+					ctx,
+					agent.worktreePath,
+					registeredBranches.get(resolvedAgentPath),
+					ctx.agentManager.getAgentBranchName(feature, agent.id),
+				)
 			: undefined;
 		check(
 			"agent",
@@ -203,6 +192,38 @@ export function assessFeatureFinish(
 			integration: evidence.integration,
 		}),
 	};
+}
+
+function observeRegisteredBranch(
+	ctx: ProjectContext,
+	worktreePath: string,
+	inventoryBranch: string | undefined,
+	declaredBranch: string,
+): string | undefined {
+	const symbolic = ctx.gitClient.readSync(
+		["symbolic-ref", "--quiet", "--short", "HEAD"],
+		{ cwd: worktreePath },
+	);
+	if (symbolic.exitCode === 0 && !symbolic.error) {
+		return symbolic.stdout.trim() || undefined;
+	}
+	const current = ctx.gitClient.readSync(["branch", "--show-current"], {
+		cwd: worktreePath,
+	});
+	const currentBranch = current.stdout.trim();
+	if (
+		current.exitCode === 0 &&
+		!current.error &&
+		currentBranch &&
+		!currentBranch.includes("\n") &&
+		!currentBranch.startsWith("worktree ")
+	) {
+		return currentBranch;
+	}
+	if (inventoryBranch) return inventoryBranch;
+	return symbolic.exitCode !== 1 && current.exitCode !== 0
+		? declaredBranch
+		: undefined;
 }
 
 interface FinishDecision {
