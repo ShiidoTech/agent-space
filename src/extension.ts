@@ -1073,7 +1073,6 @@ export async function activate(
 							`Cannot delete agent "${agent.name}" safely:\n\n${safety.reasons.join("\n\n")}\n\nForce deletion may lose work.`,
 							{ modal: true },
 							"Delete Anyway (force)",
-							"Cancel",
 						);
 						if (choice !== "Delete Anyway (force)") return;
 					}
@@ -1775,7 +1774,6 @@ export async function activate(
 					`Unregister project "${pick.label}"?\n\nIts ${features.length} feature${features.length === 1 ? "" : "s"}, worktrees, branches and sessions will be left untouched. Finish Features individually before unregistering if you also want to clean their resources.`,
 					{ modal: true },
 					"Unregister Project",
-					"Cancel",
 				);
 				if (choice !== "Unregister Project") return;
 			}
