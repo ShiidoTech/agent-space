@@ -131,6 +131,11 @@ export async function runFeatureFinish(
 				if (!snapshot) {
 					progress.report({ message: "Checking integration…" });
 					await deps.featureStateCoordinator.reconcile();
+					 snapshot = deps.featureStateCoordinator.getSnapshot(feature.id);
+				}
+				if (snapshot?.integration.status === "unknown") {
+					progress.report({ message: "Refreshing integration evidence…" });
+					await deps.featureStateCoordinator.reconcile();
 					snapshot = deps.featureStateCoordinator.getSnapshot(feature.id);
 				}
 				if (!snapshot) {
