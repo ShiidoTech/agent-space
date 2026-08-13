@@ -70,7 +70,8 @@ export function assessFeatureFinish(
 		const branch =
 			observed.exitCode === 0 && !observed.error
 				? observed.stdout.trim() || undefined
-				: registeredBranches.get(featurePath);
+				: registeredBranches.get(featurePath) ??
+					(observed.exitCode !== 1 ? feature.branch : undefined);
 		const linked = branch
 			? branch === feature.branch ||
 				(feature.branchLinks?.some((entry) => entry.ref === branch) ?? false)
@@ -151,7 +152,10 @@ export function assessFeatureFinish(
 					);
 					return observed.exitCode === 0 && !observed.error
 						? observed.stdout.trim() || undefined
-						: registeredBranches.get(resolvedAgentPath);
+						: registeredBranches.get(resolvedAgentPath) ??
+							(observed.exitCode !== 1
+								? ctx.agentManager.getAgentBranchName(feature, agent.id)
+								: undefined);
 				})()
 			: undefined;
 		check(

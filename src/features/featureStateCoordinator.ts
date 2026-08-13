@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { Disposable } from "vscode";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
 import {
@@ -372,12 +373,13 @@ export class FeatureStateCoordinator implements Disposable {
 		source: FeatureSnapshotSource,
 	): Promise<FeatureSnapshot> {
 		const deliveryBranch = deliveryBranchRef(feature);
+		const inspectionBranch = inspectionBranchRef(feature, projectObservation);
 		const git = await ctx.featureGitInspector
 			.inspect(
 				{
 					repoRoot: ctx.project.repoPath,
 					worktreePath: feature.worktreePath,
-					featureBranch: feature.branch,
+					featureBranch: inspectionBranch,
 					baseRef,
 					...(feature.createdFromSha
 						? { createdFromSha: feature.createdFromSha }
@@ -604,6 +606,27 @@ function deliveryBranchRef(feature: Feature): string {
 		feature.branchLinks?.find((link) => link.role === "primary")?.ref ??
 		feature.branch
 	);
+}
+
+function inspectionBranchRef(
+	feature: Feature,
+	projectObservation: FeatureGitProjectObservation,
+): string {
+	const linked = new Set([
+		feature.branch,
+		...(feature.primaryBranchRef ? [feature.primaryBranchRef] : []),
+		...(feature.branchLinks?.map((link) => link.ref) ?? []),
+	]);
+	if (projectObservation.worktrees.status === "known") {
+		const checkout = projectObservation.worktrees.value.find(
+			(worktree) =>
+				path.resolve(worktree.path) === path.resolve(feature.worktreePath) &&
+				worktree.branchRef &&
+				linked.has(worktree.branchRef),
+		);
+		if (checkout?.branchRef) return checkout.branchRef;
+	}
+	return feature.branch;
 }
 
 /**
