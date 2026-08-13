@@ -273,6 +273,12 @@ function finishDecision(
 		};
 	}
 	if (kind !== "feature") return decisionFromSafety(safety);
+	// When the checkout is already gone, local branch-retention evidence is the
+	// authoritative integration proof. A stale snapshot cannot turn an observed
+	// ancestor relationship into an unknown finish decision.
+	if ("branch" in safety && integration.status === "unknown") {
+		return decisionFromSafety(safety);
+	}
 
 	if (integration.status === "unknown") {
 		return blockedDecision(

@@ -373,6 +373,41 @@ describe("Feature Finish", () => {
 		]);
 	});
 
+	it("uses local branch retention proof when the Feature worktree is absent", () => {
+		const ctx = context("worktree /repo\n");
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+			branch: "feature/player",
+			baseBranch: "v2_ia_first",
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			featureSha: "1".repeat(40),
+			baseSha: "2".repeat(40),
+			hasLocalCommits: false,
+			localCommitCount: 0,
+			unmerged: false,
+			forceable: true,
+			safe: true,
+			reasons: [],
+		});
+
+		const assessment = assessFeatureFinish(
+			ctx,
+			feature(),
+			{
+				integration: {
+					status: "unknown",
+					reason: "ancestry_unknown",
+					evidence: {},
+				},
+			},
+			() => false,
+		);
+
+		expect(assessment.safe).toBe(true);
+		expect(assessment.checks[0].disposition).toBe("already_removed");
+	});
+
 	it("surfaces unique commits on an already absent worktree", () => {
 		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
 			branch: "feat/f1",
