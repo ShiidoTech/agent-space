@@ -349,12 +349,17 @@ export class FeatureStateCoordinator implements Disposable {
 		const delivery = await observeDelivery(ctx, deliveryBranch, git.feature);
 		const deliveryHeadSha =
 			delivery.head.status === "known" ? delivery.head.value.sha : undefined;
+		const activeHeadSha =
+			git.feature.status === "known" ? git.feature.value.sha : undefined;
 		const github = await this.observeGithub(
 			ctx,
+			feature,
 			deliveryBranch,
 			deliveryHeadSha,
+			activeHeadSha,
 			baseRef,
 		);
+		const delivered = withDeliveredVia(delivery, feature, github, git.feature);
 		const mergedHead =
 			github.status === "known" &&
 			github.resolution.outcome === "selected" &&
@@ -371,13 +376,13 @@ export class FeatureStateCoordinator implements Disposable {
 			github,
 			createdFromSha: feature.createdFromSha,
 			mergedHead,
-			delivery,
+			delivery: delivered,
 		});
 		const attention = evaluateAttention({
 			git,
 			github,
 			integration,
-			delivery,
+			delivery: delivered,
 			runtime,
 			source,
 			isBaseFeature,
@@ -387,7 +392,7 @@ export class FeatureStateCoordinator implements Disposable {
 			projectId: ctx.project.id,
 			feature,
 			git,
-			delivery,
+			delivery: delivered,
 			github,
 			integration,
 			runtime,
@@ -397,7 +402,55 @@ export class FeatureStateCoordinator implements Disposable {
 		});
 	}
 
+	/**
+	 * Observe GitHub pull-request evidence for every candidate delivery vector
+	 * and select the strongest proof:
+	 * - `deliveryBranch` is the feature's historical branch (e.g. `fix/1203`);
+	 * - `feature.branch` is the active checkout (e.g. `dev/improvements`), which
+	 *   is where an agent may have actually delivered the work.
+	 * A merged PR targeting the expected base wins; otherwise the delivery
+	 * branch observation is preserved (legacy behavior).
+	 */
 	private async observeGithub(
+		ctx: ProjectContext,
+		feature: Feature,
+		deliveryBranch: string,
+		deliveryHeadSha: string | undefined,
+		activeHeadSha: string | undefined,
+		baseRef: string | undefined,
+	): Promise<GitHubObservation> {
+		const candidates: Array<{
+			branch: string;
+			queriedHeadSha: string | undefined;
+		}> = [];
+		const push = (branch: string, queriedHeadSha: string | undefined) => {
+			if (!candidates.some((candidate) => candidate.branch === branch)) {
+				candidates.push({ branch, queriedHeadSha });
+			}
+		};
+		push(deliveryBranch, deliveryHeadSha);
+		push(feature.branch, activeHeadSha);
+		const observations = await Promise.all(
+			candidates.map((candidate) =>
+				this.observeGithubBranch(
+					ctx,
+					candidate.branch,
+					candidate.queriedHeadSha,
+					baseRef,
+				),
+			),
+		);
+		return selectGithubObservation(
+			deliveryBranch,
+			baseRef,
+			candidates.map((candidate, index) => ({
+				branch: candidate.branch,
+				observation: observations[index],
+			})),
+		);
+	}
+
+	private async observeGithubBranch(
 		ctx: ProjectContext,
 		branch: string,
 		queriedHeadSha: string | undefined,
@@ -479,6 +532,95 @@ function deliveryBranchRef(feature: Feature): string {
 		feature.branchLinks?.find((link) => link.role === "primary")?.ref ??
 		feature.branch
 	);
+}
+
+/**
+ * Model the delivery source explicitly. `delivery.branchRef` stays the
+ * feature's historical branch; `deliveredVia` records the branch GitHub proved
+ * as the merged PR head when that differs from the historical branch (an agent
+ * checked out a continuation branch and delivered there).
+ */
+function withDeliveredVia(
+	delivery: FeatureDeliveryObservation,
+	feature: Feature,
+	github: GitHubObservation,
+	activeHead: GitObservation<ObservedCommit>,
+): FeatureDeliveryObservation {
+	if (
+		github.status !== "known" ||
+		github.resolution.outcome !== "selected" ||
+		github.resolution.pull.state !== "merged" ||
+		activeHead.status !== "known"
+	) {
+		return delivery;
+	}
+	const queriedBranch = github.queriedBranch;
+	if (!queriedBranch || queriedBranch === delivery.branchRef) {
+		return delivery;
+	}
+	const pull = github.resolution.pull;
+	if (!sameSha(pull.headSha, activeHead.value.sha)) {
+		return delivery;
+	}
+	return {
+		...delivery,
+		deliveredVia: {
+			branchRef: queriedBranch,
+			head: activeHead.value,
+			pullNumber: pull.number,
+		},
+	};
+}
+
+/**
+ * Select the strongest GitHub observation among the candidate delivery
+ * vectors. A merged PR targeting the expected base is the strongest delivery
+ * proof; on ties the delivery branch is preserved (legacy behavior).
+ */
+function selectGithubObservation(
+	deliveryBranch: string,
+	expectedBaseRef: string | undefined,
+	candidates: ReadonlyArray<{
+		branch: string;
+		observation: GitHubObservation;
+	}>,
+): GitHubObservation {
+	let best: GitHubObservation | undefined;
+	let bestRank = -1;
+	let bestIsDelivery = false;
+	for (const candidate of candidates) {
+		const rank = githubObservationRank(candidate.observation, expectedBaseRef);
+		const isDelivery = candidate.branch === deliveryBranch;
+		if (
+			rank > bestRank ||
+			(rank === bestRank && best !== undefined && isDelivery && !bestIsDelivery)
+		) {
+			best = candidate.observation;
+			bestRank = rank;
+			bestIsDelivery = isDelivery;
+		}
+	}
+	return best ?? unavailableGithub("unknown");
+}
+
+function githubObservationRank(
+	observation: GitHubObservation,
+	expectedBaseRef: string | undefined,
+): number {
+	if (observation.status !== "known") return 0;
+	if (observation.resolution.outcome !== "selected") return 1;
+	const pull = observation.resolution.pull;
+	if (pull.state === "merged") {
+		return expectedBaseRef === undefined || pull.baseRef === expectedBaseRef
+			? 4
+			: 3;
+	}
+	if (pull.state === "open") return 2;
+	return 1;
+}
+
+function sameSha(left: string, right: string): boolean {
+	return left.toLowerCase() === right.toLowerCase();
 }
 
 async function observeDelivery(
