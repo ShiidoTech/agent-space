@@ -278,6 +278,17 @@ export class FeatureStateCoordinator implements Disposable {
 						this.acceptWorktreeInventory(generation, ctx.project.id, inventory),
 					)
 					.catch(() => undefined);
+			} else if (this.worktreeInventories.has(ctx.project.id)) {
+				// The worktree list can no longer be observed: transition a previously
+				// known inventory to unknown instead of letting it appear stale-known.
+				this.acceptWorktreeInventory(generation, ctx.project.id, {
+					repoPath: ctx.project.repoPath,
+					...(baseRef ? { baseRef } : {}),
+					status: "unknown",
+					reason: "worktrees_unavailable",
+					branches: [],
+					observedAt: new Date().toISOString(),
+				});
 			}
 
 			const observed = await Promise.all(

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FeatureStateCoordinator } from "../features/featureStateCoordinator";
 import type { FeatureGitObservations } from "../git/featureGitObservations";
-import { known } from "../git/featureGitObservations";
+import { known, unknown } from "../git/featureGitObservations";
 import type { PullRequestBackend } from "../github/pullRequestBackend";
 import type {
 	ProjectContext,
@@ -512,6 +512,41 @@ describe("FeatureStateCoordinator", () => {
 		expect(inventory?.branches[0]?.baseRelation).toEqual({
 			status: "unknown",
 			reason: "base_unknown",
+		});
+	});
+
+	it("transitions a known worktree inventory to unknown when worktrees cannot be observed", async () => {
+		const fixture = setup();
+		fixture.setFeatures([]);
+		fixture.context.featureGitInspector.observeProject = vi.fn(async () => ({
+			repository: known({ root: "/repo" }),
+			worktrees: known([
+				{
+					path: "/repo/.worktrees/cockpit",
+					headSha: "2".repeat(40),
+					branchRef: "refs/heads/agent/restore-feature-cockpit",
+					detached: false,
+					bare: false,
+					prunable: false,
+				},
+			]),
+		}));
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcile();
+		await vi.waitFor(() =>
+			expect(coordinator.getProjectWorktreeBranches("p1")?.status).toBe(
+				"known",
+			),
+		);
+
+		fixture.context.featureGitInspector.observeProject = vi.fn(async () => ({
+			repository: known({ root: "/repo" }),
+			worktrees: unknown("git_command_failed", "worktree list failed"),
+		}));
+		await coordinator.reconcile();
+		expect(coordinator.getProjectWorktreeBranches("p1")).toMatchObject({
+			status: "unknown",
+			reason: "worktrees_unavailable",
 		});
 	});
 

@@ -162,6 +162,28 @@ describe("WorktreeBranchObserver", () => {
 		expect(inventory.branches[0].workingTree).toEqual({ status: "clean" });
 	});
 
+	it("classifies a branch fully contained in base as merged, not ahead", async () => {
+		const observer = new WorktreeBranchObserver({
+			git: defaultGit({
+				mergeBase: () => 1,
+				counts: () => "0 4",
+			}),
+			now: () => NOW,
+		});
+		const inventory = await observer.observe({
+			repoPath: "/repo",
+			worktrees: [
+				worktree({
+					path: "/repo/.worktrees/behind",
+					branchRef: "refs/heads/feat/behind",
+					headSha: HEAD_A,
+				}),
+			],
+			baseRef: "main",
+		});
+		expect(inventory.branches[0].baseRelation).toEqual({ status: "merged" });
+	});
+
 	it("skips bare worktrees and detached entries without a branch ref", async () => {
 		const git = defaultGit();
 		const observer = new WorktreeBranchObserver({ git, now: () => NOW });

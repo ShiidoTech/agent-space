@@ -75,25 +75,29 @@ export class WorktreeBranchObserver {
 	): Promise<WorktreeBranchInventory> {
 		const observedAt = this.now().toISOString();
 		const branches: WorktreeBranchState[] = [];
+		const candidates = request.worktrees.filter(
+			(worktree) =>
+				!worktree.bare &&
+				shortBranchRef(worktree.branchRef) !== undefined &&
+				worktree.headSha !== null &&
+				FULL_SHA.test(worktree.headSha),
+		);
+		// Resolve the base commit once per observation instead of once per branch.
+		const baseSha =
+			candidates.length === 0
+				? undefined
+				: await this.resolveBaseSha(request.repoPath, request.baseRef);
 
-		for (const worktree of request.worktrees) {
-			if (worktree.bare) continue;
-			const ref = shortBranchRef(worktree.branchRef);
-			if (!ref || !worktree.headSha || !FULL_SHA.test(worktree.headSha)) {
-				continue;
-			}
+		for (const worktree of candidates) {
+			const ref = shortBranchRef(worktree.branchRef) as string;
 			const [baseRelation, workingTree] = await Promise.all([
-				this.observeBaseRelation(
-					request.repoPath,
-					worktree.headSha,
-					request.baseRef,
-				),
+				this.observeBaseRelation(request.repoPath, worktree.headSha!, baseSha),
 				this.observeWorkingTree(worktree.path),
 			]);
 			branches.push({
 				ref,
 				worktreePath: worktree.path,
-				headSha: worktree.headSha,
+				headSha: worktree.headSha!,
 				detached: worktree.detached,
 				prunable: worktree.prunable,
 				baseRelation,
@@ -113,20 +117,28 @@ export class WorktreeBranchObserver {
 		};
 	}
 
-	private async observeBaseRelation(
+	/** Resolve the base commit once per observation instead of once per branch. */
+	private async resolveBaseSha(
 		repoPath: string,
-		headSha: string,
 		baseRef: string | undefined,
-	): Promise<WorktreeBranchBaseRelation> {
-		if (!baseRef) {
-			return { status: "unknown", reason: "base_unknown" };
-		}
+	): Promise<string | undefined> {
+		if (!baseRef) return undefined;
 		const baseResult = await this.git.read(
 			["rev-parse", "--verify", `${baseRef}^{commit}`],
 			{ cwd: repoPath },
 		);
 		const baseSha = baseResult.stdout.trim();
-		if (!succeeded(baseResult) || !FULL_SHA.test(baseSha)) {
+		return succeeded(baseResult) && FULL_SHA.test(baseSha)
+			? baseSha
+			: undefined;
+	}
+
+	private async observeBaseRelation(
+		repoPath: string,
+		headSha: string,
+		baseSha: string | undefined,
+	): Promise<WorktreeBranchBaseRelation> {
+		if (!baseSha) {
 			return { status: "unknown", reason: "base_unknown" };
 		}
 		if (headSha.toLowerCase() === baseSha.toLowerCase()) {
@@ -163,8 +175,8 @@ export class WorktreeBranchObserver {
 		) {
 			return { status: "unknown", reason: "invalid_divergence_counts" };
 		}
-		if (left === 0) return { status: "ahead", commits: right };
 		if (right === 0) return { status: "ahead", commits: left };
+		if (left === 0) return { status: "merged" };
 		return { status: "diverged", ahead: left, behind: right };
 	}
 
