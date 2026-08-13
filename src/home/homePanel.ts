@@ -419,6 +419,7 @@ export class HomePanel {
 				this.featureStateCoordinator.refreshProjectReferenceHealth();
 				void this.featureStateCoordinator
 					.reconcile()
+					.then(() => this.featureStateCoordinator.reconcile())
 					.then(() => this.refresh());
 				break;
 		}

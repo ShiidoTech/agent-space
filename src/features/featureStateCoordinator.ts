@@ -198,12 +198,13 @@ export class FeatureStateCoordinator implements Disposable {
 	reconcile(): Promise<void> {
 		if (this.disposed) return Promise.resolve();
 		if (this.inFlight) return this.inFlight;
-		this.inFlight = this.reconcileOnce().finally(() => {
-			this.inFlight = undefined;
-			if (this.reconcileAfterFlight && !this.disposed) {
+		this.inFlight = (async () => {
+			do {
 				this.reconcileAfterFlight = false;
-				void this.reconcile();
-			}
+				await this.reconcileOnce();
+			} while (this.reconcileAfterFlight && !this.disposed);
+		})().finally(() => {
+			this.inFlight = undefined;
 		});
 		return this.inFlight;
 	}
@@ -613,7 +614,7 @@ function deliveryBranchRef(feature: Feature): string {
  */
 function withDeliveredVia(
 	delivery: FeatureDeliveryObservation,
-	feature: Feature,
+	_feature: Feature,
 	github: GitHubObservation,
 	activeHead: GitObservation<ObservedCommit>,
 ): FeatureDeliveryObservation {
