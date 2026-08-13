@@ -69,13 +69,10 @@ export function assessFeatureFinish(
 			registeredBranches.get(featurePath),
 			feature.branch,
 		);
-		const linked = branch
-			? branch === feature.branch ||
-				(feature.branchLinks?.some((entry) => entry.ref === branch) ?? false)
-			: false;
-		// A registered worktree is deletable only against its positively observed,
-		// Feature-linked checkout. Unknown or unrelated refs remain fail-closed.
-		activeFeatureBranch = linked ? branch : undefined;
+		// The exact registered Feature worktree identifies the active checkout.
+		// Git safety below still validates the branch ref and ancestry; stale
+		// persisted branch links must not create a false "branch unknown" state.
+		activeFeatureBranch = branch;
 	}
 
 	const check = (

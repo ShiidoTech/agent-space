@@ -178,6 +178,53 @@ describe("Feature Finish", () => {
 		);
 	});
 
+	it("uses an active registered checkout even when persisted links are stale", () => {
+		const stale: Feature = {
+			...feature(),
+			branch: "feat/old-player",
+			branchLinks: [
+				{
+					ref: "feat/old-player",
+					role: "primary",
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "legacy_record",
+				},
+			],
+		};
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockReturnValue({
+				worktreePath: "/worktrees/f1",
+				safe: true,
+				forceable: true,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: true,
+				integrationObserved: true,
+				localCommitsObserved: true,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				workingTreeStatus: "",
+				localCommitCount: 0,
+				featureSha: "1".repeat(40),
+				baseSha: "2".repeat(40),
+				reasons: [],
+			});
+		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
+		ctx.gitClient.readSync = (args: readonly string[]) =>
+			args[0] === "symbolic-ref"
+				? gitResult("feat/current-player\n")
+				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
+
+		const assessment = assessFeatureFinish(ctx, stale, finishEvidence());
+
+		expect(assessment.safe).toBe(true);
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: "feat/current-player" }),
+		);
+	});
+
 	it("uses the branch recorded in the Git worktree inventory when symbolic-ref fails", () => {
 		const deletion = vi
 			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
