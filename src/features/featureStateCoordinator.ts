@@ -612,19 +612,13 @@ function inspectionBranchRef(
 	feature: Feature,
 	projectObservation: FeatureGitProjectObservation,
 ): string {
-	const linked = new Set([
-		feature.branch,
-		...(feature.primaryBranchRef ? [feature.primaryBranchRef] : []),
-		...(feature.branchLinks?.map((link) => link.ref) ?? []),
-	]);
 	if (projectObservation.worktrees.status === "known") {
 		const checkout = projectObservation.worktrees.value.find(
 			(worktree) =>
 				path.resolve(worktree.path) === path.resolve(feature.worktreePath) &&
-				worktree.branchRef &&
-				linked.has(worktree.branchRef),
+				worktree.branchRef,
 		);
-		if (checkout?.branchRef) return checkout.branchRef;
+		if (checkout?.branchRef) return checkout.branchRef.replace(/^refs\/heads\//u, "");
 	}
 	return feature.branch;
 }

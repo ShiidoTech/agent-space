@@ -177,6 +177,43 @@ function baseFeature(): Feature {
 }
 
 describe("FeatureStateCoordinator", () => {
+	it("uses the exact Feature worktree branch even when persisted links are stale", async () => {
+		const fixture = setup();
+		const staleFeature = {
+			...feature(),
+			branch: "feat/old-player",
+			branchLinks: [
+				{
+					ref: "feat/old-player",
+					role: "primary" as const,
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "legacy_record" as const,
+				},
+			],
+		};
+		fixture.context.featureManager.getFeatures = vi.fn(() => [staleFeature]);
+		fixture.context.featureGitInspector.observeProject = vi.fn(async () => ({
+			repository: known({ root: "/repo" }),
+			worktrees: known([
+				{
+					path: "/repo/.worktrees/f1",
+					headSha: "2".repeat(40),
+					branchRef: "refs/heads/feat/current-player",
+					detached: false,
+					bare: false,
+					prunable: false,
+				},
+			]),
+		}));
+
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcile();
+
+		expect(fixture.inspect).toHaveBeenCalledWith(
+			expect.objectContaining({ featureBranch: "feat/current-player" }),
+			expect.anything(),
+		);
+	});
 	it("starts, stops, disposes, and never persists observations", async () => {
 		vi.useFakeTimers();
 		const fixture = setup();
