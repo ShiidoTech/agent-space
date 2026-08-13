@@ -907,6 +907,10 @@ export async function activate(
 									agents.length,
 								);
 								if (!terminal) return;
+								await terminalController.waitForAgentTerminalReady(
+									featureId,
+									agent.id,
+								);
 								progress.report({ message: "Agent terminal ready" });
 							} catch (err) {
 								const message =
