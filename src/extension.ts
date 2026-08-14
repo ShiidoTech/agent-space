@@ -13,6 +13,7 @@ import {
 	shouldCleanupSession,
 } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
+import { configureAgentSpaceDiagnostics } from "./diagnostics/agentSpaceDiagnostics";
 import { runFeatureFinish } from "./features/featureFinishCommand";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
@@ -51,6 +52,9 @@ function shortSessionId(sessionId: string): string {
 export async function activate(
 	context: vscode.ExtensionContext,
 ): Promise<void> {
+	const diagnostics = vscode.window.createOutputChannel("Agent Space Diagnostics");
+	context.subscriptions.push(diagnostics);
+	configureAgentSpaceDiagnostics((message) => diagnostics.appendLine(message));
 	const prerequisites = new PrerequisiteChecker();
 	const { ok, missing } = prerequisites.checkRequired();
 	if (!ok) {
@@ -338,9 +342,16 @@ export async function activate(
 			console.warn(
 				`[agentSpace] ${restoreReport.blocked.length} agent runtime(s) could not be restored after restart; resume them manually.`,
 			);
-			void vscode.window.showInformationMessage(
-				`${restoreReport.blocked.length} agent runtime(s) could not be restored after restart. Open each blocked agent and resume it manually.`,
-			);
+			void vscode.window
+				.showInformationMessage(
+					`${restoreReport.blocked.length} agent runtime(s) could not be restored after restart. Open each blocked agent and resume it manually.`,
+					"Open Agent Space",
+				)
+				.then((choice) => {
+					if (choice === "Open Agent Space") {
+						void vscode.commands.executeCommand("agentSpace.openHome");
+					}
+				});
 		}
 	} catch (error) {
 		console.error(`[agentSpace] runtime restoration failed: ${error}`);
@@ -547,11 +558,11 @@ export async function activate(
 		featureStateCoordinator.onDidChange(() => {
 			if (featureRefreshQueued) return;
 			featureRefreshQueued = true;
-			queueMicrotask(() => {
+			setTimeout(() => {
 				featureRefreshQueued = false;
 				sidebarProvider.refreshState();
 				HomePanel.refreshAll();
-			});
+			}, 150);
 		}),
 	);
 	projectManager.onChange(() => {
@@ -1073,7 +1084,6 @@ export async function activate(
 							`Cannot delete agent "${agent.name}" safely:\n\n${safety.reasons.join("\n\n")}\n\nForce deletion may lose work.`,
 							{ modal: true },
 							"Delete Anyway (force)",
-							"Cancel",
 						);
 						if (choice !== "Delete Anyway (force)") return;
 					}
@@ -1255,6 +1265,20 @@ export async function activate(
 						},
 						unmarkInProgress: (id) => {
 							finishInProgress.delete(id);
+						},
+						openWorktree: (worktreePath) => {
+							void vscode.commands.executeCommand(
+								"vscode.openFolder",
+								vscode.Uri.file(worktreePath),
+								{ forceNewWindow: true },
+							);
+						},
+						removeWorktreeResidue: (worktreePath) => {
+							const result = ctx.featureManager.removeWorktreeResidue(worktreePath);
+							return {
+								removed: result.deleted,
+								reason: result.reasons.join(" ") || undefined,
+							};
 						},
 					},
 					{
@@ -1761,7 +1785,6 @@ export async function activate(
 					`Unregister project "${pick.label}"?\n\nIts ${features.length} feature${features.length === 1 ? "" : "s"}, worktrees, branches and sessions will be left untouched. Finish Features individually before unregistering if you also want to clean their resources.`,
 					{ modal: true },
 					"Unregister Project",
-					"Cancel",
 				);
 				if (choice !== "Unregister Project") return;
 			}

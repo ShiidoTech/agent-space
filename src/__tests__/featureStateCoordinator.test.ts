@@ -177,6 +177,43 @@ function baseFeature(): Feature {
 }
 
 describe("FeatureStateCoordinator", () => {
+	it("uses the exact Feature worktree branch even when persisted links are stale", async () => {
+		const fixture = setup();
+		const staleFeature = {
+			...feature(),
+			branch: "feat/old-player",
+			branchLinks: [
+				{
+					ref: "feat/old-player",
+					role: "primary" as const,
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "legacy_record" as const,
+				},
+			],
+		};
+		fixture.context.featureManager.getFeatures = vi.fn(() => [staleFeature]);
+		fixture.context.featureGitInspector.observeProject = vi.fn(async () => ({
+			repository: known({ root: "/repo" }),
+			worktrees: known([
+				{
+					path: "/repo/.worktrees/f1",
+					headSha: "2".repeat(40),
+					branchRef: "refs/heads/feat/current-player",
+					detached: false,
+					bare: false,
+					prunable: false,
+				},
+			]),
+		}));
+
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcile();
+
+		expect(fixture.inspect).toHaveBeenCalledWith(
+			expect.objectContaining({ featureBranch: "feat/current-player" }),
+			expect.anything(),
+		);
+	});
 	it("starts, stops, disposes, and never persists observations", async () => {
 		vi.useFakeTimers();
 		const fixture = setup();
@@ -664,9 +701,14 @@ describe("FeatureStateCoordinator", () => {
 			expect.objectContaining({ featureBranch: "feat/feature_cockpit" }),
 			expect.anything(),
 		);
-		expect(fixture.context.featureManager.getFeatures).toHaveBeenCalledTimes(1);
+		expect(fixture.context.featureManager.getFeatures).toHaveBeenCalled();
 		expect(listPullRequests).toHaveBeenCalledWith(
 			expect.objectContaining({ head: "feat/audit_and_go" }),
+		);
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+				queriedHeadSha: deliverySha,
+			}),
 		);
 		expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
 			queriedHeadSha: deliverySha,
@@ -802,6 +844,12 @@ describe("FeatureStateCoordinator", () => {
 		);
 		expect(listPullRequests).toHaveBeenCalledWith(
 			expect.objectContaining({ head: "fix/1203" }),
+		);
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+				queriedBranch: "dev/improvements",
+				queriedHeadSha: activeSha,
+			}),
 		);
 		const snapshot = coordinator.getSnapshot("f1");
 		expect(snapshot?.github).toMatchObject({
@@ -1072,6 +1120,11 @@ describe("FeatureStateCoordinator", () => {
 
 		await coordinator.reconcile();
 
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.integration).toMatchObject({
+				status: "known",
+			}),
+		);
 		const snapshot = coordinator.getSnapshot("f1");
 		// The continuation is proven and the PR is merged, but it targeted
 		// another base, so it must not be modeled as the delivery vector.
@@ -1220,6 +1273,12 @@ describe("FeatureStateCoordinator", () => {
 
 		await coordinator.reconcile();
 
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+				queriedBranch: "dev/improvements",
+				queriedHeadSha: activeSha,
+			}),
+		);
 		const snapshot = coordinator.getSnapshot("f1");
 		// Both PRs are merged into the expected base, but the continuation PR
 		// proves the exact active head, so it wins as the delivery vector.

@@ -441,7 +441,7 @@ describe("FeatureGitInspector against real repositories", () => {
 		expect(divergence?.right.sha).toBe(delta.right.sha);
 	});
 
-	it("records actual ancestry while leaving integration semantics unevaluated", async () => {
+	it("records actual ancestry without requiring legacy creation metadata", async () => {
 		const repo = repository();
 		const createdFromSha = commit(repo, "base.txt", "base\n", "base");
 		git(repo, "switch", "-c", "feature/test");
@@ -463,10 +463,9 @@ describe("FeatureGitInspector against real repositories", () => {
 		expect(value(impossible.featureInBase)).toMatchObject({
 			isAncestor: true,
 		});
-		expect(JSON.stringify(impossible)).not.toContain('"kind":"integrated"');
 		expect(evaluateIntegration({ git: impossible })).toMatchObject({
-			status: "unknown",
-			reason: "creation_point_unknown",
+			status: "known",
+			outcome: "integrated_by_ancestry",
 		});
 		expect(existsSync(path.join(repo, ".git", "FETCH_HEAD"))).toBe(false);
 	});

@@ -881,7 +881,7 @@ export class FeatureManager {
 	getDeletionSafety(feature: Feature) {
 		const branches = this.reconcileFeatureBranches(feature);
 		const checkedOutBranch =
-			branches.checkout.status === "known" && branches.checkout.linked
+			branches.checkout.status === "known"
 				? branches.checkout.ref
 				: undefined;
 		return checkWorktreeDeletionSafety({
@@ -984,6 +984,46 @@ export class FeatureManager {
 			deleted: true,
 			reasons: acceptedPullRequestIntegration ? [] : safety.reasons,
 		};
+	}
+
+	/** Remove an explicitly reviewed directory that Git no longer registers. */
+	removeWorktreeResidue(worktreePath: string): FeatureDeleteResult {
+		if (!isWorktreePathSafe(worktreePath, this.worktreeBase)) {
+			return {
+				deleted: false,
+				reasons: [`Refusing to remove worktree outside base: ${worktreePath}`],
+			};
+		}
+		let inventory: string;
+		try {
+			inventory = String(
+				execSync("git worktree list --porcelain", {
+					cwd: this.repoRoot,
+					encoding: "utf-8",
+					stdio: ["ignore", "pipe", "pipe"],
+				}),
+			);
+		} catch {
+			return { deleted: false, reasons: ["Git worktree inventory is unavailable."] };
+		}
+		const registered = inventory
+			.split(/\r?\n/u)
+			.filter((line) => line.startsWith("worktree "))
+			.map((line) => path.resolve(line.slice("worktree ".length)));
+		if (registered.includes(path.resolve(worktreePath))) {
+			return { deleted: false, reasons: ["The path is registered by Git again."] };
+		}
+		try {
+			fs.rmSync(worktreePath, { recursive: true, force: false });
+		} catch (error) {
+			return {
+				deleted: false,
+				reasons: [error instanceof Error ? error.message : String(error)],
+			};
+		}
+		return fs.existsSync(worktreePath)
+			? { deleted: false, reasons: ["The residue still exists on disk."] }
+			: { deleted: true, reasons: [] };
 	}
 
 	/** Forget metadata only after every worktree removal has been verified. */

@@ -543,6 +543,51 @@ describe("FeatureManager", () => {
 		});
 	});
 
+		describe("removeWorktreeResidue", () => {
+		it("refuses a path outside worktreeBase", () => {
+			const outside = fs.mkdtempSync(path.join(os.tmpdir(), "fm-outside-"));
+			try {
+				const result = manager.removeWorktreeResidue(outside);
+
+				expect(result.deleted).toBe(false);
+				expect(result.reasons.join("\n")).toContain("outside base");
+				expect(fs.existsSync(outside)).toBe(true);
+			} finally {
+				fs.rmSync(outside, { recursive: true, force: true });
+			}
+		});
+
+		it("refuses a path registered by Git", () => {
+			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			const registered = path.join(tmpDir, "registered");
+			fs.mkdirSync(registered);
+			mockExecSync.mockReturnValue(`worktree ${registered}\n`);
+
+			const result = localManager.removeWorktreeResidue(registered);
+
+			expect(result.deleted).toBe(false);
+			expect(result.reasons.join("\n")).toContain("registered by Git");
+			expect(fs.existsSync(registered)).toBe(true);
+		});
+
+		it("removes an unregistered residue directory", () => {
+			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			const residue = path.join(tmpDir, "residue");
+			fs.mkdirSync(residue);
+			fs.writeFileSync(path.join(residue, "untracked.txt"), "work");
+			mockExecSync.mockReturnValue(`worktree ${path.join(tmpDir, "other")}\n`);
+
+			const result = localManager.removeWorktreeResidue(residue);
+
+			expect(result).toEqual({ deleted: true, reasons: [] });
+			expect(fs.existsSync(residue)).toBe(false);
+		});
+	});
+
 	describe("getFeatures / getFeature", () => {
 		it("returns all features", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
@@ -741,6 +786,38 @@ describe("FeatureManager", () => {
 				String(c).includes("git worktree remove"),
 			);
 			expect(String(removeCall?.[0])).not.toContain("--force");
+		});
+
+		it("deletes a clean feature when persisted links lag the active checkout", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const fm = configManager({ baseBranch: "main" });
+			const feature = fm.createFeature("stale-links", "shared", "feature");
+			feature.branch = "feature/old-stale-links";
+			feature.branchLinks = [
+				{
+					ref: feature.branch,
+					role: "primary",
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "legacy_record",
+				},
+			];
+
+			mockExecSync.mockReset();
+			mockExecSync.mockImplementation((command: string) => {
+				const value = String(command);
+				if (value.includes("symbolic-ref")) return "feature/current-stale-links\n";
+				if (value.includes("git status --porcelain")) return "";
+				if (value.includes('rev-parse --verify "feature/current-stale-links'))
+					return featureSha;
+				if (value.includes('rev-parse --verify "main')) return baseSha;
+				if (value.includes("merge-base --is-ancestor")) return "";
+				if (value.includes("rev-list --count")) return "0";
+				return "";
+			});
+
+			const result = fm.removeFeatureWorktreeForFinish(feature.id);
+
+			expect(result.deleted).toBe(true);
 		});
 	});
 });

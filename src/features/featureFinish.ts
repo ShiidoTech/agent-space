@@ -59,24 +59,20 @@ export function assessFeatureFinish(
 		);
 	}
 	const registeredPaths = parseRegisteredWorktreePaths(worktrees.stdout);
+	const registeredBranches = parseRegisteredWorktreeBranches(worktrees.stdout);
 	const featurePath = path.resolve(feature.worktreePath);
 	let activeFeatureBranch: string | undefined = feature.branch;
 	if (registeredPaths.has(featurePath)) {
-		const observed = ctx.gitClient.readSync(
-			["symbolic-ref", "--quiet", "--short", "HEAD"],
-			{ cwd: feature.worktreePath },
+		const branch = observeRegisteredBranch(
+			ctx,
+			feature.worktreePath,
+			registeredBranches.get(featurePath),
+			feature.branch,
 		);
-		const branch =
-			observed.exitCode === 0 && !observed.error
-				? observed.stdout.trim() || undefined
-				: undefined;
-		const linked = branch
-			? branch === feature.branch ||
-				(feature.branchLinks?.some((entry) => entry.ref === branch) ?? false)
-			: false;
-		// A registered worktree is deletable only against its positively observed,
-		// Feature-linked checkout. Unknown or unrelated refs remain fail-closed.
-		activeFeatureBranch = linked ? branch : undefined;
+		// The exact registered Feature worktree identifies the active checkout.
+		// Git safety below still validates the branch ref and ancestry; stale
+		// persisted branch links must not create a false "branch unknown" state.
+		activeFeatureBranch = branch;
 	}
 
 	const check = (
@@ -89,11 +85,15 @@ export function assessFeatureFinish(
 		const resolvedPath = path.resolve(worktreePath);
 		if (!registeredPaths.has(resolvedPath)) {
 			const exists = pathExists(resolvedPath);
+			const retentionBranch =
+				kind === "feature"
+					? resolveFeatureRetentionBranch(ctx, feature, branch)
+					: branch;
 			const safety = exists
 				? undefined
 				: checkBranchRetentionSafety({
 						repoRoot: ctx.project.repoPath,
-						branch,
+						branch: retentionBranch,
 						baseBranch: comparisonBranch,
 					});
 			const residueReason = `Git no longer registers ${resolvedPath}, but files remain on disk. Inspect or remove this residue explicitly before finishing.`;
@@ -102,7 +102,7 @@ export function assessFeatureFinish(
 				: finishDecision(kind, safety, evidence.integration);
 			checks.push({
 				kind,
-				branch,
+				branch: retentionBranch,
 				worktreePath: resolvedPath,
 				disposition: exists ? "residue" : "already_removed",
 				safety,
@@ -139,19 +139,19 @@ export function assessFeatureFinish(
 	for (const agent of ctx.agentManager.getAgents(feature.id)) {
 		if (!agent.worktreePath) continue;
 		const registered = registeredPaths.has(path.resolve(agent.worktreePath));
+		const resolvedAgentPath = path.resolve(agent.worktreePath);
 		const branch = registered
-			? ctx.gitClient.readSync(["symbolic-ref", "--quiet", "--short", "HEAD"], {
-					cwd: agent.worktreePath,
-				})
+			? observeRegisteredBranch(
+					ctx,
+					agent.worktreePath,
+					registeredBranches.get(resolvedAgentPath),
+					ctx.agentManager.getAgentBranchName(feature, agent.id),
+				)
 			: undefined;
 		check(
 			"agent",
 			agent.worktreePath,
-			registered
-				? branch && branch.exitCode === 0 && !branch.error
-					? branch.stdout.trim() || undefined
-					: undefined
-				: ctx.agentManager.getAgentBranchName(feature, agent.id),
+			registered ? branch : ctx.agentManager.getAgentBranchName(feature, agent.id),
 			activeFeatureBranch ?? feature.branch,
 			agent.id,
 		);
@@ -195,6 +195,92 @@ export function assessFeatureFinish(
 	};
 }
 
+function resolveFeatureRetentionBranch(
+	ctx: ProjectContext,
+	feature: Feature,
+	declaredBranch: string | undefined,
+): string | undefined {
+	const candidates = new Set<string>();
+	if (declaredBranch) candidates.add(declaredBranch);
+	const name = feature.name.trim().replace(/\s+/gu, "-").toLowerCase();
+	if (name) {
+		candidates.add(`feature/${name}`);
+		candidates.add(`feat/${name}`);
+	}
+	const refs = ctx.gitClient.readSync(
+		["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+		{ cwd: ctx.project.repoPath },
+	);
+	if (refs.exitCode === 0 && !refs.error) {
+		const available = refs.stdout
+			.split(/\r?\n/u)
+			.map((ref) => ref.trim())
+			.filter((ref) => ref.length > 0 && candidates.has(ref));
+		if (declaredBranch && available.includes(declaredBranch)) return declaredBranch;
+		const derived = available.filter((ref) => ref !== declaredBranch);
+		return derived.length === 1 ? derived[0] : undefined;
+	}
+	const resolved = [...candidates].filter((candidate) => {
+		const resolved = ctx.gitClient.readSync(
+			["rev-parse", "--verify", `${candidate}^{commit}`],
+			{ cwd: ctx.project.repoPath },
+		);
+		return resolved.exitCode === 0 && !resolved.error && resolved.stdout.trim();
+	});
+	if (declaredBranch && resolved.includes(declaredBranch)) return declaredBranch;
+	return resolved.length === 1 ? resolved[0] : undefined;
+}
+
+function observeRegisteredBranch(
+	ctx: ProjectContext,
+	worktreePath: string,
+	inventoryBranch: string | undefined,
+	declaredBranch: string,
+): string | undefined {
+	const symbolic = ctx.gitClient.readSync(
+		["symbolic-ref", "--quiet", "--short", "HEAD"],
+		{ cwd: worktreePath },
+	);
+	if (symbolic.exitCode === 0 && !symbolic.error) {
+		return symbolic.stdout.trim() || undefined;
+	}
+	const current = ctx.gitClient.readSync(["branch", "--show-current"], {
+		cwd: worktreePath,
+	});
+	const currentBranch = current.stdout.trim();
+	if (
+		current.exitCode === 0 &&
+		!current.error &&
+		currentBranch &&
+		!currentBranch.includes("\n") &&
+		!currentBranch.startsWith("worktree ")
+	) {
+		return currentBranch;
+	}
+	if (inventoryBranch) return inventoryBranch;
+	if (symbolic.exitCode === 1 || current.exitCode === 1) {
+		const head = ctx.gitClient.readSync(["rev-parse", "--verify", "HEAD^{commit}"], {
+			cwd: worktreePath,
+		});
+		const declared = ctx.gitClient.readSync(
+			["rev-parse", "--verify", `${declaredBranch}^{commit}`],
+			{ cwd: ctx.project.repoPath },
+		);
+		const headSha = head.stdout.trim();
+		const declaredSha = declared.stdout.trim();
+		if (
+			head.exitCode === 0 &&
+			declared.exitCode === 0 &&
+			/^[0-9a-f]{40,64}$/iu.test(headSha) &&
+			/^[0-9a-f]{40,64}$/iu.test(declaredSha) &&
+			headSha.toLowerCase() === declaredSha.toLowerCase()
+		) {
+			return declaredBranch;
+		}
+	}
+	return undefined;
+}
+
 interface FinishDecision {
 	readonly safe: boolean;
 	readonly forceable: boolean;
@@ -227,6 +313,12 @@ function finishDecision(
 		};
 	}
 	if (kind !== "feature") return decisionFromSafety(safety);
+	// When the checkout is already gone, local branch-retention evidence is the
+	// authoritative integration proof. A stale snapshot cannot turn an observed
+	// ancestor relationship into an unknown finish decision.
+	if ("branch" in safety && integration.status === "unknown") {
+		return decisionFromSafety(safety);
+	}
 
 	if (integration.status === "unknown") {
 		return blockedDecision(
@@ -321,6 +413,23 @@ export function parseRegisteredWorktreePaths(output: string): Set<string> {
 			.filter((line) => line.startsWith("worktree "))
 			.map((line) => path.resolve(line.slice("worktree ".length))),
 	);
+}
+
+export function parseRegisteredWorktreeBranches(
+	output: string,
+): Map<string, string> {
+	const branches = new Map<string, string>();
+	let currentPath: string | undefined;
+	for (const line of output.split(/\r?\n/u)) {
+		if (line.startsWith("worktree ")) {
+			currentPath = path.resolve(line.slice("worktree ".length));
+			continue;
+		}
+		if (currentPath && line.startsWith("branch refs/heads/")) {
+			branches.set(currentPath, line.slice("branch refs/heads/".length));
+		}
+	}
+	return branches;
 }
 
 export type SessionStopVerification =

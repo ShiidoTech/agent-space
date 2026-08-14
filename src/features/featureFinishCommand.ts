@@ -58,6 +58,11 @@ export interface FeatureFinishDeps {
 		feature: Feature,
 		evidence: { readonly integration: FeatureSnapshot["integration"] },
 	) => FeatureFinishAssessment;
+	readonly openWorktree?: (worktreePath: string) => void;
+	readonly removeWorktreeResidue?: (worktreePath: string) => {
+		readonly removed: boolean;
+		readonly reason?: string;
+	};
 }
 
 export interface FeatureFinishUi {
@@ -126,6 +131,11 @@ export async function runFeatureFinish(
 				if (!snapshot) {
 					progress.report({ message: "Checking integration…" });
 					await deps.featureStateCoordinator.reconcile();
+					 snapshot = deps.featureStateCoordinator.getSnapshot(feature.id);
+				}
+				if (snapshot?.integration.status === "unknown") {
+					progress.report({ message: "Refreshing integration evidence…" });
+					await deps.featureStateCoordinator.reconcile();
 					snapshot = deps.featureStateCoordinator.getSnapshot(feature.id);
 				}
 				if (!snapshot) {
@@ -146,6 +156,35 @@ export async function runFeatureFinish(
 				}
 
 				if (!assessment.safe && !assessment.forceable) {
+					const residue = assessment.checks.find(
+						(check) => check.disposition === "residue",
+					);
+					if (residue) {
+						const action = await ui.showWarningMessage(
+							`Feature "${feature.name}" has an unregistered worktree residue at ${residue.worktreePath}.`,
+							{ modal: true },
+							...(deps.openWorktree ? ["Inspect residue"] : []),
+							...(deps.removeWorktreeResidue ? ["Remove residue"] : []),
+						);
+						if (action === "Inspect residue") {
+							deps.openWorktree?.(residue.worktreePath);
+						} else if (action === "Remove residue") {
+							const removal = deps.removeWorktreeResidue?.(residue.worktreePath);
+							if (removal?.removed) {
+								void ui.showInformationMessage(
+									`Removed worktree residue at ${residue.worktreePath}. Run Finish Feature again to remove the Agent Space record.`,
+								);
+								return {
+									status: "blocked",
+									message: `Removed worktree residue at ${residue.worktreePath}. Run Finish Feature again to remove the Agent Space record.`,
+								};
+							} else {
+								void ui.showErrorMessage(
+									`Could not remove worktree residue: ${removal?.reason ?? "unknown error"}`,
+								);
+							}
+						}
+					}
 					const message = `Cannot finish "${feature.name}" because safety is unknown:\n\n${assessment.reasons.join("\n\n")}\n\nNo worktree, session or metadata was removed.`;
 					void ui.showErrorMessage(message);
 					return { status: "blocked", message };
@@ -161,7 +200,6 @@ export async function runFeatureFinish(
 					`Finish feature "${feature.name}"?\n\nThis stops its ${ctx.agentManager.getAgents(feature.id).length} agent(s) and ${ctx.serviceManager.getServices(feature.id).length} service(s), removes ${assessment.checks.length} worktree(s), then removes the Agent Space feature record. Git branches are preserved.${risks}`,
 					{ modal: true },
 					action,
-					"Cancel",
 				);
 				if (confirm !== action) return { status: "cancelled" };
 

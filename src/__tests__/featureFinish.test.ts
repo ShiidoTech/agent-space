@@ -178,6 +178,127 @@ describe("Feature Finish", () => {
 		);
 	});
 
+	it("uses an active registered checkout even when persisted links are stale", () => {
+		const stale: Feature = {
+			...feature(),
+			branch: "feat/old-player",
+			branchLinks: [
+				{
+					ref: "feat/old-player",
+					role: "primary",
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "legacy_record",
+				},
+			],
+		};
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockReturnValue({
+				worktreePath: "/worktrees/f1",
+				safe: true,
+				forceable: true,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: true,
+				integrationObserved: true,
+				localCommitsObserved: true,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				workingTreeStatus: "",
+				localCommitCount: 0,
+				featureSha: "1".repeat(40),
+				baseSha: "2".repeat(40),
+				reasons: [],
+			});
+		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
+		ctx.gitClient.readSync = (args: readonly string[]) =>
+			args[0] === "symbolic-ref"
+				? gitResult("feat/current-player\n")
+				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
+
+		const assessment = assessFeatureFinish(ctx, stale, finishEvidence());
+
+		expect(assessment.safe).toBe(true);
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: "feat/current-player" }),
+		);
+	});
+
+	it("uses the branch recorded in the Git worktree inventory when symbolic-ref fails", () => {
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockReturnValue({
+				worktreePath: "/worktrees/f1",
+				safe: true,
+				forceable: true,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: true,
+				integrationObserved: true,
+				localCommitsObserved: true,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				workingTreeStatus: "",
+				localCommitCount: 0,
+				featureSha: "1".repeat(40),
+				baseSha: "2".repeat(40),
+				reasons: [],
+			});
+		const ctx = context(
+				"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
+			);
+		ctx.gitClient.readSync = (args: readonly string[]) =>
+				args[0] === "symbolic-ref"
+					? { ...gitResult(""), exitCode: 1 }
+					: gitResult(
+							"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
+						);
+
+		const assessment = assessFeatureFinish(ctx, feature(), finishEvidence());
+
+		expect(assessment.safe).toBe(true);
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: "feat/f1" }),
+		);
+	});
+
+	it("uses the declared branch when symbolic-ref has a non-detached read failure", () => {
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockReturnValue({
+				worktreePath: "/worktrees/f1",
+				safe: true,
+				forceable: true,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: true,
+				integrationObserved: true,
+				localCommitsObserved: true,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				workingTreeStatus: "",
+				localCommitCount: 0,
+				featureSha: "1".repeat(40),
+				baseSha: "2".repeat(40),
+				reasons: [],
+			});
+		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
+		ctx.gitClient.readSync = (args: readonly string[]) =>
+			args[0] === "symbolic-ref"
+				? { ...gitResult(""), exitCode: null, error: new Error("timeout") }
+				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
+
+		const assessment = assessFeatureFinish(ctx, feature(), finishEvidence());
+
+		expect(assessment.safe).toBe(true);
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: "feat/f1" }),
+		);
+	});
+
 	it("resumes after earlier worktrees were removed while records were preserved", () => {
 		const agents = [agent("a1"), agent("a2")];
 		const readSync = vi.fn(
@@ -250,6 +371,79 @@ describe("Feature Finish", () => {
 			{ kind: "agent", agentId: "a1", disposition: "already_removed" },
 			{ kind: "agent", agentId: "a2", disposition: "registered" },
 		]);
+	});
+
+	it("uses local branch retention proof when the Feature worktree is absent", () => {
+		const ctx = context("worktree /repo\n");
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+			branch: "feature/player",
+			baseBranch: "v2_ia_first",
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			featureSha: "1".repeat(40),
+			baseSha: "2".repeat(40),
+			hasLocalCommits: false,
+			localCommitCount: 0,
+			unmerged: false,
+			forceable: true,
+			safe: true,
+			reasons: [],
+		});
+
+		const assessment = assessFeatureFinish(
+			ctx,
+			feature(),
+			{
+				integration: {
+					status: "unknown",
+					reason: "ancestry_unknown",
+					evidence: {},
+				},
+			},
+			() => false,
+		);
+
+		expect(assessment.safe).toBe(true);
+		expect(assessment.checks[0].disposition).toBe("already_removed");
+	});
+
+	it("maps a worktree-style Feature name to its real feature branch ref", () => {
+		const ctx = context("worktree /repo\n");
+		const readSync = vi.fn((args: readonly string[]) => {
+			if (args[0] === "for-each-ref") return gitResult("feature/player\n");
+			return gitResult("worktree /repo\n");
+		});
+		ctx.gitClient.readSync = readSync;
+		const named = { ...feature(), name: "feature-player", branch: "feature-player" };
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+			branch: "feature/player",
+			baseBranch: "v2_ia_first",
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			featureSha: "1".repeat(40),
+			baseSha: "2".repeat(40),
+			hasLocalCommits: false,
+			localCommitCount: 0,
+			unmerged: false,
+			forceable: true,
+			safe: true,
+			reasons: [],
+		});
+
+		const assessment = assessFeatureFinish(
+			ctx,
+			named,
+			{ integration: { status: "unknown", reason: "ancestry_unknown", evidence: {} } },
+			() => false,
+		);
+
+		expect(assessment.safe).toBe(true);
+		expect(readSync).toHaveBeenCalledWith(
+			["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+			expect.anything(),
+		);
 	});
 
 	it("surfaces unique commits on an already absent worktree", () => {

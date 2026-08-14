@@ -1,5 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 
 const execFileAsync = promisify(execFile);
 
@@ -34,6 +35,7 @@ export class GitClient implements GitReader {
 
 	readSync(argv: readonly string[], options: GitReadOptions): GitReadResult {
 		const args = [...argv];
+		const startedAt = Date.now();
 		const result = spawnSync(this.executable, args, {
 			cwd: options.cwd,
 			env: options.env,
@@ -43,6 +45,7 @@ export class GitClient implements GitReader {
 			stdio: ["ignore", "pipe", "pipe"],
 			shell: false,
 		});
+		this.logSlowRead(args, options.cwd, Date.now() - startedAt);
 
 		return {
 			argv: args,
@@ -60,6 +63,7 @@ export class GitClient implements GitReader {
 		options: GitReadOptions,
 	): Promise<GitReadResult> {
 		const args = [...argv];
+		const startedAt = Date.now();
 		try {
 			const result = await execFileAsync(this.executable, args, {
 				cwd: options.cwd,
@@ -69,6 +73,7 @@ export class GitClient implements GitReader {
 				timeout: options.timeoutMs,
 				shell: false,
 			});
+			this.logSlowRead(args, options.cwd, Date.now() - startedAt);
 			return {
 				argv: args,
 				cwd: options.cwd,
@@ -84,6 +89,7 @@ export class GitClient implements GitReader {
 				stdout?: string;
 				stderr?: string;
 			};
+			this.logSlowRead(args, options.cwd, Date.now() - startedAt);
 			return {
 				argv: args,
 				cwd: options.cwd,
@@ -94,6 +100,13 @@ export class GitClient implements GitReader {
 				error,
 			};
 		}
+	}
+
+	private logSlowRead(argv: readonly string[], cwd: string, elapsedMs: number): void {
+		if (elapsedMs < 1_500) return;
+		agentSpaceDiagnostic(
+			`slow Git read ${elapsedMs}ms cwd=${cwd} command=${argv.join(" ")}`,
+		);
 	}
 }
 

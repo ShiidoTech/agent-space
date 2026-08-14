@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import type { Disposable } from "vscode";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../projects/referenceBranchHealth";
 import type { Agent, Feature, Service } from "../types";
 import { evaluateAttention } from "./attentionEvaluator";
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import {
 	createFeatureSnapshot,
 	type FeatureDeliveryObservation,
@@ -84,6 +86,9 @@ export class FeatureStateCoordinator implements Disposable {
 		string,
 		GitLsRemoteBranchHeadSource
 	>();
+	private githubRefreshes = new Set<string>();
+	private githubObservations = new Map<string, GitHubObservation>();
+	private githubFallbacks = new Map<string, GitHubObservation>();
 
 	constructor(
 		projectManager?: ProjectManager,
@@ -137,6 +142,9 @@ export class FeatureStateCoordinator implements Disposable {
 		this.projectReferenceHealth.clear();
 		this.worktreeInventories.clear();
 		this.referenceBranchRemotes.clear();
+		this.githubRefreshes.clear();
+		this.githubObservations.clear();
+		this.githubFallbacks.clear();
 	}
 
 	getSnapshot(featureId: string): FeatureSnapshot | undefined {
@@ -179,6 +187,7 @@ export class FeatureStateCoordinator implements Disposable {
 		if (this.disposed) return;
 		this.generation += 1;
 		this.injectedReferenceBranchRemote?.invalidate?.();
+		this.githubObservations.clear();
 		for (const remote of this.referenceBranchRemotes.values())
 			remote.invalidate();
 		if (this.inFlight) {
@@ -210,6 +219,8 @@ export class FeatureStateCoordinator implements Disposable {
 	}
 
 	private async reconcileOnce(): Promise<void> {
+		const startedAt = Date.now();
+		agentSpaceDiagnostic("reconcile started");
 		const manager = this.projectManager;
 		if (!manager) return;
 		const generation = this.generation;
@@ -222,7 +233,8 @@ export class FeatureStateCoordinator implements Disposable {
 				? knownRuntime(tmuxObservation.sessions)
 				: unknownRuntime("read_failed", tmuxObservation.detail);
 
-		for (const ctx of manager.getAllContexts()) {
+		await Promise.all(
+			manager.getAllContexts().map(async (ctx) => {
 			if (this.disposed) return;
 			seenProjects.add(ctx.project.id);
 			const baseRef = await observeBaseRef(ctx);
@@ -311,7 +323,16 @@ export class FeatureStateCoordinator implements Disposable {
 				seen.add(feature.id);
 				nextSnapshots.push(snapshot);
 			}
-		}
+			let projectChanged = false;
+			for (const snapshot of observed.map(({ snapshot }) => snapshot)) {
+				const previous = this.snapshots.get(snapshot.feature.id);
+				if (previous && equivalent(previous, snapshot)) continue;
+				this.snapshots.set(snapshot.feature.id, snapshot);
+				projectChanged = true;
+			}
+			if (projectChanged) this.emit(undefined);
+			}),
+		);
 		if (generation !== this.generation || this.disposed) return;
 
 		let referenceHealthChanged = false;
@@ -347,6 +368,9 @@ export class FeatureStateCoordinator implements Disposable {
 		if (inventoryChanged && !snapshotChanged && !referenceHealthChanged) {
 			this.emit(undefined);
 		}
+		agentSpaceDiagnostic(
+			`reconcile completed in ${Date.now() - startedAt}ms snapshots=${nextSnapshots.length}`,
+		);
 	}
 
 	private acceptWorktreeInventory(
@@ -372,12 +396,13 @@ export class FeatureStateCoordinator implements Disposable {
 		source: FeatureSnapshotSource,
 	): Promise<FeatureSnapshot> {
 		const deliveryBranch = deliveryBranchRef(feature);
+		const inspectionBranch = inspectionBranchRef(feature, projectObservation);
 		const git = await ctx.featureGitInspector
 			.inspect(
 				{
 					repoRoot: ctx.project.repoPath,
 					worktreePath: feature.worktreePath,
-					featureBranch: feature.branch,
+					featureBranch: inspectionBranch,
 					baseRef,
 					...(feature.createdFromSha
 						? { createdFromSha: feature.createdFromSha }
@@ -415,7 +440,23 @@ export class FeatureStateCoordinator implements Disposable {
 		const activeIsContinuation =
 			delivery.activeRelation.status === "known" &&
 			delivery.activeRelation.value.isAncestor;
-		const github = await this.observeGithub(
+		const githubKey = this.githubObservationKey(
+			ctx,
+			feature,
+			deliveryBranch,
+			deliveryHeadSha,
+			activeHeadSha,
+			baseRef,
+		);
+		let github = this.githubObservations.get(githubKey);
+		if (!github) {
+			github = this.githubFallbacks.get(githubKey);
+			if (!github) {
+				github = unavailableGithub(ctx.project.repoPath);
+				this.githubFallbacks.set(githubKey, github);
+			}
+		}
+		this.deferGithubObservation(
 			ctx,
 			feature,
 			deliveryBranch,
@@ -465,6 +506,66 @@ export class FeatureStateCoordinator implements Disposable {
 			attention,
 			observedAt: new Date().toISOString(),
 		});
+	}
+
+	private deferGithubObservation(
+		ctx: ProjectContext,
+		feature: Feature,
+		deliveryBranch: string,
+		deliveryHeadSha: string | undefined,
+		activeHeadSha: string | undefined,
+		activeIsContinuation: boolean,
+		baseRef: string | undefined,
+	): void {
+		const key = [
+			this.githubObservationKey(
+				ctx,
+				feature,
+				deliveryBranch,
+				deliveryHeadSha,
+				activeHeadSha,
+				baseRef,
+			),
+		].join("\u0000");
+		if (this.githubObservations.has(key)) return;
+		if (this.githubRefreshes.has(key)) return;
+		this.githubRefreshes.add(key);
+		void this.observeGithub(
+			ctx,
+			feature,
+			deliveryBranch,
+			deliveryHeadSha,
+			activeHeadSha,
+			activeIsContinuation,
+			baseRef,
+		)
+			.then((observation) => {
+				this.githubObservations.set(key, observation);
+				this.githubFallbacks.delete(key);
+				if (observation.status !== "unavailable") this.invalidate(feature.id);
+			})
+			.catch((error) =>
+				console.warn(`[agentSpace] deferred GitHub observation failed: ${String(error)}`),
+			)
+			.finally(() => this.githubRefreshes.delete(key));
+	}
+
+	private githubObservationKey(
+		ctx: ProjectContext,
+		feature: Feature,
+		deliveryBranch: string,
+		deliveryHeadSha: string | undefined,
+		activeHeadSha: string | undefined,
+		baseRef: string | undefined,
+	): string {
+		return [
+			ctx.project.repoPath,
+			feature.id,
+			deliveryBranch,
+			deliveryHeadSha ?? "",
+			activeHeadSha ?? "",
+			baseRef ?? "",
+		].join("\u0000");
 	}
 
 	/**
@@ -604,6 +705,21 @@ function deliveryBranchRef(feature: Feature): string {
 		feature.branchLinks?.find((link) => link.role === "primary")?.ref ??
 		feature.branch
 	);
+}
+
+function inspectionBranchRef(
+	feature: Feature,
+	projectObservation: FeatureGitProjectObservation,
+): string {
+	if (projectObservation.worktrees.status === "known") {
+		const checkout = projectObservation.worktrees.value.find(
+			(worktree) =>
+				path.resolve(worktree.path) === path.resolve(feature.worktreePath) &&
+				worktree.branchRef,
+		);
+		if (checkout?.branchRef) return checkout.branchRef.replace(/^refs\/heads\//u, "");
+	}
+	return feature.branch;
 }
 
 /**
