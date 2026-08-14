@@ -1637,6 +1637,32 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("Project freshness is orthogonal to per-Feature deep freshness", async () => {
+		const inspects = {
+			p1: vi.fn(async () => git(feature("f1"))),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		// Startup-style seed: presence only, no repository-fact refresh yet.
+		await coordinator.reconcilePresence();
+		expect(coordinator.isProjectStale("p1")).toBe(true);
+
+		// reconcileProject only refreshes repository-level facts — it never
+		// deep-observes f1 — yet the Project page's own freshness must clear.
+		await coordinator.reconcileProject("p1");
+		expect(coordinator.isProjectStale("p1")).toBe(false);
+		expect(coordinator.isFeatureStale("f1")).toBe(true);
+		expect(inspects.p1).not.toHaveBeenCalled();
+
+		// A subsequent runtime tick must not force another reconcileProject
+		// before the Project TTL actually expires.
+		await coordinator.reconcilePresence("p1");
+		expect(coordinator.isProjectStale("p1")).toBe(false);
+		coordinator.dispose();
+	});
+
 	it("reconcilePresence prunes a feature that no longer exists", async () => {
 		const inspects = {
 			p1: vi.fn(async () => git(feature("f1"))),

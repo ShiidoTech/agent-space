@@ -100,6 +100,16 @@ export class FeatureStateCoordinator implements Disposable {
 	 * `DEEP_STALE_MS` despite no deep observation ever having run.
 	 */
 	private featureDeepObservedAt = new Map<string, number>();
+	/**
+	 * When a project's repository-level facts (base ref, worktree inventory,
+	 * reference-branch health, presence) were last successfully refreshed by
+	 * `reconcileProject` — orthogonal to `featureDeepObservedAt`. A Project
+	 * page only needs these repository facts, not every Feature deep-observed;
+	 * deriving project staleness from per-feature deep freshness made a
+	 * Project look stale forever unless every one of its Features had also
+	 * been individually deep-observed.
+	 */
+	private projectRepositoryObservedAt = new Map<string, number>();
 	private githubServices = new Map<string, GitHubObservationService>();
 	private projectReferenceHealth = new Map<
 		string,
@@ -170,6 +180,7 @@ export class FeatureStateCoordinator implements Disposable {
 		this.listeners.clear();
 		this.snapshots.clear();
 		this.featureDeepObservedAt.clear();
+		this.projectRepositoryObservedAt.clear();
 		this.projectReferenceHealth.clear();
 		this.worktreeInventories.clear();
 		this.referenceBranchRemotes.clear();
@@ -256,6 +267,7 @@ export class FeatureStateCoordinator implements Disposable {
 			this.beginDeepObservation(snapshot.feature.id);
 			this.featureDeepObservedAt.delete(snapshot.feature.id);
 		}
+		this.projectRepositoryObservedAt.delete(projectId);
 		this.referenceBranchRemotes.get(
 			this.projectManager?.getContext(projectId)?.project.repoPath ?? "",
 		)?.invalidate();
@@ -269,6 +281,7 @@ export class FeatureStateCoordinator implements Disposable {
 			this.beginDeepObservation(featureId);
 			this.featureDeepObservedAt.delete(featureId);
 		}
+		this.projectRepositoryObservedAt.clear();
 		for (const service of this.githubServices.values()) service.invalidate();
 	}
 
@@ -334,6 +347,7 @@ export class FeatureStateCoordinator implements Disposable {
 				seenProjects.add(ctx.project.id);
 				const { baseRef, projectObservation } =
 					await this.refreshProjectRepositoryFacts(ctx, generation);
+				this.projectRepositoryObservedAt.set(ctx.project.id, Date.now());
 				const { base, features, source } = this.discoverProjectFeatures(
 					ctx,
 					baseRef,
@@ -399,6 +413,7 @@ export class FeatureStateCoordinator implements Disposable {
 		const generation = this.generation;
 		await this.refreshProjectRepositoryFacts(ctx, generation);
 		await this.reconcilePresence(projectId);
+		this.projectRepositoryObservedAt.set(projectId, Date.now());
 		agentSpaceDiagnostic(
 			`reconcile completed in ${Date.now() - startedAt}ms scope=project:${projectId}`,
 		);
@@ -506,12 +521,14 @@ export class FeatureStateCoordinator implements Disposable {
 		return Date.now() - observedAt > maxAgeMs;
 	}
 
+	/** Whether this project's repository-level facts (base ref, worktree
+	 * inventory, reference-branch health) need a refresh. Orthogonal to
+	 * per-feature deep staleness: a Project page only needs `reconcileProject`
+	 * to have run, not every one of its Features individually deep-observed. */
 	isProjectStale(projectId: string, maxAgeMs = DEEP_STALE_MS): boolean {
-		const snapshots = this.getProjectSnapshots(projectId);
-		if (snapshots.length === 0) return true;
-		return snapshots.some((snapshot) =>
-			this.isFeatureStale(snapshot.feature.id, maxAgeMs),
-		);
+		const observedAt = this.projectRepositoryObservedAt.get(projectId);
+		if (observedAt === undefined) return true;
+		return Date.now() - observedAt > maxAgeMs;
 	}
 
 	private observeTmuxRuntime(
