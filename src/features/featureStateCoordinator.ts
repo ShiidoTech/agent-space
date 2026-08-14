@@ -271,38 +271,28 @@ export class FeatureStateCoordinator implements Disposable {
 		this.featureDeepObservedAt.delete(featureId);
 	}
 
-	/** Invalidates every feature currently known for one project. */
-	invalidateProject(projectId: string): void {
-		if (this.disposed) return;
-		// Bump this project's generation so any in-flight project observation
-		// can no longer publish facts observed before this mutation or re-stamp
-		// the project fresh.
-		this.beginProjectObservation(projectId);
-		for (const snapshot of this.getProjectSnapshots(projectId)) {
-			this.beginDeepObservation(snapshot.feature.id);
-			this.featureDeepObservedAt.delete(snapshot.feature.id);
-		}
-		this.projectRepositoryObservedAt.delete(projectId);
-		this.referenceBranchRemotes.get(
-			this.projectManager?.getContext(projectId)?.project.repoPath ?? "",
-		)?.invalidate();
-	}
-
 	/** Rarely-needed global fallback (e.g. extension-wide settings change). */
 	invalidateAll(): void {
 		if (this.disposed) return;
 		this.generation += 1;
-		for (const featureId of this.snapshots.keys()) {
+		// Cover every known feature, including not-yet-published ones (via the
+		// cheap read-model), so an in-flight deep observation of any of them is
+		// superseded even if it hasn't produced a snapshot yet.
+		const featureIds = new Set<string>();
+		const projectIds = new Set<string>();
+		for (const snapshot of this.snapshots.values()) {
+			featureIds.add(snapshot.feature.id);
+			projectIds.add(snapshot.projectId);
+		}
+		for (const ctx of this.projectManager?.getAllContexts() ?? []) {
+			projectIds.add(ctx.project.id);
+			for (const id of this.projectFeatureIds(ctx)) featureIds.add(id);
+		}
+		for (const featureId of featureIds) {
 			this.beginDeepObservation(featureId);
 			this.featureDeepObservedAt.delete(featureId);
 		}
 		this.projectRepositoryObservedAt.clear();
-		// Bump every project's generation so in-flight project observations
-		// across the whole workspace cannot publish stale facts either.
-		const projectIds = new Set<string>();
-		for (const snapshot of this.snapshots.values()) {
-			projectIds.add(snapshot.projectId);
-		}
 		for (const projectId of projectIds) this.beginProjectObservation(projectId);
 		for (const service of this.githubServices.values()) service.invalidate();
 	}
@@ -367,8 +357,20 @@ export class FeatureStateCoordinator implements Disposable {
 		const seenProjects = new Set<string>();
 		const tmuxSessions = this.observeTmuxRuntime(manager);
 
+		// Capture every known feature's deep generation before any await, so a
+		// mutation arriving mid-sweep supersedes this pass even for Features
+		// that have not yet published a snapshot (mirrors reconcileFeature's
+		// early capture).
+		const contexts = manager.getAllContexts();
+		for (const ctx of contexts) {
+			if (this.disposed) return;
+			for (const id of this.projectFeatureIds(ctx)) {
+				this.beginDeepObservation(id);
+			}
+		}
+
 		await Promise.all(
-			manager.getAllContexts().map(async (ctx) => {
+			contexts.map(async (ctx) => {
 				if (this.disposed) return;
 				seenProjects.add(ctx.project.id);
 				const projectGen = this.beginProjectObservation(ctx.project.id);
@@ -385,7 +387,9 @@ export class FeatureStateCoordinator implements Disposable {
 					features.map(async (feature) => {
 						if (this.disposed) return;
 						seen.add(feature.id);
-						const gen = this.beginDeepObservation(feature.id);
+						const gen =
+							this.featureDeepGenerations.get(feature.id) ??
+							this.beginDeepObservation(feature.id);
 						const snapshot = await this.observe(
 							ctx,
 							feature,
@@ -465,6 +469,12 @@ export class FeatureStateCoordinator implements Disposable {
 		if (!ctx || !resolved || this.disposed) return;
 		const startedAt = Date.now();
 		agentSpaceDiagnostic(`reconcile started scope=feature:${featureId}`);
+		// Capture the deep generation before any await: a mutation that lands
+		// while the shared repository reads below are in flight must supersede
+		// this pass, even though it hasn't reached `observe`/`commitDeep` yet.
+		// Renewing the generation here would let a pre-mutation observation
+		// publish stale inputs and re-stamp the feature fresh.
+		const gen = this.beginDeepObservation(featureId);
 		const baseRef = await observeBaseRef(ctx);
 		const projectObservation = await ctx.featureGitInspector.observeProject(
 			ctx.project.repoPath,
@@ -472,7 +482,6 @@ export class FeatureStateCoordinator implements Disposable {
 		const tmuxSessions = this.observeTmuxRuntime(this.projectManager!);
 		const source: FeatureSnapshotSource = { status: "known" };
 		const isBaseFeature = resolved.feature.id === `base:${ctx.project.id}`;
-		const gen = this.beginDeepObservation(featureId);
 		const snapshot = await this.observe(
 			ctx,
 			resolved.feature,
@@ -716,6 +725,53 @@ export class FeatureStateCoordinator implements Disposable {
 		const gen = (this.projectGenerations.get(projectId) ?? 0) + 1;
 		this.projectGenerations.set(projectId, gen);
 		return gen;
+	}
+
+	/**
+	 * Every Feature id that currently belongs to a project: the persisted
+	 * read-model (via the cheap `listFeaturesCached`, never Git), the base
+	 * feature, plus any already-published snapshot. Used by project/global
+	 * invalidation so a mutation supersedes an in-flight deep observation of a
+	 * Feature that has not yet published its first snapshot.
+	 */
+	private projectFeatureIds(ctx: ProjectContext): ReadonlySet<string> {
+		const ids = new Set<string>([`base:${ctx.project.id}`]);
+		try {
+			for (const feature of ctx.featureManager.listFeaturesCached()) {
+				ids.add(feature.id);
+			}
+		} catch {
+			// Read-model unavailable; published snapshots still cover it below.
+		}
+		for (const snapshot of this.getProjectSnapshots(ctx.project.id)) {
+			ids.add(snapshot.feature.id);
+		}
+		return ids;
+	}
+
+	/** Invalidates every feature currently known for one project. */
+	invalidateProject(projectId: string): void {
+		if (this.disposed) return;
+		// Bump this project's generation so any in-flight project observation
+		// can no longer publish facts observed before this mutation or re-stamp
+		// the project fresh.
+		this.beginProjectObservation(projectId);
+		const ctx = this.projectManager?.getContext(projectId);
+		const featureIds = ctx
+			? this.projectFeatureIds(ctx)
+			: new Set(
+					this.getProjectSnapshots(projectId).map(
+						(snapshot) => snapshot.feature.id,
+					),
+				);
+		for (const featureId of featureIds) {
+			this.beginDeepObservation(featureId);
+			this.featureDeepObservedAt.delete(featureId);
+		}
+		this.projectRepositoryObservedAt.delete(projectId);
+		this.referenceBranchRemotes.get(
+			this.projectManager?.getContext(projectId)?.project.repoPath ?? "",
+		)?.invalidate();
 	}
 
 	/** Whether the given project generation is still the current one. */

@@ -1727,6 +1727,95 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		expect(coordinator.isProjectStale("p1")).toBe(false);
 		coordinator.dispose();
 	});
+	it("a feature deep-observation invalidated while its repo reads are in flight never publishes its stale inputs", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let observeCalls = 0;
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				return git(feature("f1"));
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		// Gate the shared repository read so the first reconcileFeature pauses
+		// in the middle of its observation.
+		fixture.contexts.p1.featureGitInspector.observeProject = vi.fn(async () => {
+			observeCalls += 1;
+			if (observeCalls === 1) await gate;
+			return {
+				repository: known({ root: "/repo-p1" }),
+				worktrees: known([]),
+			};
+		});
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const stale = coordinator.reconcileFeature("f1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// A mutation arrives while the shared repo reads are in flight, before
+		// a late beginDeepObservation could renew the generation.
+		coordinator.invalidateFeature("f1");
+
+		release?.();
+		await stale;
+
+		// The stale pass must not publish its pre-mutation inputs nor mark f1
+		// deep-fresh.
+		expect(coordinator.getSnapshot("f1")).toBeUndefined();
+		expect(coordinator.isFeatureStale("f1")).toBe(true);
+
+		// A fresh reconcileFeature is the only thing allowed to make it deep-fresh.
+		await coordinator.reconcileFeature("f1");
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		expect(coordinator.isFeatureStale("f1")).toBe(false);
+		coordinator.dispose();
+	});
+	it("invalidateProject supersedes the first deep observation of a never-published feature", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				return git(feature("f1"));
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		fixture.contexts.p1.featureGitInspector.observeProject = vi.fn(async () => {
+			await gate;
+			return {
+				repository: known({ root: "/repo-p1" }),
+				worktrees: known([]),
+			};
+		});
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		// f1 has never published a snapshot when its first deep observation
+		// starts and then pauses on the shared repository read.
+		const stale = coordinator.reconcileFeature("f1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// A whole-project invalidation arrives; it must also cover not-yet-
+		// published features via the read-model.
+		coordinator.invalidateProject("p1");
+
+		release?.();
+		await stale;
+
+		expect(coordinator.getSnapshot("f1")).toBeUndefined();
+		expect(coordinator.isFeatureStale("f1")).toBe(true);
+
+		await coordinator.reconcileFeature("f1");
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		expect(coordinator.isFeatureStale("f1")).toBe(false);
+		coordinator.dispose();
+	});
 	it("reconcilePresence prunes a feature that no longer exists", async () => {
 		const inspects = {
 			p1: vi.fn(async () => git(feature("f1"))),
