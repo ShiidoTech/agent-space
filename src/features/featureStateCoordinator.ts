@@ -323,12 +323,14 @@ export class FeatureStateCoordinator implements Disposable {
 				seen.add(feature.id);
 				nextSnapshots.push(snapshot);
 			}
+			let projectChanged = false;
 			for (const snapshot of observed.map(({ snapshot }) => snapshot)) {
 				const previous = this.snapshots.get(snapshot.feature.id);
 				if (previous && equivalent(previous, snapshot)) continue;
 				this.snapshots.set(snapshot.feature.id, snapshot);
-				this.emit(snapshot);
+				projectChanged = true;
 			}
+			if (projectChanged) this.emit(undefined);
 			}),
 		);
 		if (generation !== this.generation || this.disposed) return;

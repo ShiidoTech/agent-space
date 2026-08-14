@@ -103,7 +103,7 @@ export class GitClient implements GitReader {
 	}
 
 	private logSlowRead(argv: readonly string[], cwd: string, elapsedMs: number): void {
-		if (elapsedMs < 500) return;
+		if (elapsedMs < 1_500) return;
 		agentSpaceDiagnostic(
 			`slow Git read ${elapsedMs}ms cwd=${cwd} command=${argv.join(" ")}`,
 		);

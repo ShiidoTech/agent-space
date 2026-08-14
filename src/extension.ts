@@ -558,11 +558,11 @@ export async function activate(
 		featureStateCoordinator.onDidChange(() => {
 			if (featureRefreshQueued) return;
 			featureRefreshQueued = true;
-			queueMicrotask(() => {
+			setTimeout(() => {
 				featureRefreshQueued = false;
 				sidebarProvider.refreshState();
 				HomePanel.refreshAll();
-			});
+			}, 150);
 		}),
 	);
 	projectManager.onChange(() => {
