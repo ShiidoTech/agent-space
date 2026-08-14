@@ -1663,6 +1663,70 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("a project invalidated mid-observation stays stale and its stale results never publish", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const inspects = {
+			p1: vi.fn(async () => git(feature("f1"))),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		// Hold both the awaited `observeProject` (the repository-fact observation
+		// is in flight) and the fire-and-forget reference-branch remote open, so
+		// the invalidation lands while the observation is genuinely mid-flight.
+		fixture.contexts.p1.featureGitInspector.observeProject = vi.fn(async () => {
+			await gate;
+			return {
+				repository: known({ root: "/repo-p1" }),
+				worktrees: known([]),
+			};
+		});
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			referenceBranchRemote: {
+				observe: vi.fn(async () => {
+					await gate;
+					return {
+						status: "missing" as const,
+						observedAt: "2026-08-12T00:00:00.000Z",
+						provenance: {
+							source: "remote_head" as const,
+							ref: "refs/heads/main",
+							backend: "test",
+						},
+					};
+				}),
+			},
+		});
+
+		// Start a project observation and let it reach the in-flight awaits.
+		const stale = coordinator.reconcileProject("p1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// A mutation arrives while the observation is in flight.
+		coordinator.invalidateProject("p1");
+
+		// The old observation finally completes after the invalidation.
+		release?.();
+		await stale;
+
+		// The stale pass must not re-stamp the project fresh, and neither its
+		// reference-branch result nor its worktree inventory may be accepted as
+		// the current generation.
+		expect(coordinator.isProjectStale("p1")).toBe(true);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(coordinator.getProjectReferenceHealth("p1")).toBeUndefined();
+		expect(coordinator.getProjectWorktreeBranches("p1")).toBeUndefined();
+
+		// A brand-new reconcile is the only thing allowed to make it fresh.
+		await coordinator.reconcileProject("p1");
+		await vi.waitFor(() =>
+			expect(coordinator.getProjectWorktreeBranches("p1")).toBeDefined(),
+		);
+		expect(coordinator.isProjectStale("p1")).toBe(false);
+		coordinator.dispose();
+	});
 	it("reconcilePresence prunes a feature that no longer exists", async () => {
 		const inspects = {
 			p1: vi.fn(async () => git(feature("f1"))),

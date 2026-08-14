@@ -110,6 +110,16 @@ export class FeatureStateCoordinator implements Disposable {
 	 * been individually deep-observed.
 	 */
 	private projectRepositoryObservedAt = new Map<string, number>();
+	/**
+	 * Per-project generation counter that guards the publication of
+	 * repository-level facts (base ref, worktree inventory, reference-branch
+	 * health, `projectRepositoryObservedAt`). `invalidateProject`/
+	 * `invalidateAll` bump it so an in-flight project observation that started
+	 * before the mutation can never publish stale facts or re-stamp the
+	 * project fresh afterwards — the same compare-and-commit discipline the
+	 * per-feature deep/runtime lanes already enforce, but scoped to a project.
+	 */
+	private projectGenerations = new Map<string, number>();
 	private githubServices = new Map<string, GitHubObservationService>();
 	private projectReferenceHealth = new Map<
 		string,
@@ -181,6 +191,7 @@ export class FeatureStateCoordinator implements Disposable {
 		this.snapshots.clear();
 		this.featureDeepObservedAt.clear();
 		this.projectRepositoryObservedAt.clear();
+		this.projectGenerations.clear();
 		this.projectReferenceHealth.clear();
 		this.worktreeInventories.clear();
 		this.referenceBranchRemotes.clear();
@@ -263,6 +274,10 @@ export class FeatureStateCoordinator implements Disposable {
 	/** Invalidates every feature currently known for one project. */
 	invalidateProject(projectId: string): void {
 		if (this.disposed) return;
+		// Bump this project's generation so any in-flight project observation
+		// can no longer publish facts observed before this mutation or re-stamp
+		// the project fresh.
+		this.beginProjectObservation(projectId);
 		for (const snapshot of this.getProjectSnapshots(projectId)) {
 			this.beginDeepObservation(snapshot.feature.id);
 			this.featureDeepObservedAt.delete(snapshot.feature.id);
@@ -282,6 +297,13 @@ export class FeatureStateCoordinator implements Disposable {
 			this.featureDeepObservedAt.delete(featureId);
 		}
 		this.projectRepositoryObservedAt.clear();
+		// Bump every project's generation so in-flight project observations
+		// across the whole workspace cannot publish stale facts either.
+		const projectIds = new Set<string>();
+		for (const snapshot of this.snapshots.values()) {
+			projectIds.add(snapshot.projectId);
+		}
+		for (const projectId of projectIds) this.beginProjectObservation(projectId);
 		for (const service of this.githubServices.values()) service.invalidate();
 	}
 
@@ -296,6 +318,7 @@ export class FeatureStateCoordinator implements Disposable {
 		if (projectId) {
 			const ctx = this.projectManager?.getContext(projectId);
 			if (ctx) {
+				this.beginProjectObservation(projectId);
 				this.referenceRemoteFor(ctx).invalidate?.();
 				this.githubServices.get(ctx.project.repoPath)?.invalidate();
 			}
@@ -305,6 +328,9 @@ export class FeatureStateCoordinator implements Disposable {
 		this.githubObservations.clear();
 		for (const remote of this.referenceBranchRemotes.values())
 			remote.invalidate();
+		const projectIds = new Set<string>();
+		for (const snapshot of this.snapshots.values()) projectIds.add(snapshot.projectId);
+		for (const id of projectIds) this.beginProjectObservation(id);
 	}
 
 	onDidChange(
@@ -345,9 +371,12 @@ export class FeatureStateCoordinator implements Disposable {
 			manager.getAllContexts().map(async (ctx) => {
 				if (this.disposed) return;
 				seenProjects.add(ctx.project.id);
+				const projectGen = this.beginProjectObservation(ctx.project.id);
 				const { baseRef, projectObservation } =
-					await this.refreshProjectRepositoryFacts(ctx, generation);
-				this.projectRepositoryObservedAt.set(ctx.project.id, Date.now());
+					await this.refreshProjectRepositoryFacts(ctx, projectGen);
+				if (this.isProjectObservationCurrent(ctx.project.id, projectGen)) {
+					this.projectRepositoryObservedAt.set(ctx.project.id, Date.now());
+				}
 				const { base, features, source } = this.discoverProjectFeatures(
 					ctx,
 					baseRef,
@@ -410,10 +439,16 @@ export class FeatureStateCoordinator implements Disposable {
 		if (!ctx || this.disposed) return;
 		const startedAt = Date.now();
 		agentSpaceDiagnostic(`reconcile started scope=project:${projectId}`);
-		const generation = this.generation;
+		const generation = this.beginProjectObservation(projectId);
 		await this.refreshProjectRepositoryFacts(ctx, generation);
 		await this.reconcilePresence(projectId);
-		this.projectRepositoryObservedAt.set(projectId, Date.now());
+		// Compare-and-commit: only re-stamp the project fresh if this
+		// observation is still the current one. A mutation that arrived during
+		// the observation bumped the project generation, so a stale pass cannot
+		// revive a project invalidated mid-flight.
+		if (this.isProjectObservationCurrent(projectId, generation)) {
+			this.projectRepositoryObservedAt.set(projectId, Date.now());
+		}
 		agentSpaceDiagnostic(
 			`reconcile completed in ${Date.now() - startedAt}ms scope=project:${projectId}`,
 		);
@@ -604,7 +639,7 @@ export class FeatureStateCoordinator implements Disposable {
 	 * and the local worktree inventory. Never inspects individual features. */
 	private async refreshProjectRepositoryFacts(
 		ctx: ProjectContext,
-		generation: number,
+		projectGeneration: number,
 	): Promise<{
 		baseRef: string | undefined;
 		projectObservation: FeatureGitProjectObservation;
@@ -622,7 +657,11 @@ export class FeatureStateCoordinator implements Disposable {
 					remoteName: normalizedReference.remoteName,
 				})
 				.then((health) =>
-					this.acceptReferenceHealth(generation, ctx.project.id, health),
+					this.acceptReferenceHealth(
+						projectGeneration,
+						ctx.project.id,
+						health,
+					),
 				)
 				.catch(() => undefined);
 		}
@@ -639,13 +678,17 @@ export class FeatureStateCoordinator implements Disposable {
 					featureBranches: featureBranchRefs(features),
 				})
 				.then((inventory) =>
-					this.acceptWorktreeInventory(generation, ctx.project.id, inventory),
+					this.acceptWorktreeInventory(
+						projectGeneration,
+						ctx.project.id,
+						inventory,
+					),
 				)
 				.catch(() => undefined);
 		} else if (this.worktreeInventories.has(ctx.project.id)) {
 			// The worktree list can no longer be observed: transition a previously
 			// known inventory to unknown instead of letting it appear stale-known.
-			this.acceptWorktreeInventory(generation, ctx.project.id, {
+			this.acceptWorktreeInventory(projectGeneration, ctx.project.id, {
 				repoPath: ctx.project.repoPath,
 				...(baseRef ? { baseRef } : {}),
 				status: "unknown",
@@ -667,6 +710,20 @@ export class FeatureStateCoordinator implements Disposable {
 		const gen = (this.featureRuntimeGenerations.get(featureId) ?? 0) + 1;
 		this.featureRuntimeGenerations.set(featureId, gen);
 		return gen;
+	}
+
+	private beginProjectObservation(projectId: string): number {
+		const gen = (this.projectGenerations.get(projectId) ?? 0) + 1;
+		this.projectGenerations.set(projectId, gen);
+		return gen;
+	}
+
+	/** Whether the given project generation is still the current one. */
+	private isProjectObservationCurrent(
+		projectId: string,
+		gen: number,
+	): boolean {
+		return this.projectGenerations.get(projectId) === gen;
 	}
 
 	/**
@@ -784,11 +841,16 @@ export class FeatureStateCoordinator implements Disposable {
 	}
 
 	private acceptWorktreeInventory(
-		generation: number,
+		projectGeneration: number,
 		projectId: string,
 		inventory: WorktreeBranchInventory,
 	): void {
-		if (this.disposed || generation !== this.generation) return;
+		if (
+			this.disposed ||
+			!this.isProjectObservationCurrent(projectId, projectGeneration)
+		) {
+			return;
+		}
 		const previous = this.worktreeInventories.get(projectId);
 		this.worktreeInventories.set(projectId, inventory);
 		if (!previous || !equivalentInventory(previous, inventory)) {
@@ -1090,11 +1152,16 @@ export class FeatureStateCoordinator implements Disposable {
 	}
 
 	private acceptReferenceHealth(
-		generation: number,
+		projectGeneration: number,
 		projectId: string,
 		health: ProjectReferenceBranchHealth,
 	): void {
-		if (this.disposed || generation !== this.generation) return;
+		if (
+			this.disposed ||
+			!this.isProjectObservationCurrent(projectId, projectGeneration)
+		) {
+			return;
+		}
 		const previous = this.projectReferenceHealth.get(projectId);
 		this.projectReferenceHealth.set(projectId, health);
 		if (!previous || !equivalentReferenceHealth(previous, health)) {
