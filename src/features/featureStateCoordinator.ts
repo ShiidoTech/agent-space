@@ -233,7 +233,8 @@ export class FeatureStateCoordinator implements Disposable {
 				? knownRuntime(tmuxObservation.sessions)
 				: unknownRuntime("read_failed", tmuxObservation.detail);
 
-		for (const ctx of manager.getAllContexts()) {
+		await Promise.all(
+			manager.getAllContexts().map(async (ctx) => {
 			if (this.disposed) return;
 			seenProjects.add(ctx.project.id);
 			const baseRef = await observeBaseRef(ctx);
@@ -322,7 +323,14 @@ export class FeatureStateCoordinator implements Disposable {
 				seen.add(feature.id);
 				nextSnapshots.push(snapshot);
 			}
-		}
+			for (const snapshot of observed.map(({ snapshot }) => snapshot)) {
+				const previous = this.snapshots.get(snapshot.feature.id);
+				if (previous && equivalent(previous, snapshot)) continue;
+				this.snapshots.set(snapshot.feature.id, snapshot);
+				this.emit(snapshot);
+			}
+			}),
+		);
 		if (generation !== this.generation || this.disposed) return;
 
 		let referenceHealthChanged = false;

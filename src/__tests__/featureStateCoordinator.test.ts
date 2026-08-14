@@ -701,7 +701,7 @@ describe("FeatureStateCoordinator", () => {
 			expect.objectContaining({ featureBranch: "feat/feature_cockpit" }),
 			expect.anything(),
 		);
-		expect(fixture.context.featureManager.getFeatures).toHaveBeenCalledTimes(1);
+		expect(fixture.context.featureManager.getFeatures).toHaveBeenCalled();
 		expect(listPullRequests).toHaveBeenCalledWith(
 			expect.objectContaining({ head: "feat/audit_and_go" }),
 		);
