@@ -9,6 +9,7 @@ import { commandExists } from "../utils/platform";
 import { resolveAttention } from "./providers/attentionResolver";
 import type {
 	CodingAgentProvider,
+	ProviderAttentionSignal,
 	ProviderCapabilities,
 } from "./providers/types";
 import { NO_ATTENTION_CAPABILITIES } from "./providers/types";
@@ -22,6 +23,16 @@ import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvi
 const claudeSessionAdapter = new ClaudeSessionProvider();
 const codexSessionAdapter = new CodexSessionProvider();
 const openCodeSessionAdapter = new OpenCodeSessionProvider();
+
+/**
+ * How long a raw provider attention read is trusted before it is re-fetched.
+ * Long enough to collapse the burst of redundant reads that a single logical
+ * tick produces (sidebar render, presence polling, session binding and name
+ * sync can all ask for the same session within the same second); short
+ * enough that the UI still reflects a state change well within one presence
+ * polling interval (15s).
+ */
+const ATTENTION_CACHE_TTL_MS = 4_000;
 
 const fullSessionCapabilities = (
 	attention = NO_ATTENTION_CAPABILITIES,
@@ -444,9 +455,26 @@ export class CodingToolRegistry {
 		return resolveAttention(this.getProvider(tool), sessionId);
 	}
 
+	/**
+	 * Every surface that renders an agent (sidebar, Home, Feature page) as well
+	 * as every background loop that reconciles state (presence polling, session
+	 * binding, name sync) independently asks for this agent's attention. None of
+	 * them know about each other, so without a cache each one re-triggers the
+	 * provider's raw read — for OpenCode a real `opencode db` subprocess — even
+	 * when they all fire within the same tick. This cache makes one provider
+	 * read serve every caller that asks for the same session within the TTL,
+	 * which is what actually bounds the number of provider reads/processes: not
+	 * any single call site's polling interval, but how many independent call
+	 * sites exist.
+	 */
+	private readonly attentionCache = new Map<
+		string,
+		{ signal: ProviderAttentionSignal | undefined; expiresAt: number }
+	>();
+
 	getStructuredAttentionSignal(tool: CodingTool, sessionId: string) {
 		const provider = this.getProvider(tool);
-		const signal = provider.getAttentionSignal?.(sessionId);
+		const signal = this.readAttentionSignalCached(provider, sessionId);
 		if (!signal) return undefined;
 		const statusCapability = {
 			working: "attention.working",
@@ -457,6 +485,23 @@ export class CodingToolRegistry {
 		return provider.capabilities.attention[statusCapability]
 			? signal
 			: undefined;
+	}
+
+	private readAttentionSignalCached(
+		provider: CodingAgentProvider,
+		sessionId: string,
+	): ProviderAttentionSignal | undefined {
+		if (!provider.getAttentionSignal) return undefined;
+		const key = `${provider.id}:${sessionId}`;
+		const cached = this.attentionCache.get(key);
+		const now = Date.now();
+		if (cached && cached.expiresAt > now) return cached.signal;
+		const signal = provider.getAttentionSignal(sessionId);
+		this.attentionCache.set(key, {
+			signal,
+			expiresAt: now + ATTENTION_CACHE_TTL_MS,
+		});
+		return signal;
 	}
 
 	getSessionRenameAdapters(config?: ProjectConfig) {

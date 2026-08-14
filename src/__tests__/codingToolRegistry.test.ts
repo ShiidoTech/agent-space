@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../utils/platform", () => ({
 	commandExists: vi.fn(),
@@ -620,6 +620,91 @@ describe("CodingToolRegistry", () => {
 			mockCommandExists.mockReturnValue(false);
 			const tool = BUILTIN_CODING_TOOLS[0];
 			expect(registry.isToolAvailable(tool)).toBe(false);
+		});
+	});
+
+	describe("getStructuredAttentionSignal caching", () => {
+		function toolWithFakeProvider(
+			getAttentionSignal: (
+				sessionId: string,
+			) => { status: "working"; evidence: string } | undefined,
+		) {
+			return {
+				id: "fake",
+				name: "Fake",
+				command: "fake",
+				provider: {
+					id: "fake",
+					capabilities: {
+						launch: true,
+						resume: true,
+						sessionDiscovery: true,
+						sessionNaming: true,
+						attention: {
+							"attention.working": true,
+							"attention.waitingForUser": true,
+							"attention.idle": true,
+							"attention.failed": true,
+						},
+					},
+					conversationIdentity: { ownership: "provider_assigned" as const },
+					getAttentionSignal,
+				},
+			};
+		}
+
+		beforeEach(() => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("serves repeated reads for the same session from a single provider call", () => {
+			const getAttentionSignal = vi.fn().mockReturnValue({
+				status: "working",
+				evidence: "test.evidence",
+			});
+			const tool = toolWithFakeProvider(getAttentionSignal);
+
+			// Sidebar render, reconcilePresence and sessionBinder all ask for the
+			// same session within the same logical tick — this must not spawn a
+			// fresh provider read (an `opencode db` subprocess in production) for
+			// each caller.
+			registry.getStructuredAttentionSignal(tool, "session-1");
+			registry.getStructuredAttentionSignal(tool, "session-1");
+			registry.getStructuredAttentionSignal(tool, "session-1");
+
+			expect(getAttentionSignal).toHaveBeenCalledTimes(1);
+		});
+
+		it("re-reads once the cache entry expires", () => {
+			const getAttentionSignal = vi.fn().mockReturnValue({
+				status: "working",
+				evidence: "test.evidence",
+			});
+			const tool = toolWithFakeProvider(getAttentionSignal);
+
+			registry.getStructuredAttentionSignal(tool, "session-1");
+			vi.advanceTimersByTime(4_001);
+			registry.getStructuredAttentionSignal(tool, "session-1");
+
+			expect(getAttentionSignal).toHaveBeenCalledTimes(2);
+		});
+
+		it("keys the cache per session, not just per provider", () => {
+			const getAttentionSignal = vi.fn().mockReturnValue({
+				status: "working",
+				evidence: "test.evidence",
+			});
+			const tool = toolWithFakeProvider(getAttentionSignal);
+
+			registry.getStructuredAttentionSignal(tool, "session-1");
+			registry.getStructuredAttentionSignal(tool, "session-2");
+
+			expect(getAttentionSignal).toHaveBeenCalledTimes(2);
 		});
 	});
 });

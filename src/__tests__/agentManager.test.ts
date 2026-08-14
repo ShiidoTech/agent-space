@@ -40,6 +40,8 @@ describe("AgentManager", () => {
 		sessionName: ReturnType<typeof vi.fn>;
 		legacySessionName: ReturnType<typeof vi.fn>;
 		adoptSession: ReturnType<typeof vi.fn>;
+		isSessionAlive: ReturnType<typeof vi.fn>;
+		getPaneStatus: ReturnType<typeof vi.fn>;
 	};
 
 	const feature: Feature = {
@@ -64,6 +66,8 @@ describe("AgentManager", () => {
 				return `companion-${featureId}-${agentId}`;
 			}),
 			adoptSession: vi.fn(() => false),
+			isSessionAlive: vi.fn(() => true),
+			getPaneStatus: vi.fn(() => null),
 		};
 		manager = new AgentManager(
 			store,
@@ -438,6 +442,50 @@ describe("AgentManager", () => {
 				throw new Error("exit code 1");
 			});
 			expect(manager.isAgentBranchMerged(agent, perAgentFeature)).toBe(false);
+		});
+	});
+
+	describe("getAgents attention observation (integration)", () => {
+		it("collapses repeated observation of the same agent within one window to a single provider read", () => {
+			// Reproduces the real fan-out path: reconcilePresence's 15s timer, a
+			// sidebar re-render, and SessionBinder's own 15s timer can all call
+			// AgentManager.getAgents() for the same feature within the same
+			// window. None of them know about each other. Each call implicitly
+			// resolves attention (getAgents -> withAttentionStatus), and for a
+			// provider like OpenCode that means a subprocess spawn per call
+			// unless it is deduplicated below the AgentManager layer.
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const agent = manager.createAgent(feature, "opencode");
+			manager.markAgentStarted(agent.id, feature.id);
+			manager.updateAgentSessionId(agent.id, feature.id, "ses_abc123");
+			mockExecSync.mockReset();
+
+			mockExecSync.mockReturnValue(
+				JSON.stringify([
+					{
+						message_data: JSON.stringify({
+							role: "assistant",
+							time: {},
+						}),
+						gate_data: null,
+					},
+				]),
+			);
+
+			// Simulate the 3 independent consumers reading this agent within the
+			// same logical tick.
+			const fromReconcilePresence = manager.getAgents(feature.id);
+			const fromSidebarRender = manager.getAgents(feature.id);
+			const fromSessionBinderLikeRead = manager.getAgents(feature.id);
+
+			expect(mockExecSync).toHaveBeenCalledTimes(1);
+			for (const agents of [
+				fromReconcilePresence,
+				fromSidebarRender,
+				fromSessionBinderLikeRead,
+			]) {
+				expect(agents[0]?.attentionStatus).toBe("working");
+			}
 		});
 	});
 });
