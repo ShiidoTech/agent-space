@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 
 const GITHUB_API_HOST = "api.github.com";
 const GITHUB_API_VERSION = "2022-11-28";
+const GITHUB_REQUEST_TIMEOUT_MS = 5_000;
 
 export type GitHubAuthStatus =
 	| {
@@ -106,10 +107,17 @@ export class HttpGitHubBackend implements PullRequestBackend {
 		let statusCode: number;
 		let body: string;
 		try {
+			const startedAt = Date.now();
 			const response = await requestJson(path, options.token);
+			console.debug(
+				`[agentSpace] GitHub PR query ${options.owner}/${options.repo}#${options.head} completed in ${Date.now() - startedAt}ms`,
+			);
 			statusCode = response.statusCode;
 			body = response.body;
 		} catch (error) {
+			console.warn(
+				`[agentSpace] GitHub PR query ${options.owner}/${options.repo}#${options.head} failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			return {
 				status: "error",
 				kind: "network",
@@ -196,6 +204,9 @@ function requestJson(
 					});
 				});
 			},
+		);
+		request.setTimeout(GITHUB_REQUEST_TIMEOUT_MS, () =>
+			request.destroy(new Error(`GitHub request timed out after ${GITHUB_REQUEST_TIMEOUT_MS}ms`)),
 		);
 		request.on("error", reject);
 		request.end();

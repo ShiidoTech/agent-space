@@ -705,6 +705,11 @@ describe("FeatureStateCoordinator", () => {
 		expect(listPullRequests).toHaveBeenCalledWith(
 			expect.objectContaining({ head: "feat/audit_and_go" }),
 		);
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+				queriedHeadSha: deliverySha,
+			}),
+		);
 		expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
 			queriedHeadSha: deliverySha,
 		});
@@ -839,6 +844,12 @@ describe("FeatureStateCoordinator", () => {
 		);
 		expect(listPullRequests).toHaveBeenCalledWith(
 			expect.objectContaining({ head: "fix/1203" }),
+		);
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+				queriedBranch: "dev/improvements",
+				queriedHeadSha: activeSha,
+			}),
 		);
 		const snapshot = coordinator.getSnapshot("f1");
 		expect(snapshot?.github).toMatchObject({
@@ -1109,6 +1120,11 @@ describe("FeatureStateCoordinator", () => {
 
 		await coordinator.reconcile();
 
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.integration).toMatchObject({
+				status: "known",
+			}),
+		);
 		const snapshot = coordinator.getSnapshot("f1");
 		// The continuation is proven and the PR is merged, but it targeted
 		// another base, so it must not be modeled as the delivery vector.
@@ -1257,6 +1273,12 @@ describe("FeatureStateCoordinator", () => {
 
 		await coordinator.reconcile();
 
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+				queriedBranch: "dev/improvements",
+				queriedHeadSha: activeSha,
+			}),
+		);
 		const snapshot = coordinator.getSnapshot("f1");
 		// Both PRs are merged into the expected base, but the continuation PR
 		// proves the exact active head, so it wins as the delivery vector.
