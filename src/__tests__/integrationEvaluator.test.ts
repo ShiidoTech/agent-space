@@ -159,10 +159,10 @@ describe("IntegrationEvaluator", () => {
 			});
 		});
 
-		it("requires valid creation evidence before ancestry can mean integrated", () => {
+		it("does not require creation metadata when branch ancestry is direct", () => {
 			expect(evaluateIntegration({ git: observations(true) })).toMatchObject({
-				status: "unknown",
-				reason: "creation_point_unknown",
+				status: "known",
+				outcome: "integrated_by_ancestry",
 			});
 			expect(
 				evaluateIntegration({

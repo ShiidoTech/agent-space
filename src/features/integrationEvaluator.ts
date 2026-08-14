@@ -132,6 +132,17 @@ export function evaluateIntegration(
 		git.featureInBase.status === "known" &&
 		git.featureInBase.value.isAncestor
 	) {
+		// A feature tip proven reachable from the base already proves that all
+		// commits reachable from that feature branch are integrated. Older
+		// persisted Features may not have a creation SHA, but that metadata is
+		// not needed for this direct ancestry proof.
+		if (!createdFromSha) {
+			return {
+				status: "known",
+				outcome: "integrated_by_ancestry",
+				evidence,
+			};
+		}
 		return evaluateByAncestry(git, createdFromSha, evidence);
 	}
 	return evaluateByRemote(
