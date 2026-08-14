@@ -1,5 +1,6 @@
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 
 const execFileAsync = promisify(execFile);
 
@@ -103,8 +104,8 @@ export class GitClient implements GitReader {
 
 	private logSlowRead(argv: readonly string[], cwd: string, elapsedMs: number): void {
 		if (elapsedMs < 500) return;
-		console.warn(
-			`[agentSpace] slow Git read ${elapsedMs}ms cwd=${cwd} command=${argv.join(" ")}`,
+		agentSpaceDiagnostic(
+			`slow Git read ${elapsedMs}ms cwd=${cwd} command=${argv.join(" ")}`,
 		);
 	}
 }

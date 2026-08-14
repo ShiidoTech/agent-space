@@ -34,6 +34,7 @@ import {
 } from "../projects/referenceBranchHealth";
 import type { Agent, Feature, Service } from "../types";
 import { evaluateAttention } from "./attentionEvaluator";
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import {
 	createFeatureSnapshot,
 	type FeatureDeliveryObservation,
@@ -218,6 +219,8 @@ export class FeatureStateCoordinator implements Disposable {
 	}
 
 	private async reconcileOnce(): Promise<void> {
+		const startedAt = Date.now();
+		agentSpaceDiagnostic("reconcile started");
 		const manager = this.projectManager;
 		if (!manager) return;
 		const generation = this.generation;
@@ -355,6 +358,9 @@ export class FeatureStateCoordinator implements Disposable {
 		if (inventoryChanged && !snapshotChanged && !referenceHealthChanged) {
 			this.emit(undefined);
 		}
+		agentSpaceDiagnostic(
+			`reconcile completed in ${Date.now() - startedAt}ms snapshots=${nextSnapshots.length}`,
+		);
 	}
 
 	private acceptWorktreeInventory(

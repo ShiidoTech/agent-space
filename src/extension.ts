@@ -13,6 +13,7 @@ import {
 	shouldCleanupSession,
 } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
+import { configureAgentSpaceDiagnostics } from "./diagnostics/agentSpaceDiagnostics";
 import { runFeatureFinish } from "./features/featureFinishCommand";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
@@ -51,6 +52,9 @@ function shortSessionId(sessionId: string): string {
 export async function activate(
 	context: vscode.ExtensionContext,
 ): Promise<void> {
+	const diagnostics = vscode.window.createOutputChannel("Agent Space Diagnostics");
+	context.subscriptions.push(diagnostics);
+	configureAgentSpaceDiagnostics((message) => diagnostics.appendLine(message));
 	const prerequisites = new PrerequisiteChecker();
 	const { ok, missing } = prerequisites.checkRequired();
 	if (!ok) {
