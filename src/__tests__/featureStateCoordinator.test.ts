@@ -142,6 +142,9 @@ function setup(
 	let currentContext = context;
 	const manager = {
 		getAllContexts: vi.fn(() => [currentContext]),
+		getContext: vi.fn((projectId: string) =>
+			projectId === currentContext.project.id ? currentContext : undefined,
+		),
 		listTmuxSessions: vi.fn(() => []),
 		observeTmuxSessions: vi.fn(() => ({
 			status: "known" as const,
@@ -151,6 +154,21 @@ function setup(
 			(featureId: string, agentId: string, persisted?: string) =>
 				persisted ?? `agent-space-${featureId}-${agentId}`,
 		),
+		findContextByFeatureId: vi.fn((featureId: string) => currentContext),
+		resolveFeature: vi.fn((featureId: string) => {
+			if (featureId.startsWith("base:")) {
+				return {
+					ctx: currentContext,
+					feature: currentContext.featureManager.getBaseFeature(
+						currentContext.project.id,
+					),
+				};
+			}
+			const found = currentContext.featureManager
+				.getFeatures()
+				.find((candidate: Feature) => candidate.id === featureId);
+			return found ? { ctx: currentContext, feature: found } : undefined;
+		}),
 	} as unknown as ProjectManager;
 	return {
 		context,
@@ -368,13 +386,16 @@ describe("FeatureStateCoordinator", () => {
 		expect(inspect).toHaveBeenCalledTimes(2);
 	});
 
-	it("drains an invalidation that arrives during the queued second pass", async () => {
+	it("invalidateFeature mid-flight discards that pass's result for the feature only", async () => {
 		let coordinator: FeatureStateCoordinator;
 		let calls = 0;
 		const inspect = vi.fn(
 			async ({ featureBranch }: { featureBranch: string }) => {
 				calls += 1;
-				if (calls === 1 || calls === 3) coordinator.invalidate("f1");
+				// f1's own inspect call (base is inspected first): invalidate f1
+				// while its generation is already captured for this pass. The
+				// unrelated base feature's result must still commit normally.
+				if (calls === 2) coordinator.invalidateFeature("f1");
 				return git(featureBranch === "main" ? baseFeature() : feature());
 			},
 		);
@@ -382,7 +403,11 @@ describe("FeatureStateCoordinator", () => {
 		coordinator = new FeatureStateCoordinator(fixture.manager);
 		await coordinator.reconcile();
 
-		expect(inspect).toHaveBeenCalledTimes(6);
+		// Invalidation alone never triggers an automatic second pass; the
+		// in-flight pass simply fails to publish f1 (superseded generation).
+		expect(inspect).toHaveBeenCalledTimes(2);
+		expect(coordinator.getSnapshot("f1")).toBeUndefined();
+		expect(coordinator.getSnapshot("base:p1")).toBeDefined();
 		coordinator.dispose();
 	});
 
@@ -419,7 +444,7 @@ describe("FeatureStateCoordinator", () => {
 			},
 		});
 
-		coordinator.invalidate("f1");
+		coordinator.invalidateFeature("f1");
 		expect(invalidate).not.toHaveBeenCalled();
 		coordinator.refreshProjectReferenceHealth();
 		expect(invalidate).toHaveBeenCalledTimes(1);
@@ -500,7 +525,7 @@ describe("FeatureStateCoordinator", () => {
 		coordinator.onDidChange(listener);
 		const first = coordinator.reconcile();
 		fixture.setFeatures([]);
-		coordinator.invalidate("f1");
+		coordinator.invalidateFeature("f1");
 		release?.();
 		await first;
 		await coordinator.reconcile();
@@ -1303,5 +1328,303 @@ describe("FeatureStateCoordinator", () => {
 				(item) => item.code === "continuation_outside_delivery",
 			),
 		).toBe(false);
+	});
+});
+
+/** Two-project fixture for scoped-observation (#97) isolation tests. */
+function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
+	const featuresByProject: Record<string, Feature[]> = {
+		p1: [feature("f1")],
+		p2: [feature("f2")],
+	};
+	function makeContext(projectId: string): ProjectContext {
+		return {
+			project: { id: projectId, name: projectId, repoPath: `/repo-${projectId}` },
+			store: {
+				loadFeatures: vi.fn(() => featuresByProject[projectId]),
+				saveFeatures: vi.fn(),
+				saveAgents: vi.fn(),
+				saveServices: vi.fn(),
+			},
+			featureManager: {
+				getBaseFeature: () => ({
+					...feature(`base:${projectId}`),
+					name: "main",
+					branch: "main",
+					worktreePath: `/repo-${projectId}`,
+					createdFromSha: undefined,
+				}),
+				getBaseBranchName: () => "main",
+				getFeatures: vi.fn(() => featuresByProject[projectId]),
+			},
+			featureGitInspector: {
+				inspect: inspects[projectId],
+				isCommitAncestor: vi.fn(async (a: string, d: string) =>
+					known({ ancestor: { ref: a, sha: a }, descendant: { ref: d, sha: d }, isAncestor: true }),
+				),
+				countCommitsAfter: vi.fn(async (a: string, d: string) =>
+					known({ ancestorSha: a, descendantSha: d, count: 1 }),
+				),
+				observeProject: vi.fn(async () => ({
+					repository: known({ root: `/repo-${projectId}` }),
+					worktrees: known([]),
+				})),
+			},
+			gitClient: {
+				read: vi.fn(async () => ({
+					argv: [],
+					cwd: `/repo-${projectId}`,
+					exitCode: 0,
+					signal: null,
+					stdout: "main\n",
+					stderr: "",
+				})),
+			},
+			config: { baseBranch: "main" },
+			agentManager: { getAgents: vi.fn(() => []) },
+			serviceManager: { getServices: vi.fn(() => []) },
+		} as unknown as ProjectContext;
+	}
+	const contexts: Record<string, ProjectContext> = {
+		p1: makeContext("p1"),
+		p2: makeContext("p2"),
+	};
+	const manager = {
+		getAllContexts: vi.fn(() => [contexts.p1, contexts.p2]),
+		getContext: vi.fn((projectId: string) => contexts[projectId]),
+		listTmuxSessions: vi.fn(() => []),
+		observeTmuxSessions: vi.fn(() => ({
+			status: "known" as const,
+			sessions: [] as string[],
+		})),
+		agentTmuxSessionName: vi.fn(
+			(featureId: string, agentId: string, persisted?: string) =>
+				persisted ?? `agent-space-${featureId}-${agentId}`,
+		),
+		findContextByFeatureId: vi.fn((featureId: string) => {
+			if (featureId.startsWith("base:")) {
+				return contexts[featureId.slice("base:".length)];
+			}
+			for (const projectId of Object.keys(featuresByProject)) {
+				if (featuresByProject[projectId].some((f) => f.id === featureId)) {
+					return contexts[projectId];
+				}
+			}
+			return undefined;
+		}),
+		resolveFeature: vi.fn((featureId: string) => {
+			const ctx = (manager as unknown as ProjectManager).findContextByFeatureId(
+				featureId,
+			);
+			if (!ctx) return undefined;
+			if (featureId.startsWith("base:")) {
+				return { ctx, feature: ctx.featureManager.getBaseFeature(ctx.project.id) };
+			}
+			const found = featuresByProject[ctx.project.id].find(
+				(f) => f.id === featureId,
+			);
+			return found ? { ctx, feature: found } : undefined;
+		}),
+	} as unknown as ProjectManager;
+	return { contexts, manager, featuresByProject };
+}
+
+describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
+	it("reconcileFeature never inspects an unrelated project", async () => {
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) =>
+				git(featureBranch === "main" ? { ...feature("base:p1") } : feature("f1")),
+			),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcileFeature("f1");
+
+		expect(inspects.p1).toHaveBeenCalled();
+		expect(inspects.p2).not.toHaveBeenCalled();
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		expect(coordinator.getSnapshot("f2")).toBeUndefined();
+		coordinator.dispose();
+	});
+
+	it("reconcileProject never touches another project's Git inspector", async () => {
+		const inspects = {
+			p1: vi.fn(async () => git(feature("f1"))),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcileProject("p1");
+
+		// reconcileProject refreshes repository/worktree facts only — it never
+		// deep-inspects individual features (that stays demand-driven per
+		// reconcileFeature).
+		expect(fixture.contexts.p1.featureGitInspector.observeProject).toHaveBeenCalled();
+		expect(inspects.p1).not.toHaveBeenCalled();
+		expect(inspects.p2).not.toHaveBeenCalled();
+		expect(
+			fixture.contexts.p2.featureGitInspector.observeProject,
+		).not.toHaveBeenCalled();
+		coordinator.dispose();
+	});
+
+	it("a later reconcileFeature call always wins over an earlier one resolving late", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let call = 0;
+		const staleSha = "a".repeat(40);
+		const freshSha = "b".repeat(40);
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				call += 1;
+				const isFirstCall = call === 1;
+				if (isFirstCall) await gate; // the first (stale) call resolves last
+				const observed = git(feature("f1"));
+				const sha = isFirstCall ? staleSha : freshSha;
+				return {
+					...observed,
+					feature: known({ ref: "feat/f1", sha }),
+				};
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const stale = coordinator.reconcileFeature("f1"); // blocked on `gate`
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const fresh = coordinator.reconcileFeature("f1"); // runs to completion first
+		await fresh;
+		release?.();
+		await stale;
+
+		// The later-started call's evidence must be what's published, even
+		// though the earlier call's promise resolves last.
+		const snapshot = coordinator.getSnapshot("f1");
+		expect(snapshot?.git.feature).toMatchObject({
+			status: "known",
+			value: { sha: freshSha },
+		});
+		coordinator.dispose();
+	});
+
+	it("invalidateFeature keeps the last-known snapshot visible instead of deleting it", async () => {
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) =>
+				git(featureBranch === "main" ? feature("base:p1") : feature("f1")),
+			),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcileFeature("f1");
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+
+		coordinator.invalidateFeature("f1");
+
+		// Marking stale must not clear the display cache.
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		coordinator.dispose();
+	});
+
+	it("a transient git failure does not regress a previously known field to unknown", async () => {
+		let attempt = 0;
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				attempt += 1;
+				const observation = git(feature("f1"));
+				if (attempt === 2) {
+					return {
+						...observation,
+						featureDiff: {
+							status: "unknown" as const,
+							reason: "git_command_failed" as const,
+						},
+					};
+				}
+				return observation;
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcileFeature("f1");
+		expect(coordinator.getSnapshot("f1")?.git.featureDiff.status).toBe("known");
+
+		await coordinator.reconcileFeature("f1");
+		// The second pass's transient failure must not wipe the known diff.
+		expect(coordinator.getSnapshot("f1")?.git.featureDiff.status).toBe("known");
+		coordinator.dispose();
+	});
+
+	it("reconcilePresence updates runtime without inspecting Git or GitHub", async () => {
+		const inspects = {
+			p1: vi.fn(async () => git(feature("f1"))),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcilePresence();
+
+		expect(inspects.p1).not.toHaveBeenCalled();
+		expect(inspects.p2).not.toHaveBeenCalled();
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		expect(coordinator.getSnapshot("f1")?.git.repository.status).toBe("unknown");
+		coordinator.dispose();
+	});
+
+	it("reconcilePresence prunes a feature that no longer exists", async () => {
+		const inspects = {
+			p1: vi.fn(async () => git(feature("f1"))),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcilePresence();
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+
+		fixture.featuresByProject.p1 = [];
+		await coordinator.reconcilePresence("p1");
+
+		expect(coordinator.getSnapshot("f1")).toBeUndefined();
+		// Unrelated project untouched.
+		expect(coordinator.getSnapshot("f2")).toBeDefined();
+		coordinator.dispose();
+	});
+
+	it("a runtime-lane commit never clobbers a concurrent deep-lane result", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch !== "main") await gate;
+				return git(featureBranch === "main" ? feature("base:p1") : feature("f1"));
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const deep = coordinator.reconcileFeature("f1"); // blocked mid-flight
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await coordinator.reconcilePresence("p1"); // runtime tick lands first
+		release?.();
+		await deep;
+
+		// The deep lane's Git evidence must still land even though a runtime
+		// tick committed in between.
+		expect(coordinator.getSnapshot("f1")?.git.repository.status).toBe("known");
+		coordinator.dispose();
 	});
 });

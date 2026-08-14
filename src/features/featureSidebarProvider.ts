@@ -185,7 +185,10 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private async refreshAsync(): Promise<void> {
 		try {
 			if (!this._view) return;
-			await this.featureStateCoordinator.reconcile();
+			// The sidebar only needs lightweight presence/runtime facts to stay
+			// live; deep Git/GitHub evidence is demand-driven per Project/Feature
+			// focus, so this never blocks on (or triggers) a full deep reconcile.
+			await this.featureStateCoordinator.reconcilePresence();
 
 			if (this._view) {
 				this._view.webview.html = this.getHtml();

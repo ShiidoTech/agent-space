@@ -123,7 +123,9 @@ export async function activate(
 	context.subscriptions.push(storageWatcher);
 
 	await ensureDefaultToolConfigured(toolRegistry, globalStore);
-	await featureStateCoordinator.reconcile();
+	// Seed lightweight presence (feature list + runtime) only; deep Git/GitHub
+	// evidence is fetched on demand as Project/Feature pages come into focus.
+	await featureStateCoordinator.reconcilePresence();
 
 	const defaultToolId = toolRegistry.getDefaultToolId();
 	const availableTools = toolRegistry.getAvailableTools();
@@ -565,8 +567,16 @@ export async function activate(
 			}, 150);
 		}),
 	);
-	projectManager.onChange(() => {
-		featureStateCoordinator.invalidate();
+	projectManager.onChange((scope) => {
+		// Only the affected Feature/Project is invalidated: last-known facts
+		// stay visible everywhere else, and no unrelated scope is re-observed.
+		if (scope?.featureId) {
+			featureStateCoordinator.invalidateFeature(scope.featureId);
+		} else if (scope?.projectId) {
+			featureStateCoordinator.invalidateProject(scope.projectId);
+		} else {
+			featureStateCoordinator.invalidateAll();
+		}
 		sidebarProvider.refresh();
 		HomePanel.refreshAll();
 	});
