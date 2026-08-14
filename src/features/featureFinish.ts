@@ -212,17 +212,23 @@ function resolveFeatureRetentionBranch(
 		{ cwd: ctx.project.repoPath },
 	);
 	if (refs.exitCode === 0 && !refs.error) {
-		for (const ref of refs.stdout.split(/\r?\n/u)) {
-			if (candidates.has(ref.trim())) return ref.trim();
-		}
+		const available = refs.stdout
+			.split(/\r?\n/u)
+			.map((ref) => ref.trim())
+			.filter((ref) => ref.length > 0 && candidates.has(ref));
+		if (declaredBranch && available.includes(declaredBranch)) return declaredBranch;
+		const derived = available.filter((ref) => ref !== declaredBranch);
+		return derived.length === 1 ? derived[0] : undefined;
 	}
-	return [...candidates].find((candidate) => {
+	const resolved = [...candidates].filter((candidate) => {
 		const resolved = ctx.gitClient.readSync(
 			["rev-parse", "--verify", `${candidate}^{commit}`],
 			{ cwd: ctx.project.repoPath },
 		);
 		return resolved.exitCode === 0 && !resolved.error && resolved.stdout.trim();
 	});
+	if (declaredBranch && resolved.includes(declaredBranch)) return declaredBranch;
+	return resolved.length === 1 ? resolved[0] : undefined;
 }
 
 function observeRegisteredBranch(

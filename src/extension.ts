@@ -338,9 +338,16 @@ export async function activate(
 			console.warn(
 				`[agentSpace] ${restoreReport.blocked.length} agent runtime(s) could not be restored after restart; resume them manually.`,
 			);
-			void vscode.window.showInformationMessage(
-				`${restoreReport.blocked.length} agent runtime(s) could not be restored after restart. Open each blocked agent and resume it manually.`,
-			);
+			void vscode.window
+				.showInformationMessage(
+					`${restoreReport.blocked.length} agent runtime(s) could not be restored after restart. Open each blocked agent and resume it manually.`,
+					"Open Agent Space",
+				)
+				.then((choice) => {
+					if (choice === "Open Agent Space") {
+						void vscode.commands.executeCommand("agentSpace.openHome");
+					}
+				});
 		}
 	} catch (error) {
 		console.error(`[agentSpace] runtime restoration failed: ${error}`);
