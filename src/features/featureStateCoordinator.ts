@@ -91,6 +91,15 @@ export class FeatureStateCoordinator implements Disposable {
 	 */
 	private featureDeepGenerations = new Map<string, number>();
 	private featureRuntimeGenerations = new Map<string, number>();
+	/**
+	 * When each feature's deep Git/GitHub evidence was last actually
+	 * refreshed — set only inside `commitDeep`, never by the runtime lane.
+	 * `snapshot.observedAt` alone can't answer "is the deep evidence stale?"
+	 * because `commitRuntime` also stamps it (on a feature's first-ever
+	 * placeholder snapshot), which would otherwise read as fresh for up to
+	 * `DEEP_STALE_MS` despite no deep observation ever having run.
+	 */
+	private featureDeepObservedAt = new Map<string, number>();
 	private githubServices = new Map<string, GitHubObservationService>();
 	private projectReferenceHealth = new Map<
 		string,
@@ -160,6 +169,7 @@ export class FeatureStateCoordinator implements Disposable {
 		this.githubServices.clear();
 		this.listeners.clear();
 		this.snapshots.clear();
+		this.featureDeepObservedAt.clear();
 		this.projectReferenceHealth.clear();
 		this.worktreeInventories.clear();
 		this.referenceBranchRemotes.clear();
@@ -236,6 +246,7 @@ export class FeatureStateCoordinator implements Disposable {
 	invalidateFeature(featureId: string): void {
 		if (this.disposed) return;
 		this.beginDeepObservation(featureId);
+		this.featureDeepObservedAt.delete(featureId);
 	}
 
 	/** Invalidates every feature currently known for one project. */
@@ -243,6 +254,7 @@ export class FeatureStateCoordinator implements Disposable {
 		if (this.disposed) return;
 		for (const snapshot of this.getProjectSnapshots(projectId)) {
 			this.beginDeepObservation(snapshot.feature.id);
+			this.featureDeepObservedAt.delete(snapshot.feature.id);
 		}
 		this.referenceBranchRemotes.get(
 			this.projectManager?.getContext(projectId)?.project.repoPath ?? "",
@@ -255,6 +267,7 @@ export class FeatureStateCoordinator implements Disposable {
 		this.generation += 1;
 		for (const featureId of this.snapshots.keys()) {
 			this.beginDeepObservation(featureId);
+			this.featureDeepObservedAt.delete(featureId);
 		}
 		for (const service of this.githubServices.values()) service.invalidate();
 	}
@@ -442,13 +455,18 @@ export class FeatureStateCoordinator implements Disposable {
 			: manager.getAllContexts();
 		for (const ctx of contexts) {
 			if (this.disposed) return;
-			const { features } = this.discoverProjectFeatures(ctx);
+			const { features } = this.discoverProjectFeatures(
+				ctx,
+				undefined,
+				true,
+			);
 			const seenIds = new Set(features.map((feature) => feature.id));
 			for (const snapshot of this.getProjectSnapshots(ctx.project.id)) {
 				if (seenIds.has(snapshot.feature.id)) continue;
 				this.snapshots.delete(snapshot.feature.id);
 				this.featureDeepGenerations.delete(snapshot.feature.id);
 				this.featureRuntimeGenerations.delete(snapshot.feature.id);
+				this.featureDeepObservedAt.delete(snapshot.feature.id);
 				this.emit(undefined);
 			}
 			for (const feature of features) {
@@ -478,17 +496,21 @@ export class FeatureStateCoordinator implements Disposable {
 		}
 	}
 
+	/** Whether this feature's deep Git/GitHub evidence needs a refresh. A
+	 * feature that only ever received runtime-lane updates (never deep-
+	 * observed) is always stale, regardless of how recently a runtime tick
+	 * touched its snapshot. */
 	isFeatureStale(featureId: string, maxAgeMs = DEEP_STALE_MS): boolean {
-		const snapshot = this.snapshots.get(featureId);
-		if (!snapshot) return true;
-		return Date.now() - Date.parse(snapshot.observedAt) > maxAgeMs;
+		const observedAt = this.featureDeepObservedAt.get(featureId);
+		if (observedAt === undefined) return true;
+		return Date.now() - observedAt > maxAgeMs;
 	}
 
 	isProjectStale(projectId: string, maxAgeMs = DEEP_STALE_MS): boolean {
 		const snapshots = this.getProjectSnapshots(projectId);
 		if (snapshots.length === 0) return true;
-		return snapshots.some(
-			(snapshot) => Date.now() - Date.parse(snapshot.observedAt) > maxAgeMs,
+		return snapshots.some((snapshot) =>
+			this.isFeatureStale(snapshot.feature.id, maxAgeMs),
 		);
 	}
 
@@ -501,13 +523,22 @@ export class FeatureStateCoordinator implements Disposable {
 			: unknownRuntime("read_failed", observation.detail);
 	}
 
-	/** Persisted feature list for one project; never touches Git evidence.
-	 * `baseRef` is only passed by callers that already paid to observe it
-	 * fresh (`refreshProjectRepositoryFacts`); the cheap presence path falls
-	 * back to whatever base ref was last observed. */
+	/**
+	 * Persisted feature list for one project. `baseRef` is only passed by
+	 * callers that already paid to observe it fresh
+	 * (`refreshProjectRepositoryFacts`); the cheap presence path falls back to
+	 * whatever base ref was last observed.
+	 *
+	 * `light` (used only by `reconcilePresence`) reads the in-memory list via
+	 * `listFeaturesCached()` — no Git subprocess at all. The default (used by
+	 * every deep path) calls `getFeatures()`, which also reconciles branch
+	 * links via synchronous Git reads; deep paths already pay for Git, so
+	 * that cost is fine there, but the presence lane must never pay it.
+	 */
 	private discoverProjectFeatures(
 		ctx: ProjectContext,
 		baseRef?: string,
+		light = false,
 	): {
 		base: Feature;
 		features: Feature[];
@@ -517,11 +548,14 @@ export class FeatureStateCoordinator implements Disposable {
 		let features: Feature[];
 		let source: FeatureSnapshotSource = { status: "known" };
 		try {
-			// Probe the persisted source so a read failure remains explicit, then use
-			// FeatureManager's read-only Git reconciliation. This ensures legacy
-			// branch recovery happens before the first local/GitHub observation.
+			// Probe the persisted source so a read failure remains explicit.
 			ctx.store.loadFeatures();
-			features = [base, ...ctx.featureManager.getFeatures()];
+			features = [
+				base,
+				...(light
+					? ctx.featureManager.listFeaturesCached()
+					: ctx.featureManager.getFeatures()),
+			];
 		} catch (error) {
 			source = {
 				status: "unknown",
@@ -671,6 +705,7 @@ export class FeatureStateCoordinator implements Disposable {
 			attention,
 			observedAt: new Date().toISOString(),
 		});
+		this.featureDeepObservedAt.set(feature.id, Date.now());
 		if (previous && equivalent(previous, snapshot)) return false;
 		this.snapshots.set(feature.id, snapshot);
 		this.emit(snapshot);
@@ -1050,9 +1085,11 @@ export class FeatureStateCoordinator implements Disposable {
 		}
 	}
 
+	/** The recurring timer only drives the lightweight presence lane — a full
+	 * deep sweep is never on an automatic/periodic hot path. */
 	private configurePolling(intervalMs: number): void {
 		if (this.consumers === 0 || intervalMs <= 0 || this.timer) return;
-		this.timer = setInterval(() => void this.reconcile(), intervalMs);
+		this.timer = setInterval(() => void this.reconcilePresence(), intervalMs);
 		this.timer.unref?.();
 	}
 

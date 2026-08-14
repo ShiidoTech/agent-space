@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FeatureManager } from "../features/featureManager";
 import { FeatureStateCoordinator } from "../features/featureStateCoordinator";
 import type { FeatureGitObservations } from "../git/featureGitObservations";
 import { known, unknown } from "../git/featureGitObservations";
@@ -7,7 +11,19 @@ import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
+import { Store } from "../storage/store";
 import type { Agent, Feature } from "../types";
+
+// Real FeatureManager/Store are used by the "real FeatureManager" describe
+// block below to prove the presence lane never shells out to Git — child_process
+// is mocked so that assertion is meaningful (a real subprocess call would
+// still succeed against this test's actual filesystem paths, hiding the bug).
+vi.mock("node:child_process", () => ({
+	execFile: vi.fn(),
+	execSync: vi.fn(),
+}));
+import { execSync } from "node:child_process";
+const mockExecSync = vi.mocked(execSync);
 
 afterEach(() => vi.useRealTimers());
 
@@ -105,6 +121,7 @@ function setup(
 			getBaseFeature: () => baseFeature(),
 			getBaseBranchName: () => "main",
 			getFeatures: vi.fn(() => features),
+			listFeaturesCached: vi.fn(() => features),
 		},
 		featureGitInspector: {
 			inspect,
@@ -256,14 +273,21 @@ describe("FeatureStateCoordinator", () => {
 		const coordinator = new FeatureStateCoordinator(fixture.manager);
 		coordinator.start(undefined, 15_000);
 		await coordinator.reconcile();
-		const callsWithoutConsumer = fixture.inspect.mock.calls.length;
+		const inspectCallsBeforeTick = fixture.inspect.mock.calls.length;
+		const callsWithoutConsumer =
+			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length;
 		await vi.advanceTimersByTimeAsync(15_000);
-		expect(fixture.inspect).toHaveBeenCalledTimes(callsWithoutConsumer);
-		const consumer = coordinator.acquireConsumer(15_000);
-		await vi.advanceTimersByTimeAsync(15_000);
-		expect(fixture.inspect.mock.calls.length).toBeGreaterThan(
+		expect(vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length).toBe(
 			callsWithoutConsumer,
 		);
+		const consumer = coordinator.acquireConsumer(15_000);
+		await vi.advanceTimersByTimeAsync(15_000);
+		expect(
+			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length,
+		).toBeGreaterThan(callsWithoutConsumer);
+		// The recurring timer only drives the lightweight presence lane — it
+		// must never perform a deep Git inspection.
+		expect(fixture.inspect.mock.calls.length).toBe(inspectCallsBeforeTick);
 		consumer.dispose();
 		coordinator.dispose();
 	});
@@ -274,26 +298,35 @@ describe("FeatureStateCoordinator", () => {
 		const coordinator = new FeatureStateCoordinator(fixture.manager);
 		coordinator.start(undefined, 15_000);
 		await coordinator.reconcile();
-		const initialCalls = fixture.inspect.mock.calls.length;
+		const initialCalls =
+			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length;
 
 		const sidebar = coordinator.acquireConsumer(15_000);
 		const home = coordinator.acquireConsumer(15_000);
 		await vi.advanceTimersByTimeAsync(15_000);
-		const visibleCalls = fixture.inspect.mock.calls.length;
+		const visibleCalls =
+			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length;
 		expect(visibleCalls).toBeGreaterThan(initialCalls);
 
 		sidebar.dispose();
 		await vi.advanceTimersByTimeAsync(15_000);
-		expect(fixture.inspect.mock.calls.length).toBeGreaterThan(visibleCalls);
+		expect(
+			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length,
+		).toBeGreaterThan(visibleCalls);
 
 		home.dispose();
-		const hiddenCalls = fixture.inspect.mock.calls.length;
+		const hiddenCalls =
+			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length;
 		await vi.advanceTimersByTimeAsync(30_000);
-		expect(fixture.inspect.mock.calls.length).toBe(hiddenCalls);
+		expect(vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length).toBe(
+			hiddenCalls,
+		);
 
 		const sidebarVisibleAgain = coordinator.acquireConsumer(15_000);
 		await vi.advanceTimersByTimeAsync(15_000);
-		expect(fixture.inspect.mock.calls.length).toBeGreaterThan(hiddenCalls);
+		expect(
+			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length,
+		).toBeGreaterThan(hiddenCalls);
 		sidebarVisibleAgain.dispose();
 		coordinator.dispose();
 	});
@@ -1356,6 +1389,7 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 				}),
 				getBaseBranchName: () => "main",
 				getFeatures: vi.fn(() => featuresByProject[projectId]),
+				listFeaturesCached: vi.fn(() => featuresByProject[projectId]),
 			},
 			featureGitInspector: {
 				inspect: inspects[projectId],
@@ -1582,6 +1616,27 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("a feature seeded only by reconcilePresence is still stale — a runtime tick must not fake deep freshness", async () => {
+		const inspects = {
+			p1: vi.fn(async () => git(feature("f1"))),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		// Startup-style seed: presence only, no deep Git/GitHub observation yet.
+		await coordinator.reconcilePresence();
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		expect(coordinator.isFeatureStale("f1")).toBe(true);
+		expect(coordinator.isProjectStale("p1")).toBe(true);
+
+		// First focus triggers the deep reconcile the staleness check demanded.
+		await coordinator.reconcileFeature("f1");
+		expect(coordinator.isFeatureStale("f1")).toBe(false);
+		expect(inspects.p1).toHaveBeenCalledTimes(1);
+		coordinator.dispose();
+	});
+
 	it("reconcilePresence prunes a feature that no longer exists", async () => {
 		const inspects = {
 			p1: vi.fn(async () => git(feature("f1"))),
@@ -1626,5 +1681,86 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		// tick committed in between.
 		expect(coordinator.getSnapshot("f1")?.git.repository.status).toBe("known");
 		coordinator.dispose();
+	});
+});
+
+describe("FeatureStateCoordinator presence lane against a real FeatureManager", () => {
+	let tmpDir: string;
+	let store: Store;
+	let featureManager: FeatureManager;
+	const repoRoot = "/fake/repo";
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fsc-test-"));
+		store = new Store(tmpDir);
+		store.saveFeatures([feature("f1")]);
+		featureManager = new FeatureManager(
+			store,
+			repoRoot,
+			path.join(repoRoot, ".worktrees"),
+			{ baseBranch: "main" },
+		);
+		mockExecSync.mockReset();
+		mockExecSync.mockImplementation(() => "");
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	function makeContext(): ProjectContext {
+		return {
+			project: { id: "p1", name: "p1", repoPath: repoRoot },
+			store,
+			featureManager,
+			featureGitInspector: {
+				inspect: vi.fn(async () => git(feature("f1"))),
+				isCommitAncestor: vi.fn(),
+				countCommitsAfter: vi.fn(),
+				observeProject: vi.fn(async () => ({
+					repository: known({ root: repoRoot }),
+					worktrees: known([]),
+				})),
+			},
+			gitClient: { read: vi.fn() },
+			config: { baseBranch: "main" },
+			agentManager: { getAgents: vi.fn(() => []) },
+			serviceManager: { getServices: vi.fn(() => []) },
+		} as unknown as ProjectContext;
+	}
+
+	function makeManager(ctx: ProjectContext): ProjectManager {
+		return {
+			getAllContexts: vi.fn(() => [ctx]),
+			getContext: vi.fn(() => ctx),
+			observeTmuxSessions: vi.fn(() => ({
+				status: "known" as const,
+				sessions: [] as string[],
+			})),
+			agentTmuxSessionName: vi.fn(() => undefined),
+			findContextByFeatureId: vi.fn(() => ctx),
+			resolveFeature: vi.fn((featureId: string) => {
+				const found = ctx.featureManager
+					.getFeatures()
+					.find((candidate: Feature) => candidate.id === featureId);
+				return found ? { ctx, feature: found } : undefined;
+			}),
+		} as unknown as ProjectManager;
+	}
+
+	it("reconcilePresence never shells out to Git even with a real FeatureManager", async () => {
+		const ctx = makeContext();
+		const coordinator = new FeatureStateCoordinator(makeManager(ctx));
+
+		await coordinator.reconcilePresence();
+
+		expect(mockExecSync).not.toHaveBeenCalled();
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		coordinator.dispose();
+	});
+
+	it("the real FeatureManager's deep getFeatures() does shell out to Git, confirming the presence lane must avoid it", () => {
+		featureManager.getFeatures();
+		expect(mockExecSync).toHaveBeenCalled();
 	});
 });
