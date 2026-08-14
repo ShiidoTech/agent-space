@@ -446,6 +446,19 @@ describe("AgentManager", () => {
 	});
 
 	describe("getAgents attention observation (integration)", () => {
+		it("exposes the startup read model without probing the provider", () => {
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const agent = manager.createAgent(feature, "opencode");
+			manager.markAgentStarted(agent.id, feature.id);
+			manager.updateAgentSessionId(agent.id, feature.id, "ses_startup");
+			mockExecSync.mockReset();
+
+			const agents = manager.getAgentsReadModel(feature.id);
+
+			expect(mockExecSync).not.toHaveBeenCalled();
+			expect(agents[0]).toMatchObject({ id: agent.id, sessionId: "ses_startup" });
+		});
+
 		it("collapses repeated observation of the same agent within one window to a single provider read", () => {
 			// Reproduces the real fan-out path: reconcilePresence's 15s timer, a
 			// sidebar re-render, and SessionBinder's own 15s timer can all call

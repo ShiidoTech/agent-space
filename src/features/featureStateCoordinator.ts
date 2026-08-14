@@ -530,7 +530,7 @@ export class FeatureStateCoordinator implements Disposable {
 			}
 			for (const feature of features) {
 				const agents = readRuntime<Agent[]>(() =>
-					ctx.agentManager.getAgents(feature.id),
+					ctx.agentManager.getAgentsReadModel(feature.id),
 				);
 				const services = readRuntime<Service[]>(() =>
 					ctx.serviceManager.getServices(feature.id),

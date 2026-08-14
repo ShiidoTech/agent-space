@@ -153,7 +153,10 @@ function setup(
 			})),
 		},
 		config: { baseBranch: "main" },
-		agentManager: { getAgents: vi.fn(() => []) },
+		agentManager: {
+			getAgents: vi.fn(() => []),
+			getAgentsReadModel: vi.fn(() => []),
+		},
 		serviceManager: { getServices: vi.fn(() => []) },
 	} as unknown as ProjectContext;
 	let currentContext = context;
@@ -275,15 +278,15 @@ describe("FeatureStateCoordinator", () => {
 		await coordinator.reconcile();
 		const inspectCallsBeforeTick = fixture.inspect.mock.calls.length;
 		const callsWithoutConsumer =
-			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length;
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length;
 		await vi.advanceTimersByTimeAsync(15_000);
-		expect(vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length).toBe(
+			expect(vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length).toBe(
 			callsWithoutConsumer,
 		);
 		const consumer = coordinator.acquireConsumer(15_000);
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(
-			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length,
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length,
 		).toBeGreaterThan(callsWithoutConsumer);
 		// The recurring timer only drives the lightweight presence lane — it
 		// must never perform a deep Git inspection.
@@ -299,33 +302,33 @@ describe("FeatureStateCoordinator", () => {
 		coordinator.start(undefined, 15_000);
 		await coordinator.reconcile();
 		const initialCalls =
-			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length;
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length;
 
 		const sidebar = coordinator.acquireConsumer(15_000);
 		const home = coordinator.acquireConsumer(15_000);
 		await vi.advanceTimersByTimeAsync(15_000);
 		const visibleCalls =
-			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length;
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length;
 		expect(visibleCalls).toBeGreaterThan(initialCalls);
 
 		sidebar.dispose();
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(
-			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length,
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length,
 		).toBeGreaterThan(visibleCalls);
 
 		home.dispose();
 		const hiddenCalls =
-			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length;
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length;
 		await vi.advanceTimersByTimeAsync(30_000);
-		expect(vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length).toBe(
+		expect(vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length).toBe(
 			hiddenCalls,
 		);
 
 		const sidebarVisibleAgain = coordinator.acquireConsumer(15_000);
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(
-			vi.mocked(fixture.context.agentManager.getAgents).mock.calls.length,
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length,
 		).toBeGreaterThan(hiddenCalls);
 		sidebarVisibleAgain.dispose();
 		coordinator.dispose();
@@ -1415,7 +1418,7 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 				})),
 			},
 			config: { baseBranch: "main" },
-			agentManager: { getAgents: vi.fn(() => []) },
+			agentManager: { getAgents: vi.fn(() => []), getAgentsReadModel: vi.fn(() => []) },
 			serviceManager: { getServices: vi.fn(() => []) },
 		} as unknown as ProjectContext;
 	}
@@ -1903,7 +1906,7 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 			},
 			gitClient: { read: vi.fn() },
 			config: { baseBranch: "main" },
-			agentManager: { getAgents: vi.fn(() => []) },
+			agentManager: { getAgents: vi.fn(() => []), getAgentsReadModel: vi.fn(() => []) },
 			serviceManager: { getServices: vi.fn(() => []) },
 		} as unknown as ProjectContext;
 	}

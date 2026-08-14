@@ -532,7 +532,7 @@ export class HomePanel {
 		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
 		if (!resolved) return;
 		const { ctx, feature } = resolved;
-		const agents = ctx.agentManager.getAgents(this.currentFeatureId);
+		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);
@@ -603,7 +603,7 @@ export class HomePanel {
 		if (!ctx) return;
 
 		this.terminalController?.killFeatureTerminals(featureId);
-		for (const agent of ctx.agentManager.getAgents(featureId)) {
+		for (const agent of ctx.agentManager.getAgentsReadModel(featureId)) {
 			ctx.agentManager.closeAgent(agent.id, featureId);
 		}
 		for (const service of ctx.serviceManager.getServices(featureId)) {
@@ -618,7 +618,7 @@ export class HomePanel {
 
 		this.projectManager.killProjectSessions(projectId, this.terminalController);
 		for (const feature of ctx.featureManager.getFeatures()) {
-			for (const agent of ctx.agentManager.getAgents(feature.id)) {
+			for (const agent of ctx.agentManager.getAgentsReadModel(feature.id)) {
 				ctx.agentManager.closeAgent(agent.id, feature.id);
 			}
 			for (const service of ctx.serviceManager.getServices(feature.id)) {
@@ -635,7 +635,7 @@ export class HomePanel {
 			this.currentFeatureId,
 		);
 		if (!ctx) return;
-		const agents = ctx.agentManager.getAgents(this.currentFeatureId);
+		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 
@@ -656,7 +656,7 @@ export class HomePanel {
 			this.currentFeatureId,
 		);
 		if (!ctx) return;
-		const agents = ctx.agentManager.getAgents(this.currentFeatureId);
+		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		for (const agentId of agentIds) {
 			const agent = agents.find((a) => a.id === agentId);
 			if (!agent) continue;
