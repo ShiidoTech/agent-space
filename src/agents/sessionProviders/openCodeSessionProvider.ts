@@ -15,7 +15,6 @@ export class OpenCodeSessionProvider
 	implements SessionProvider, SessionRenameAdapter
 {
 	readonly toolId = "opencode";
-	private readonly execFileAsync = promisify(execFile);
 	readonly async = {
 		scanSessions: async (): Promise<SessionInfo[]> => {
 			const rows = await this.queryAsync(
@@ -48,7 +47,7 @@ export class OpenCodeSessionProvider
 
 	private async queryAsync(sql: string): Promise<unknown[]> {
 		try {
-			const { stdout } = await this.execFileAsync(
+			const { stdout } = await promisify(execFile)(
 				"opencode",
 				["db", sql, "--format", "json"],
 				{ encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024 },

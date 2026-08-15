@@ -63,7 +63,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		attention: { state: "unknown", reason: "Provider activity unavailable" },
 		session: { state: "ambiguous", detail: "Several candidates" },
 	}));
-	const ctx = { agentManager: { getAgents, observe } };
+	const ctx = { agentManager: { getAgents, getAgentsReadModel: getAgents, observe } };
 	const resolveFeature = vi.fn().mockReturnValue({ ctx, feature });
 
 	let receiveMessage: ReturnType<typeof vi.fn>;
