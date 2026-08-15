@@ -16,6 +16,35 @@ export class OpenCodeSessionProvider
 {
 	readonly toolId = "opencode";
 	private readonly execFileAsync = promisify(execFile);
+	readonly async = {
+		scanSessions: async (): Promise<SessionInfo[]> => {
+			const rows = await this.queryAsync(
+				"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
+			);
+			return rows
+				.filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && "id" in r)
+				.map((r) => ({
+					sessionId: String(r.id || ""),
+					prompt: String(r.title || ""),
+					created: epochMsToIso(r.time_created),
+					projectPath: String(r.directory || ""),
+				}));
+		},
+		readName: async (sessionId: string): Promise<string | null> => {
+			if (!isSafeSessionId(sessionId)) return null;
+			const rows = await this.queryAsync(
+				`SELECT title FROM session WHERE id = '${sessionId}'`,
+			);
+			const title = (rows[0] as Record<string, unknown> | undefined)?.title;
+			return typeof title === "string" && title.trim() ? title.trim() : null;
+		},
+		hasSession: async (sessionId: string): Promise<boolean> => {
+			if (!isSafeSessionId(sessionId)) return false;
+			return (await this.queryAsync(
+				`SELECT id FROM session WHERE id = '${sessionId}'`,
+			)).length > 0;
+		},
+	};
 
 	private async queryAsync(sql: string): Promise<unknown[]> {
 		try {
@@ -29,36 +58,6 @@ export class OpenCodeSessionProvider
 		} catch {
 			return [];
 		}
-	}
-
-	async scanSessionsAsync(): Promise<SessionInfo[]> {
-		const rows = await this.queryAsync(
-			"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
-		);
-		return rows
-			.filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && "id" in r)
-			.map((r) => ({
-				sessionId: String(r.id || ""),
-				prompt: String(r.title || ""),
-				created: epochMsToIso(r.time_created),
-				projectPath: String(r.directory || ""),
-			}));
-	}
-
-	async readNameAsync(sessionId: string): Promise<string | null> {
-		if (!isSafeSessionId(sessionId)) return null;
-		const rows = await this.queryAsync(
-			`SELECT title FROM session WHERE id = '${sessionId}'`,
-		);
-		const title = (rows[0] as Record<string, unknown> | undefined)?.title;
-		return typeof title === "string" && title.trim() ? title.trim() : null;
-	}
-
-	async hasSessionAsync(sessionId: string): Promise<boolean> {
-		if (!isSafeSessionId(sessionId)) return false;
-		return (await this.queryAsync(
-			`SELECT id FROM session WHERE id = '${sessionId}'`,
-		)).length > 0;
 	}
 
 	scanSessions(): SessionInfo[] {

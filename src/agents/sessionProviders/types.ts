@@ -10,13 +10,11 @@ export interface SessionInfo {
 export interface SessionProvider {
 	toolId: string;
 	scanSessions(options?: { fresh?: boolean }): SessionInfo[];
-	scanSessionsAsync?(options?: { fresh?: boolean }): Promise<SessionInfo[]>;
 }
 
 export interface SessionRenameAdapter {
 	toolId: string;
 	readName(sessionId: string): string | null;
-	readNameAsync?(sessionId: string): Promise<string | null>;
 	clearCache?(sessionId: string): void;
 	dispose?(): void;
 }
