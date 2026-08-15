@@ -1,4 +1,5 @@
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
+import { promisify } from "node:util";
 import type {
 	SessionInfo,
 	SessionProvider,
@@ -14,6 +15,51 @@ export class OpenCodeSessionProvider
 	implements SessionProvider, SessionRenameAdapter
 {
 	readonly toolId = "opencode";
+	private readonly execFileAsync = promisify(execFile);
+
+	private async queryAsync(sql: string): Promise<unknown[]> {
+		try {
+			const { stdout } = await this.execFileAsync(
+				"opencode",
+				["db", sql, "--format", "json"],
+				{ encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024 },
+			);
+			const rows: unknown = JSON.parse(stdout);
+			return Array.isArray(rows) ? rows : [];
+		} catch {
+			return [];
+		}
+	}
+
+	async scanSessionsAsync(): Promise<SessionInfo[]> {
+		const rows = await this.queryAsync(
+			"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
+		);
+		return rows
+			.filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && "id" in r)
+			.map((r) => ({
+				sessionId: String(r.id || ""),
+				prompt: String(r.title || ""),
+				created: epochMsToIso(r.time_created),
+				projectPath: String(r.directory || ""),
+			}));
+	}
+
+	async readNameAsync(sessionId: string): Promise<string | null> {
+		if (!isSafeSessionId(sessionId)) return null;
+		const rows = await this.queryAsync(
+			`SELECT title FROM session WHERE id = '${sessionId}'`,
+		);
+		const title = (rows[0] as Record<string, unknown> | undefined)?.title;
+		return typeof title === "string" && title.trim() ? title.trim() : null;
+	}
+
+	async hasSessionAsync(sessionId: string): Promise<boolean> {
+		if (!isSafeSessionId(sessionId)) return false;
+		return (await this.queryAsync(
+			`SELECT id FROM session WHERE id = '${sessionId}'`,
+		)).length > 0;
+	}
 
 	scanSessions(): SessionInfo[] {
 		try {
@@ -146,6 +192,34 @@ export class OpenCodeSessionProvider
 		} catch {
 			return null;
 		}
+	}
+
+	async readAttentionAsync(
+		sessionId: string,
+	): Promise<OpenCodeAttentionSignal | null> {
+		if (!isSafeSessionId(sessionId)) return null;
+		const rows = await this.queryAsync(
+			`SELECT (SELECT data FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AS message_data, (SELECT data FROM part WHERE session_id = '${sessionId}' AND message_id = (SELECT id FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AND json_extract(data, '$.type') = 'tool' AND json_extract(data, '$.state.status') IN ('pending', 'running') AND json_extract(data, '$.tool') IN ('question', 'plan_exit') ORDER BY time_updated DESC, id DESC LIMIT 1) AS gate_data`,
+		);
+		if (rows.length === 0) return null;
+		const row = rows[0] as Record<string, unknown>;
+		const gate = parseJsonRecord(row.gate_data);
+		if (gate) {
+			const tool = typeof gate.tool === "string" ? gate.tool : "question";
+			return { status: "waiting_for_user", evidence: `opencode.${tool}.waiting` };
+		}
+		const message = parseJsonRecord(row.message_data);
+		if (!message) return null;
+		const role = typeof message.role === "string" ? message.role : "";
+		if (role === "user") {
+			return {
+				status: "working",
+				evidence: "OpenCode has received user input and has not completed a response",
+			};
+		}
+		if (role !== "assistant") return null;
+		const time = parseJsonRecord(message.time);
+		return time?.completed ? { status: "idle", evidence: "opencode.assistant.completed" } : { status: "working", evidence: "opencode.assistant.in_progress" };
 	}
 }
 

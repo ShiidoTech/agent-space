@@ -80,6 +80,8 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 			sessionId ? ["--session", sessionId] : ["--continue"],
 		getAttentionSignal: (sessionId) =>
 			openCodeSessionAdapter.readAttention(sessionId) ?? undefined,
+		getAttentionSignalAsync: async (sessionId) =>
+			(await openCodeSessionAdapter.readAttentionAsync(sessionId)) ?? undefined,
 		sessionAdapter: openCodeSessionAdapter,
 	},
 	{
@@ -471,6 +473,10 @@ export class CodingToolRegistry {
 		string,
 		{ signal: ProviderAttentionSignal | undefined; expiresAt: number }
 	>();
+	private readonly attentionInFlight = new Map<
+		string,
+		Promise<ProviderAttentionSignal | undefined>
+	>();
 
 	getStructuredAttentionSignal(tool: CodingTool, sessionId: string) {
 		const provider = this.getProvider(tool);
@@ -485,6 +491,46 @@ export class CodingToolRegistry {
 		return provider.capabilities.attention[statusCapability]
 			? signal
 			: undefined;
+	}
+
+	async getStructuredAttentionSignalAsync(
+		tool: CodingTool,
+		sessionId: string,
+	): Promise<ProviderAttentionSignal | undefined> {
+		const provider = this.getProvider(tool);
+		const key = `${provider.id}:${sessionId}`;
+		const cached = this.attentionCache.get(key);
+		if (cached && cached.expiresAt > Date.now())
+			return this.capableAttention(provider, cached.signal);
+		let pending = this.attentionInFlight.get(key);
+		if (!pending) {
+			pending = (async () => {
+				const signal = provider.getAttentionSignalAsync
+					? await provider.getAttentionSignalAsync(sessionId)
+					: undefined;
+				this.attentionCache.set(key, {
+					signal,
+					expiresAt: Date.now() + ATTENTION_CACHE_TTL_MS,
+				});
+				return signal;
+			})().finally(() => this.attentionInFlight.delete(key));
+			this.attentionInFlight.set(key, pending);
+		}
+		return this.capableAttention(provider, await pending);
+	}
+
+	private capableAttention(
+		provider: CodingAgentProvider,
+		signal: ProviderAttentionSignal | undefined,
+	) {
+		if (!signal) return undefined;
+		const capability = {
+			working: "attention.working",
+			waiting_for_user: "attention.waitingForUser",
+			idle: "attention.idle",
+			failed: "attention.failed",
+		}[signal.status] as keyof typeof provider.capabilities.attention;
+		return provider.capabilities.attention[capability] ? signal : undefined;
 	}
 
 	private readAttentionSignalCached(

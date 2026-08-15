@@ -10,11 +10,13 @@ export interface SessionInfo {
 export interface SessionProvider {
 	toolId: string;
 	scanSessions(options?: { fresh?: boolean }): SessionInfo[];
+	scanSessionsAsync?(options?: { fresh?: boolean }): Promise<SessionInfo[]>;
 }
 
 export interface SessionRenameAdapter {
 	toolId: string;
 	readName(sessionId: string): string | null;
+	readNameAsync?(sessionId: string): Promise<string | null>;
 	clearCache?(sessionId: string): void;
 	dispose?(): void;
 }
@@ -25,4 +27,14 @@ export interface SessionTitleProvider {
 	readTitle(filePath: string): string | null;
 	clearCache?(sessionId: string): void;
 	dispose?(): void;
+}
+
+export interface AsyncSessionObservationAdapter {
+	scanSessions?(options?: { fresh?: boolean }): Promise<SessionInfo[]>;
+	hasSession?(sessionId: string): Promise<boolean>;
+	readName?(sessionId: string): Promise<string | null>;
+	correlateOwnedSession?(
+		cwd: string,
+		knownSessionIds: ReadonlySet<string>,
+	): Promise<string | undefined>;
 }
