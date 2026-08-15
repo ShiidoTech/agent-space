@@ -321,7 +321,10 @@ export async function activate(
 		projectManager.notifyChange();
 		sessionNameSyncer.syncAll();
 	});
-	sessionBinder.start(projectManager);
+	// Do not start the legacy synchronous provider poller from activation.
+	// Until binding is fully async, its 15s scan can monopolise the Extension
+	// Host. Explicit attach/reconcile actions remain available.
+	sessionBinder.start(projectManager, 0);
 	context.subscriptions.push({ dispose: () => sessionBinder.dispose() });
 
 	// Post-restart runtime restoration. Fail-closed and strictly resuming: an
@@ -389,7 +392,9 @@ export async function activate(
 
 	const config = vscode.workspace.getConfiguration("agentSpace");
 	if (config.get("syncSessionNames", config.get("autoNameAgents", true))) {
-		sessionNameSyncer.start(projectManager);
+		// The legacy naming poller reads provider stores synchronously. Keep
+		// startup/UI passive until the async naming path is wired through.
+		sessionNameSyncer.start(projectManager, 0);
 		// Initial provider title scans are explicit/focus-driven. The persisted
 		// read model is sufficient to render the UI and must remain non-blocking.
 	}
