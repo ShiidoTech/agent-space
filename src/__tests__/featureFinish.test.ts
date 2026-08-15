@@ -672,7 +672,8 @@ describe("Feature Finish", () => {
 			}),
 		);
 
-		expect(assessment).toMatchObject({ safe: false, forceable: false });
+		expect(assessment).toMatchObject({ safe: false, forceable: true });
+		expect(assessment.checks[0]?.requiresForce).toBe(true);
 		expect(assessment.reasons.join("\n")).toContain("GitHub unavailable");
 	});
 
