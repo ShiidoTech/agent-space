@@ -585,6 +585,16 @@ export class FeatureManager {
 		return [...this.features];
 	}
 
+	/**
+	 * The in-memory feature list without branch-link reconciliation: no
+	 * synchronous Git reads and no migration writes. For read-only surfaces
+	 * that only need presence (existence, name, id) — e.g. the sidebar's
+	 * lightweight polling lane — not evidence about branch state.
+	 */
+	listFeaturesCached(): Feature[] {
+		return [...this.features];
+	}
+
 	getFeature(id: string): Feature | undefined {
 		const feature = this.features.find((f) => f.id === id);
 		if (feature) this.reconcileFeatureBranches(feature);

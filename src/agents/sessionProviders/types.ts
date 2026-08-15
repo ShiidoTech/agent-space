@@ -26,3 +26,13 @@ export interface SessionTitleProvider {
 	clearCache?(sessionId: string): void;
 	dispose?(): void;
 }
+
+export interface AsyncSessionObservationAdapter {
+	scanSessions?(options?: { fresh?: boolean }): Promise<SessionInfo[]>;
+	hasSession?(sessionId: string): Promise<boolean>;
+	readName?(sessionId: string): Promise<string | null>;
+	correlateOwnedSession?(
+		cwd: string,
+		knownSessionIds: ReadonlySet<string>,
+	): Promise<string | undefined>;
+}

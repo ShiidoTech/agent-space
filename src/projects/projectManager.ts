@@ -30,10 +30,20 @@ export interface ProjectContext {
 	config: ProjectConfig;
 }
 
+/**
+ * Scope of a change notification, when known, so listeners (in particular
+ * `FeatureStateCoordinator`) can invalidate only the affected Feature/Project
+ * instead of treating every mutation as workspace-wide.
+ */
+export interface ProjectChangeScope {
+	readonly projectId?: string;
+	readonly featureId?: string;
+}
+
 export class ProjectManager {
 	private contexts = new Map<string, ProjectContext>();
 	private featureToProject = new Map<string, string>();
-	private onChangeCallbacks: Array<() => void> = [];
+	private onChangeCallbacks: Array<(scope?: ProjectChangeScope) => void> = [];
 
 	constructor(
 		private readonly globalStore: GlobalStore,
@@ -43,14 +53,15 @@ export class ProjectManager {
 		private readonly toolRegistry: CodingToolRegistry = new CodingToolRegistry(),
 	) {}
 
-	/** Register a callback fired when projects are added/removed. */
-	onChange(callback: () => void): void {
+	/** Register a callback fired when projects/features change. */
+	onChange(callback: (scope?: ProjectChangeScope) => void): void {
 		this.onChangeCallbacks.push(callback);
 	}
 
-	notifyChange(): void {
+	/** Omit `scope` only when the change is genuinely workspace-wide. */
+	notifyChange(scope?: ProjectChangeScope): void {
 		for (const cb of this.onChangeCallbacks) {
-			cb();
+			cb(scope);
 		}
 	}
 
@@ -74,7 +85,7 @@ export class ProjectManager {
 
 		projects.push(project);
 		this.globalStore.saveProjects(projects);
-		this.notifyChange();
+		this.notifyChange({ projectId: project.id });
 		return project;
 	}
 
@@ -90,7 +101,7 @@ export class ProjectManager {
 		const projects = this.getProjects().filter((p) => p.id !== projectId);
 		this.globalStore.saveProjects(projects);
 		this.contexts.delete(projectId);
-		this.notifyChange();
+		this.notifyChange({ projectId });
 	}
 
 	updateProjectConfig(
@@ -109,7 +120,7 @@ export class ProjectManager {
 			context.featureManager.setProjectConfig(config);
 			context.agentManager.setProjectConfig(config);
 		}
-		this.notifyChange();
+		this.notifyChange({ projectId });
 		return config;
 	}
 
@@ -129,7 +140,7 @@ export class ProjectManager {
 			context.featureManager.setProjectConfig(nextConfig);
 			context.agentManager.setProjectConfig(nextConfig);
 		}
-		this.notifyChange();
+		this.notifyChange({ projectId });
 		return nextConfig;
 	}
 
@@ -162,7 +173,7 @@ export class ProjectManager {
 			const projectId = parts[1];
 			const ctx = this.contexts.get(projectId);
 			if (ctx) ctx.featureManager.reload();
-			this.notifyChange();
+			this.notifyChange({ projectId });
 			return;
 		}
 
@@ -177,7 +188,7 @@ export class ProjectManager {
 			const featureId = parts[3];
 			const ctx = this.contexts.get(projectId);
 			if (ctx) ctx.agentManager.invalidateFeature(featureId);
-			this.notifyChange();
+			this.notifyChange({ projectId, featureId });
 			return;
 		}
 
@@ -192,7 +203,7 @@ export class ProjectManager {
 			const featureId = parts[3];
 			const ctx = this.contexts.get(projectId);
 			if (ctx) ctx.serviceManager.invalidateFeature(featureId);
-			this.notifyChange();
+			this.notifyChange({ projectId, featureId });
 			return;
 		}
 	}
@@ -306,7 +317,9 @@ export class ProjectManager {
 			worktreeBase,
 			config,
 		);
-		featureManager.setOnChange(() => this.notifyChange());
+		featureManager.setOnChange(() =>
+			this.notifyChange({ projectId: project.id }),
+		);
 		const agentManager = new AgentManager(
 			store,
 			project.repoPath,

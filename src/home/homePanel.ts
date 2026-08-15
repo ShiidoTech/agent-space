@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import { presentAgentCard } from "../agents/observation/presentAgentCard";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
@@ -178,10 +179,32 @@ export class HomePanel {
 		if (visible) {
 			this.coordinatorConsumer ??=
 				this.featureStateCoordinator.acquireConsumer();
+			this.maybeRefreshFocusedScope();
 			return;
 		}
 		this.coordinatorConsumer?.dispose();
 		this.coordinatorConsumer = undefined;
+	}
+
+	/**
+	 * Refreshes only the currently displayed Feature/Project when its deep
+	 * evidence is stale. Never touches any other Feature/Project — opening or
+	 * refocusing this page must not pay for unrelated observation.
+	 */
+	private maybeRefreshFocusedScope(): void {
+		if (this.currentFeatureId) {
+			const featureId = this.currentFeatureId;
+			if (this.featureStateCoordinator.isFeatureStale(featureId)) {
+				void this.featureStateCoordinator.reconcileFeature(featureId);
+			}
+			return;
+		}
+		if (this.currentProjectId) {
+			const projectId = this.currentProjectId;
+			if (this.featureStateCoordinator.isProjectStale(projectId)) {
+				void this.featureStateCoordinator.reconcileProject(projectId);
+			}
+		}
 	}
 
 	public setTerminalController(controller: TerminalController): void {
@@ -202,6 +225,7 @@ export class HomePanel {
 	}
 
 	public showFeature(featureId: string): void {
+		const startedAt = Date.now();
 		this.currentFeatureId = featureId;
 		this.currentProjectId = null;
 		this.globalStore.setPreference("lastActiveFeatureId", featureId);
@@ -212,6 +236,10 @@ export class HomePanel {
 		this.panel.reveal(vscode.ViewColumn.One, true);
 		this.sendGitStatsAsync().catch(() => {});
 		this.panel.webview.html = this.getFeatureHtml(featureId);
+		agentSpaceDiagnostic(
+			`focus feature:${featureId} local-render ${Date.now() - startedAt}ms`,
+		);
+		this.maybeRefreshFocusedScope();
 	}
 
 	public showProject(projectId: string): void {
@@ -223,6 +251,7 @@ export class HomePanel {
 	}
 
 	private showProjectPage(projectId: string, settings: boolean): void {
+		const startedAt = Date.now();
 		const context = this.projectManager.getContext(projectId);
 		if (!context) return;
 		this.currentFeatureId = null;
@@ -231,6 +260,10 @@ export class HomePanel {
 		this.panel.title = `Agent Space: ${context.project.name}`;
 		this.panel.reveal(vscode.ViewColumn.One, true);
 		this.panel.webview.html = this.getProjectHtml(projectId, settings);
+		agentSpaceDiagnostic(
+			`focus project:${projectId} local-render ${Date.now() - startedAt}ms`,
+		);
+		this.maybeRefreshFocusedScope();
 	}
 
 	public refresh(): void {
@@ -245,6 +278,7 @@ export class HomePanel {
 			} else {
 				this.panel.webview.html = this.getWelcomeHtml();
 			}
+			this.maybeRefreshFocusedScope();
 		} catch {
 			// Panel may have been disposed
 		}
@@ -410,18 +444,34 @@ export class HomePanel {
 			case "refreshServiceActivity":
 				this.sendActivityForServices((message.serviceIds as string[]) ?? []);
 				break;
-			case "refresh":
-				this.featureStateCoordinator.invalidate(
+			case "refresh": {
+				// Scoped to whichever Feature/Project is actually open; never a
+				// global re-observation of unrelated projects.
+				const featureId =
 					typeof message.featureId === "string" && message.featureId
 						? message.featureId
-						: undefined,
-				);
-				this.featureStateCoordinator.refreshProjectReferenceHealth();
-				void this.featureStateCoordinator
-					.reconcile()
-					.then(() => this.featureStateCoordinator.reconcile())
-					.then(() => this.refresh());
+						: this.currentFeatureId;
+				if (featureId) {
+					this.featureStateCoordinator.invalidateFeature(featureId);
+					void this.featureStateCoordinator
+						.reconcileFeature(featureId)
+						.then(() => this.refresh());
+				} else if (this.currentProjectId) {
+					const projectId = this.currentProjectId;
+					this.featureStateCoordinator.invalidateProject(projectId);
+					this.featureStateCoordinator.refreshProjectReferenceHealth(projectId);
+					void this.featureStateCoordinator
+						.reconcileProject(projectId)
+						.then(() => this.refresh());
+				} else {
+					this.featureStateCoordinator.invalidateAll();
+					this.featureStateCoordinator.refreshProjectReferenceHealth();
+					void this.featureStateCoordinator
+						.reconcile()
+						.then(() => this.refresh());
+				}
 				break;
+			}
 		}
 	}
 
@@ -482,7 +532,7 @@ export class HomePanel {
 		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
 		if (!resolved) return;
 		const { ctx, feature } = resolved;
-		const agents = ctx.agentManager.getAgents(this.currentFeatureId);
+		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);
@@ -553,7 +603,7 @@ export class HomePanel {
 		if (!ctx) return;
 
 		this.terminalController?.killFeatureTerminals(featureId);
-		for (const agent of ctx.agentManager.getAgents(featureId)) {
+		for (const agent of ctx.agentManager.getAgentsReadModel(featureId)) {
 			ctx.agentManager.closeAgent(agent.id, featureId);
 		}
 		for (const service of ctx.serviceManager.getServices(featureId)) {
@@ -568,7 +618,7 @@ export class HomePanel {
 
 		this.projectManager.killProjectSessions(projectId, this.terminalController);
 		for (const feature of ctx.featureManager.getFeatures()) {
-			for (const agent of ctx.agentManager.getAgents(feature.id)) {
+			for (const agent of ctx.agentManager.getAgentsReadModel(feature.id)) {
 				ctx.agentManager.closeAgent(agent.id, feature.id);
 			}
 			for (const service of ctx.serviceManager.getServices(feature.id)) {
@@ -585,7 +635,7 @@ export class HomePanel {
 			this.currentFeatureId,
 		);
 		if (!ctx) return;
-		const agents = ctx.agentManager.getAgents(this.currentFeatureId);
+		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 
@@ -606,7 +656,7 @@ export class HomePanel {
 			this.currentFeatureId,
 		);
 		if (!ctx) return;
-		const agents = ctx.agentManager.getAgents(this.currentFeatureId);
+		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		for (const agentId of agentIds) {
 			const agent = agents.find((a) => a.id === agentId);
 			if (!agent) continue;
@@ -991,12 +1041,12 @@ export class HomePanel {
 
 			const projectRows = contexts
 				.map((ctx) => {
+					// Cheap portfolio rollup: never triggers a new observation.
+					const summary = this.featureStateCoordinator.getProjectSummary(ctx);
+					const featureCount = summary.featureCount;
 					const snapshots = this.featureStateCoordinator.getProjectSnapshots(
 						ctx.project.id,
 					);
-					const featureCount = snapshots.filter(
-						(snapshot) => !snapshot.feature.id.startsWith("base:"),
-					).length;
 					const explicitBaseBranch = ctx.config.baseBranch?.trim();
 					const effectiveBaseBranch =
 						snapshots.find((snapshot) =>

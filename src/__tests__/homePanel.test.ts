@@ -70,9 +70,13 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 	let getTerminal: ReturnType<typeof vi.fn>;
 	let focusOrCreateTerminalAsync: ReturnType<typeof vi.fn>;
 	let getSnapshot: ReturnType<typeof vi.fn>;
-	let invalidate: ReturnType<typeof vi.fn>;
+	let invalidateFeature: ReturnType<typeof vi.fn>;
+	let invalidateProject: ReturnType<typeof vi.fn>;
+	let invalidateAll: ReturnType<typeof vi.fn>;
 	let refreshProjectReferenceHealth: ReturnType<typeof vi.fn>;
 	let reconcile: ReturnType<typeof vi.fn>;
+	let reconcileFeature: ReturnType<typeof vi.fn>;
+	let reconcileProject: ReturnType<typeof vi.fn>;
 
 	function buildPanel(): HomePanel {
 		receiveMessage = vi.fn();
@@ -89,9 +93,13 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		};
 		getTerminal = vi.fn();
 		getSnapshot = vi.fn();
-		invalidate = vi.fn();
+		invalidateFeature = vi.fn();
+		invalidateProject = vi.fn();
+		invalidateAll = vi.fn();
 		refreshProjectReferenceHealth = vi.fn();
 		reconcile = vi.fn(() => Promise.resolve());
+		reconcileFeature = vi.fn(() => Promise.resolve());
+		reconcileProject = vi.fn(() => Promise.resolve());
 		focusOrCreateTerminalAsync = vi.fn().mockResolvedValue({ show: vi.fn() });
 		// @ts-expect-error HomePanel's constructor is private; the test drives
 		// the panel directly rather than through the navigation lifecycle.
@@ -102,10 +110,16 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 				getSnapshot,
 				getProjectReferenceHealth: vi.fn(() => undefined),
 				getProjectWorktreeBranches: vi.fn(() => undefined),
-				invalidate,
+				invalidateFeature,
+				invalidateProject,
+				invalidateAll,
 				refreshProjectReferenceHealth,
 				reconcile,
+				reconcileFeature,
+				reconcileProject,
 				acquireConsumer: vi.fn(),
+				isFeatureStale: vi.fn(() => false),
+				isProjectStale: vi.fn(() => false),
 			} as never,
 			{} as never,
 			{ resolveAgentTool: vi.fn(() => ({ name: "Codex CLI" })) } as never,
@@ -281,17 +295,59 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 	it("refreshes the selected Feature evidence instead of only repainting", () => {
 		postMessage({ command: "refresh", featureId: "f1" });
 
-		expect(invalidate).toHaveBeenCalledWith("f1");
-		expect(refreshProjectReferenceHealth).toHaveBeenCalledTimes(1);
-		expect(reconcile).toHaveBeenCalledTimes(1);
+		// Feature-scoped refresh: only that Feature is invalidated/reconciled,
+		// never a project-wide or global reconcile.
+		expect(invalidateFeature).toHaveBeenCalledWith("f1");
+		expect(reconcileFeature).toHaveBeenCalledWith("f1");
+		expect(invalidateProject).not.toHaveBeenCalled();
+		expect(invalidateAll).not.toHaveBeenCalled();
+		expect(reconcile).not.toHaveBeenCalled();
 	});
 
 	it("invalidates cached GitHub evidence on the global Refresh action too", () => {
+		// No Feature/Project is currently open: the global fallback path.
+		const p = buildPanel();
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		(p as any).currentFeatureId = null;
 		postMessage({ command: "refresh", featureId: "" });
 
-		expect(invalidate).toHaveBeenCalledWith(undefined);
-		expect(refreshProjectReferenceHealth).toHaveBeenCalledTimes(1);
+		expect(invalidateAll).toHaveBeenCalledTimes(1);
+		expect(refreshProjectReferenceHealth).toHaveBeenCalledWith();
 		expect(reconcile).toHaveBeenCalledTimes(1);
+	});
+
+	it("focusing a stale Feature refreshes only that Feature, never a project-wide or global reconcile", () => {
+		const panel = buildPanel();
+		const isFeatureStale = (
+			panel as unknown as {
+				featureStateCoordinator: { isFeatureStale: ReturnType<typeof vi.fn> };
+			}
+		).featureStateCoordinator.isFeatureStale;
+		isFeatureStale.mockReturnValue(true);
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		(panel as any).currentFeatureId = "f1";
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		(panel as any).maybeRefreshFocusedScope();
+
+		expect(reconcileFeature).toHaveBeenCalledWith("f1");
+		expect(reconcileProject).not.toHaveBeenCalled();
+		expect(reconcile).not.toHaveBeenCalled();
+	});
+
+	it("focusing a fresh Feature does not re-observe it at all", () => {
+		const panel = buildPanel();
+		const isFeatureStale = (
+			panel as unknown as {
+				featureStateCoordinator: { isFeatureStale: ReturnType<typeof vi.fn> };
+			}
+		).featureStateCoordinator.isFeatureStale;
+		isFeatureStale.mockReturnValue(false);
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		(panel as any).currentFeatureId = "f1";
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		(panel as any).maybeRefreshFocusedScope();
+
+		expect(reconcileFeature).not.toHaveBeenCalled();
 	});
 
 	it("renders a setup spinner only for a locally-owned provisioning attempt", () => {

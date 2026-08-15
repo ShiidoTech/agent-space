@@ -2,6 +2,7 @@ import type {
 	AncestryObservation,
 	FeatureGitObservations,
 	GitObservation,
+	GitUnknownReason,
 	ObservedCommit,
 } from "../git/featureGitObservations";
 import type { GitHubObservation } from "../github/githubObservation";
@@ -110,6 +111,72 @@ export function featureSnapshotGitStatus(
 		snapshot.git.featureDelta.value.rightOnly > 0
 		? "ahead"
 		: "unknown";
+}
+
+/**
+ * Reasons a re-observation can plausibly fail purely transiently (a slow or
+ * momentarily overloaded git subprocess) rather than proving the fact is
+ * actually unavailable. Only these fall back to the previously known value.
+ */
+const TRANSIENT_GIT_REASONS: ReadonlySet<GitUnknownReason> = new Set([
+	"git_command_failed",
+	"repository_unavailable",
+]);
+
+/**
+ * Do not let a transient read failure regress a known fact back to unknown.
+ * Applied field-by-field so a single flaky `git` subprocess call cannot wipe
+ * out unrelated evidence that was previously proven.
+ */
+export function preferKnownGit(
+	previous: FeatureGitObservations | undefined,
+	next: FeatureGitObservations,
+): FeatureGitObservations {
+	if (!previous) return next;
+	const merged = { ...next };
+	for (const key of Object.keys(next) as (keyof FeatureGitObservations)[]) {
+		const nextField = next[key] as GitObservation<unknown>;
+		const previousField = previous[key] as GitObservation<unknown>;
+		if (
+			nextField.status === "unknown" &&
+			TRANSIENT_GIT_REASONS.has(nextField.reason) &&
+			previousField?.status === "known"
+		) {
+			(merged as Record<string, unknown>)[key] = previousField;
+		}
+	}
+	return merged;
+}
+
+export function preferKnownDelivery(
+	previous: FeatureDeliveryObservation | undefined,
+	next: FeatureDeliveryObservation,
+): FeatureDeliveryObservation {
+	if (!previous || previous.branchRef !== next.branchRef) return next;
+	const preferField = <T>(
+		nextField: GitObservation<T>,
+		previousField: GitObservation<T>,
+	): GitObservation<T> =>
+		nextField.status === "unknown" &&
+		TRANSIENT_GIT_REASONS.has(nextField.reason) &&
+		previousField.status === "known"
+			? previousField
+			: nextField;
+	return {
+		...next,
+		head: preferField(next.head, previous.head),
+		activeRelation: preferField(next.activeRelation, previous.activeRelation),
+		commitsAfter: preferField(next.commitsAfter, previous.commitsAfter),
+	};
+}
+
+/** A GitHub API/network error keeps the last known PR evidence visible. */
+export function preferKnownGithub(
+	previous: GitHubObservation | undefined,
+	next: GitHubObservation,
+): GitHubObservation {
+	if (next.status === "error" && previous?.status === "known") return previous;
+	return next;
 }
 
 function deepFreeze<T>(value: T): T {

@@ -185,7 +185,10 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private async refreshAsync(): Promise<void> {
 		try {
 			if (!this._view) return;
-			await this.featureStateCoordinator.reconcile();
+			// The sidebar only needs lightweight presence/runtime facts to stay
+			// live; deep Git/GitHub evidence is demand-driven per Project/Feature
+			// focus, so this never blocks on (or triggers) a full deep reconcile.
+			await this.featureStateCoordinator.reconcilePresence();
 
 			if (this._view) {
 				this._view.webview.html = this.getHtml();
@@ -325,7 +328,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const ctx = this.projectManager.findContextByFeatureId(featureId);
 		if (!ctx) return;
 
-		const agents = ctx.agentManager.getAgents(featureId);
+		const agents = ctx.agentManager.getAgentsReadModel(featureId);
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 
@@ -342,11 +345,11 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const resolved = this.projectManager.resolveFeature(featureId);
 		if (this.terminalController && resolved) {
 			const updatedAgent = ctx.agentManager
-				.getAgents(featureId)
+				.getAgentsReadModel(featureId)
 				.find((a) => a.id === agentId);
 			if (updatedAgent) {
 				const agentIndex = ctx.agentManager
-					.getAgents(featureId)
+					.getAgentsReadModel(featureId)
 					.findIndex((a) => a.id === agentId);
 				this.terminalController.renameTerminal(
 					resolved.feature,
@@ -364,7 +367,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const resolved = this.projectManager.resolveFeature(featureId);
 		if (!resolved) return;
 		const { ctx, feature } = resolved;
-		const agents = ctx.agentManager.getAgents(featureId);
+		const agents = ctx.agentManager.getAgentsReadModel(featureId);
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);

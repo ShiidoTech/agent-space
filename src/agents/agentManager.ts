@@ -72,6 +72,15 @@ export class AgentManager {
 		);
 	}
 
+	/**
+	 * Read the persisted/runtime agent model without probing a provider. This is
+	 * the startup/presence read path: provider attention is active observation
+	 * and must never block the Extension Host or replace the last-known model.
+	 */
+	getAgentsReadModel(featureId: string): Agent[] {
+		return this.loadAgents(featureId).map((agent) => ({ ...agent }));
+	}
+
 	getAgent(featureId: string, agentId: string): Agent | undefined {
 		const agent = this.loadAgents(featureId).find((a) => a.id === agentId);
 		return agent ? this.withAttentionStatus(agent) : undefined;

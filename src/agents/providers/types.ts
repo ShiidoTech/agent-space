@@ -3,6 +3,7 @@ import type {
 	SessionInfo,
 	SessionRenameAdapter,
 } from "../sessionProviders/types";
+import type { AsyncSessionObservationAdapter } from "../sessionProviders/types";
 
 export type ProviderCapability =
 	| "launch"
@@ -44,6 +45,7 @@ export interface ProviderAttentionSignal {
 }
 
 export interface ProviderSessionAdapter extends SessionRenameAdapter {
+	readonly async?: AsyncSessionObservationAdapter;
 	scanSessions?(options?: { fresh?: boolean }): SessionInfo[];
 	/**
 	 * True when `sessionId` resolves to a session that actually exists in this
@@ -93,6 +95,7 @@ export interface CodingAgentProvider {
 	readonly launchArgs?: (sessionId?: string | null) => string[];
 	readonly resumeArgs?: (sessionId?: string | null) => string[];
 	getAttentionSignal?(sessionId: string): ProviderAttentionSignal | undefined;
+	getAttentionSignalAsync?(sessionId: string): Promise<ProviderAttentionSignal | undefined>;
 	readonly sessionAdapter?: ProviderSessionAdapter;
 }
 

@@ -2,7 +2,6 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
-import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
@@ -123,7 +122,11 @@ export async function activate(
 	context.subscriptions.push(storageWatcher);
 
 	await ensureDefaultToolConfigured(toolRegistry, globalStore);
-	await featureStateCoordinator.reconcile();
+	// Seed lightweight presence (feature list + runtime) only; deep Git/GitHub
+	// evidence and provider attention are fetched after activation/on focus.
+	// Do not await this: activation must not hold the Extension Host hostage to
+	// an active provider observation.
+	setTimeout(() => void featureStateCoordinator.reconcilePresence(), 0).unref?.();
 
 	const defaultToolId = toolRegistry.getDefaultToolId();
 	const availableTools = toolRegistry.getAvailableTools();
@@ -249,7 +252,9 @@ export async function activate(
 			if (!resolved) return;
 			const { ctx } = resolved;
 
-			const agents = ctx.agentManager.getAgents(featureId);
+			// Opening a feature must use the persisted/runtime read model. Active
+			// provider attention is not allowed to gate the panel becoming visible.
+			const agents = ctx.agentManager.getAgentsReadModel(featureId);
 			if (agents.length === 0) {
 				// No auto-launch: opening an empty feature must not start a
 				// coding tool session (and burn tokens). Agents are added
@@ -324,38 +329,9 @@ export async function activate(
 	// with a genuinely proven provider resume — never with a silent fresh
 	// launch. Agents that cannot be strictly resumed are left untouched and
 	// explicitly reported as blocked on their record.
-	try {
-		const restoreReport = restoreAgentRuntimes({
-			projectManager,
-			tmux,
-			toolRegistry,
-		});
-		if (
-			restoreReport.resumed.length +
-				restoreReport.reattached.length +
-				restoreReport.blocked.length >
-			0
-		) {
-			projectManager.notifyChange();
-		}
-		if (restoreReport.blocked.length > 0) {
-			console.warn(
-				`[agentSpace] ${restoreReport.blocked.length} agent runtime(s) could not be restored after restart; resume them manually.`,
-			);
-			void vscode.window
-				.showInformationMessage(
-					`${restoreReport.blocked.length} agent runtime(s) could not be restored after restart. Open each blocked agent and resume it manually.`,
-					"Open Agent Space",
-				)
-				.then((choice) => {
-					if (choice === "Open Agent Space") {
-						void vscode.commands.executeCommand("agentSpace.openHome");
-					}
-				});
-		}
-	} catch (error) {
-		console.error(`[agentSpace] runtime restoration failed: ${error}`);
-	}
+	// Provider-backed runtime restoration is intentionally not automatic at
+	// startup. Its synchronous provider stores can block the Extension Host;
+	// restore remains available through the explicit reconnect/resume actions.
 
 	// Surface undeclared project agents once at startup rather than only when
 	// someone happens to add an agent. An id enabled in .agentspace/config.json
@@ -414,7 +390,8 @@ export async function activate(
 	const config = vscode.workspace.getConfiguration("agentSpace");
 	if (config.get("syncSessionNames", config.get("autoNameAgents", true))) {
 		sessionNameSyncer.start(projectManager);
-		sessionNameSyncer.syncAll();
+		// Initial provider title scans are explicit/focus-driven. The persisted
+		// read model is sufficient to render the UI and must remain non-blocking.
 	}
 	context.subscriptions.push({ dispose: () => sessionNameSyncer.dispose() });
 
@@ -565,8 +542,16 @@ export async function activate(
 			}, 150);
 		}),
 	);
-	projectManager.onChange(() => {
-		featureStateCoordinator.invalidate();
+	projectManager.onChange((scope) => {
+		// Only the affected Feature/Project is invalidated: last-known facts
+		// stay visible everywhere else, and no unrelated scope is re-observed.
+		if (scope?.featureId) {
+			featureStateCoordinator.invalidateFeature(scope.featureId);
+		} else if (scope?.projectId) {
+			featureStateCoordinator.invalidateProject(scope.projectId);
+		} else {
+			featureStateCoordinator.invalidateAll();
+		}
 		sidebarProvider.refresh();
 		HomePanel.refreshAll();
 	});
