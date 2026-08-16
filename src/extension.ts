@@ -775,6 +775,15 @@ export async function activate(
 							}
 							await provisioning;
 							progress.report({ message: "Feature worktree ready" });
+							// Refresh only the feature just created; the sidebar must not
+							// trigger a workspace-wide deep observation on startup.
+							void featureStateCoordinator
+								.reconcileFeature(feature.id)
+								.then(() => {
+									sidebarProvider.refreshState();
+									HomePanel.refreshAll();
+								})
+								.catch(() => {});
 							if (launchInitialAgent && initialAgent) {
 								const agents = ctx.agentManager.getAgents(feature.id);
 								terminalController.createTerminal(

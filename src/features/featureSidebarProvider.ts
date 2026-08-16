@@ -166,9 +166,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private setConsumerVisible(visible: boolean): void {
 		if (visible) {
 			this.consumer ??= this.featureStateCoordinator.acquireConsumer();
-			// Presence seeding is deliberately cheap; the sidebar also needs to
-			// recover deep evidence after an extension restart.
-			void this.featureStateCoordinator.reconcileStaleFeatures();
 			return;
 		}
 		this.consumer?.dispose();
@@ -249,7 +246,11 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				const features: SidebarFeature[] = snapshots.map((snapshot) => {
 					const agents = this.snapshotAgents(snapshot);
 					const services = this.snapshotServices(snapshot);
-					const summary = snapshot.feature.id.startsWith("base:")
+					const summary =
+						snapshot.feature.id.startsWith("base:") ||
+						!this.featureStateCoordinator.hasFeatureDeepObservation(
+							snapshot.feature.id,
+						)
 						? undefined
 						: presentFeatureCockpit(
 								snapshot,
@@ -600,12 +601,16 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			agents.filter((a) => a.status !== "done").length +
 			services.filter((s) => s.status === "running").length;
 
-		const summary = presentFeatureCockpit(
-			snapshot,
-			this.featureStateCoordinator.getProjectReferenceHealth(
-				snapshot.projectId,
-			),
-		).summary;
+		const summary = this.featureStateCoordinator.hasFeatureDeepObservation(
+			snapshot.feature.id,
+		)
+			? presentFeatureCockpit(
+					snapshot,
+				this.featureStateCoordinator.getProjectReferenceHealth(
+					snapshot.projectId,
+				),
+			).summary
+			: undefined;
 		const bodyHtml = this.renderSnapshotCardBody(snapshot, agents, services);
 		const count = this.snapshotRuntimeKnown(snapshot)
 			? totalCount > 0
@@ -618,7 +623,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="card-header" onclick="toggleFeatureCard(event, '${feature.id}')">
 				<span class="card-chevron" id="card-chevron-${feature.id}">${ICON_CHEVRON_DOWN}</span>
 				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
-				<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>
+				${summary ? `<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>` : ""}
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
 				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Finish Feature">${ICON_DELETE}</button>
 			</div>
