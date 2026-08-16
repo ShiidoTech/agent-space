@@ -75,7 +75,7 @@ describe("live session-name synchronization", () => {
 		);
 	}
 
-	it("retries unnamed agents without requiring a terminal focus change", () => {
+	it("retries unnamed agents without requiring a terminal focus change", async () => {
 		vi.useFakeTimers();
 		const { projectManager, ctx } = createProject(tmpDir);
 		const agent = ctx.agentManager.createAgent(feature, "claude");
@@ -89,11 +89,16 @@ describe("live session-name synchronization", () => {
 		expect(ctx.agentManager.getAgents(feature.id)[0]?.name).toBe("Agent 1");
 
 		writeSession(agent.sessionId, "Live title discovered");
-		vi.advanceTimersByTime(50);
+		// The periodic pass reads titles through the providers' async boundary,
+		// so the timers must be advanced asynchronously for the fs reads to land.
+		// Poll in case the in-flight pass needs more event-loop turns to finish.
+		let name = ctx.agentManager.getAgents(feature.id)[0]?.name;
+		for (let i = 0; i < 40 && name !== "Live title discovered"; i++) {
+			await vi.advanceTimersByTimeAsync(50);
+			name = ctx.agentManager.getAgents(feature.id)[0]?.name;
+		}
 
-		expect(ctx.agentManager.getAgents(feature.id)[0]?.name).toBe(
-			"Live title discovered",
-		);
+		expect(name).toBe("Live title discovered");
 		syncer.dispose();
 	});
 

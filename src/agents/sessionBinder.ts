@@ -83,6 +83,8 @@ export class SessionBinder {
 	private projectManager: ProjectManager | undefined;
 	private timer?: ReturnType<typeof setInterval>;
 	private onBoundCallback?: (outcome: SessionBindingOutcome) => void;
+	/** In-flight async pass, shared so overlapping polls serialize into one scan. */
+	private reconcileInFlight: Promise<SessionBindingOutcome[]> | undefined;
 
 	constructor(
 		private readonly toolRegistry: CodingToolRegistry,
@@ -100,7 +102,9 @@ export class SessionBinder {
 		this.projectManager = projectManager;
 		this.stop();
 		if (intervalMs <= 0) return;
-		this.timer = setInterval(() => this.reconcileAll(), intervalMs);
+		this.timer = setInterval(() => {
+			void this.reconcileAllAsync();
+		}, intervalMs);
 		this.timer.unref?.();
 	}
 
@@ -344,6 +348,206 @@ export class SessionBinder {
 		}
 
 		return outcomes;
+	}
+
+	/**
+	 * Async mirror of {@link reconcileAll} for the periodic poll.
+	 *
+	 * The periodic pass is deliberately async-only: it must never block the
+	 * Extension Host on a synchronous provider scan, so it uses exclusively the
+	 * adapters' `async` boundary. An adapter without one simply contributes no
+	 * evidence for this pass (its agents stay pending until an explicit sync
+	 * reconcile, attach, or an async boundary is available). Passes serialize:
+	 * an overlapping poll shares the in-flight pass instead of scanning twice.
+	 */
+	reconcileAllAsync(): Promise<SessionBindingOutcome[]> {
+		if (!this.projectManager) return Promise.resolve([]);
+		if (this.reconcileInFlight) return this.reconcileInFlight;
+		const run = this.runReconcileAsync();
+		this.reconcileInFlight = run;
+		void run.finally(() => {
+			if (this.reconcileInFlight === run) {
+				this.reconcileInFlight = undefined;
+			}
+		});
+		return run;
+	}
+
+	private async runReconcileAsync(): Promise<SessionBindingOutcome[]> {
+		const projectManager = this.projectManager;
+		if (!projectManager) return [];
+
+		const contexts = projectManager.getAllContexts();
+		const taken = new Set<string>();
+		const pending: PendingAgent[] = [];
+		const outcomes: SessionBindingOutcome[] = [];
+
+		for (const ctx of contexts) {
+			for (const { featureId, worktreePath } of managedFeatures(ctx)) {
+				for (const agent of ctx.agentManager.getAgents(featureId)) {
+					if (agent.sessionId) taken.add(agent.sessionId);
+
+					const classification = await this.classifyAsync(
+						ctx,
+						featureId,
+						agent,
+						worktreePath,
+					);
+					if (classification.kind === "settled") {
+						if (classification.binding) {
+							outcomes.push({
+								agentId: agent.id,
+								featureId,
+								binding: classification.binding,
+							});
+						}
+						continue;
+					}
+					pending.push(classification.pending);
+				}
+			}
+		}
+
+		if (pending.length === 0) return outcomes;
+
+		const scans = new Map<string, SessionInfo[]>();
+		const claims: Array<{
+			entry: PendingAgent;
+			candidates: Candidate[];
+			providerSessionId?: string;
+		}> = [];
+		for (const entry of pending) {
+			let sessions = scans.get(entry.adapter.toolId);
+			if (sessions === undefined) {
+				sessions = await safeScanAsync(entry.adapter);
+				scans.set(entry.adapter.toolId, sessions);
+			}
+			const candidates = candidatesFor(entry, sessions, taken);
+			const providerSessionId = await safeCorrelateAsync(entry, taken);
+			claims.push({ entry, candidates, providerSessionId });
+		}
+
+		const claimantCount = new Map<string, number>();
+		for (const { candidates } of claims) {
+			for (const candidate of candidates) {
+				claimantCount.set(
+					candidate.sessionId,
+					(claimantCount.get(candidate.sessionId) ?? 0) + 1,
+				);
+			}
+		}
+
+		for (const { entry, candidates, providerSessionId } of claims) {
+			const outcome = this.resolveClaim(
+				entry,
+				candidates,
+				claimantCount,
+				providerSessionId,
+			);
+			outcomes.push(outcome);
+			if (outcome.boundSessionId) {
+				taken.add(outcome.boundSessionId);
+				this.onBoundCallback?.(outcome);
+			}
+		}
+
+		return outcomes;
+	}
+
+	private async classifyAsync(
+		ctx: ProjectContext,
+		featureId: string,
+		agent: Agent,
+		worktreePath: string,
+	): Promise<
+		| { kind: "settled"; binding?: AgentSessionBinding }
+		| { kind: "pending"; pending: PendingAgent }
+	> {
+		if (agent.status === "done" || agent.hasStarted !== true) {
+			return { kind: "settled" };
+		}
+
+		const adapter = this.adapterFor(agent);
+		if (!adapter) {
+			return {
+				kind: "settled",
+				binding: this.persist(ctx, featureId, agent, {
+					state: "unsupported",
+					detail: "Provider exposes no session store to bind against",
+					attempts: agent.sessionBinding?.attempts ?? 0,
+				}),
+			};
+		}
+
+		// Same bound revalidation policy as the sync path, but only through the
+		// async boundary. An adapter without an async `hasSession` is trusted
+		// within its revalidation window, never re-checked synchronously.
+		if (agent.sessionBinding?.state === "bound" && agent.sessionId) {
+			const checkedMs = toMs(agent.sessionBinding.checkedAt);
+			const fresh =
+				checkedMs !== null && Date.now() - checkedMs < REVALIDATE_BOUND_MS;
+			if (fresh || adapter.async?.hasSession === undefined) {
+				return { kind: "settled" };
+			}
+			if (await adapter.async.hasSession(agent.sessionId)) {
+				return {
+					kind: "settled",
+					binding: this.persist(ctx, featureId, agent, {
+						state: "bound",
+						detail: "Session id resolves in the provider store",
+						attempts: agent.sessionBinding.attempts,
+					}),
+				};
+			}
+			// Fall through, mirroring the sync path.
+		}
+
+		if (agent.sessionId && adapter.async?.hasSession) {
+			if (await adapter.async.hasSession(agent.sessionId)) {
+				return {
+					kind: "settled",
+					binding: this.persist(ctx, featureId, agent, {
+						state: "bound",
+						detail: "Session id resolves in the provider store",
+						attempts: agent.sessionBinding?.attempts ?? 0,
+					}),
+				};
+			}
+		}
+
+		const cwd = agent.worktreePath ?? worktreePath;
+		const tmuxSession =
+			agent.tmuxSession ?? this.tmux.sessionName(featureId, agent.id);
+		let alive = false;
+		try {
+			alive = (await this.tmux.isSessionAliveAsync?.(tmuxSession)) ?? false;
+		} catch {
+			alive = false;
+		}
+		if (!alive) {
+			return {
+				kind: "settled",
+				binding: this.persist(ctx, featureId, agent, {
+					state: agent.sessionId ? "unverified" : "pending",
+					detail: agent.sessionId
+						? "Session id is not in the provider store and the terminal is gone"
+						: "Terminal is no longer running; nothing left to bind",
+					attempts: agent.sessionBinding?.attempts ?? 0,
+				}),
+			};
+		}
+
+		return {
+			kind: "pending",
+			pending: {
+				ctx,
+				featureId,
+				agent,
+				cwd,
+				launchedMs: toMs(agent.launchedAt) ?? toMs(agent.createdAt) ?? 0,
+				adapter,
+			},
+		};
 	}
 
 	private classify(
@@ -642,6 +846,43 @@ function safeCorrelate(
 	try {
 		const known = new Set([...(entry.agent.sessionBaseline ?? []), ...taken]);
 		const discovered = entry.adapter.correlateOwnedSession(entry.cwd, known);
+		return typeof discovered === "string" ? discovered : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Async-only scan for the periodic pass. Deliberately no fallback to the sync
+ * `scanSessions`: the whole point of the async pass is to never block the
+ * Extension Host. An adapter without an async scan contributes no candidates.
+ */
+async function safeScanAsync(
+	adapter: ProviderSessionAdapter,
+): Promise<SessionInfo[]> {
+	if (!adapter.async?.scanSessions) return [];
+	try {
+		return await adapter.async.scanSessions();
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Async-only ownership correlation for the periodic pass. No sync fallback,
+ * matching {@link safeScanAsync}.
+ */
+async function safeCorrelateAsync(
+	entry: PendingAgent,
+	taken: ReadonlySet<string>,
+): Promise<string | undefined> {
+	if (!entry.adapter.async?.correlateOwnedSession) return undefined;
+	try {
+		const known = new Set([...(entry.agent.sessionBaseline ?? []), ...taken]);
+		const discovered = await entry.adapter.async.correlateOwnedSession(
+			entry.cwd,
+			known,
+		);
 		return typeof discovered === "string" ? discovered : undefined;
 	} catch {
 		return undefined;

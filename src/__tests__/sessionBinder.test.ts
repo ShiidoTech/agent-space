@@ -55,12 +55,22 @@ function adapter(
 	sessions: SessionInfo[],
 	correlateOwnedSession?: ProviderSessionAdapter["correlateOwnedSession"],
 ): ProviderSessionAdapter {
+	const asyncCorrelate = correlateOwnedSession
+		? async (cwd: string, known: ReadonlySet<string>) =>
+				correlateOwnedSession(cwd, known)
+		: undefined;
 	return {
 		toolId: "stub",
 		readName: () => null,
 		scanSessions: () => sessions,
 		hasSession: (id) => sessions.some((s) => s.sessionId === id),
 		correlateOwnedSession,
+		async: {
+			scanSessions: async () => sessions,
+			hasSession: async (id) => sessions.some((s) => s.sessionId === id),
+			readName: async () => null,
+			correlateOwnedSession: asyncCorrelate,
+		},
 	};
 }
 
@@ -96,6 +106,7 @@ function tmux(alive = true): TmuxIntegration {
 		sessionName: (featureId: string, agentId: string) =>
 			`agent-space-${featureId}-${agentId}`,
 		isSessionAlive: () => alive,
+		isSessionAliveAsync: async () => alive,
 	} as unknown as TmuxIntegration;
 }
 
@@ -163,6 +174,124 @@ describe("SessionBinder", () => {
 		expect(stored.sessionBinding?.detail).toContain(
 			"ownership cannot be proven",
 		);
+	});
+
+	it("does not treat a sole late session as proof of ownership through the async boundary", async () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const binder = new SessionBinder(
+			registry(
+				adapter([
+					{
+						sessionId: "ses_late",
+						prompt: "",
+						created: "2026-08-09T07:52:53.000Z",
+						projectPath: WORKTREE,
+					},
+				]),
+			),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		const outcomes = await binder.reconcileAllAsync();
+
+		expect(outcomes[0]?.boundSessionId).toBeUndefined();
+		const stored = ctx.store.loadAgents("f1")[0];
+		expect(stored.sessionId).toBeNull();
+		expect(stored.sessionBinding?.state).toBe("ambiguous");
+		expect(stored.sessionBinding?.detail).toContain(
+			"ownership cannot be proven",
+		);
+	});
+
+	it("binds a late session through the async boundary when the provider proves ownership", async () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const sessions: SessionInfo[] = [];
+		const correlate = vi.fn(() => "ses_late");
+		const binder = new SessionBinder(
+			registry(adapter(sessions, correlate)),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		await binder.reconcileAllAsync();
+		expect(ctx.store.loadAgents("f1")[0].sessionId).toBeNull();
+
+		// The provider only writes the session on the first prompt, after the
+		// first pass found nothing.
+		sessions.push({
+			sessionId: "ses_late",
+			prompt: "",
+			created: "2026-08-09T07:52:53.000Z",
+			projectPath: WORKTREE,
+		});
+		const outcomes = await binder.reconcileAllAsync();
+
+		expect(correlate).toHaveBeenCalledWith(WORKTREE, expect.any(Set));
+		expect(outcomes[0]?.boundSessionId).toBe("ses_late");
+		expect(ctx.store.loadAgents("f1")[0].sessionId).toBe("ses_late");
+	});
+
+	it("binds a preassigned session that resolves in the async provider store", async () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture({ sessionId: "ses_claude" })]);
+		const binder = new SessionBinder(
+			registry(
+				adapter([
+					{
+						sessionId: "ses_claude",
+						prompt: "",
+						created: "2026-08-09T07:52:53.000Z",
+						projectPath: WORKTREE,
+					},
+				]),
+			),
+			tmux(),
+		);
+		binder.start(projectManager, 0);
+
+		const outcomes = await binder.reconcileAllAsync();
+
+		expect(outcomes[0]?.binding.state).toBe("bound");
+		expect(outcomes[0]?.boundSessionId).toBeUndefined();
+	});
+
+	it("serializes overlapping async passes into a single scan", async () => {
+		const { projectManager, ctx } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		const sessionList: SessionInfo[] = [];
+		let resolveScan: ((sessions: SessionInfo[]) => void) | undefined;
+		let scanCount = 0;
+		const scanDeferred = new Promise<SessionInfo[]>((resolve) => {
+			resolveScan = resolve;
+		});
+		const customAdapter: ProviderSessionAdapter = {
+			toolId: "stub",
+			readName: () => null,
+			scanSessions: () => sessionList,
+			hasSession: (id) => sessionList.some((s) => s.sessionId === id),
+			async: {
+				scanSessions: () => {
+					scanCount += 1;
+					return scanDeferred;
+				},
+				hasSession: async (id) => sessionList.some((s) => s.sessionId === id),
+				readName: async () => null,
+			},
+		};
+		const binder = new SessionBinder(registry(customAdapter), tmux());
+		binder.start(projectManager, 0);
+
+		const first = binder.reconcileAllAsync();
+		const second = binder.reconcileAllAsync();
+		expect(second).toBe(first);
+
+		resolveScan!(sessionList);
+		await first;
+
+		expect(scanCount).toBe(1);
 	});
 
 	it("allows a user-selected session to be attached with worktree and uniqueness checks", () => {
