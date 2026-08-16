@@ -117,6 +117,53 @@ const OPEN_WORKSPACE_CODES = new Set([
 	"continuation_outside_delivery",
 ]);
 
+/**
+ * Shared human state shown whenever the Feature has an actionable attention
+ * problem. Each problem maps to a specific state so the sidebar badge and the
+ * Feature page headline say *what* is wrong rather than the catch-all
+ * "Needs you". "Needs you" is reserved for cases where an agent is genuinely
+ * waiting on the user (or has failed and needs a decision).
+ */
+const PROBLEM_STATE_LABELS: Record<string, string> = {
+	// An agent is actively waiting on the user.
+	agent_waiting_for_user: "Needs you",
+	agent_failed: "Agent failed",
+	agent_tmux_missing: "Agent terminal missing",
+	service_failed: "Service failed",
+	service_tmux_missing: "Service terminal missing",
+	// Working tree / committed state.
+	working_tree_changes: "In progress",
+	working_tree_conflicted: "Merge conflicts",
+	working_tree_unknown: "Evidence unavailable",
+	// Workspace / branch problems.
+	detached_head: "Detached HEAD",
+	branch_mismatch: "Unexpected branch",
+	worktree_missing: "Worktree missing",
+	worktree_observation_unknown: "Evidence unavailable",
+	// Unavailable evidence / runtime.
+	feature_source_unknown: "Evidence unavailable",
+	git_observation_unknown: "Evidence unavailable",
+	integration_unknown: "Evidence unavailable",
+	agent_runtime_unknown: "Runtime unknown",
+	service_runtime_unknown: "Runtime unknown",
+	// Delivery / upstream.
+	upstream_unknown: "Evidence unavailable",
+	delivery_relation_unknown: "Evidence unavailable",
+	active_delivery_diverged: "Delivery diverged",
+	feature_diverged: "Diverged",
+	continuation_outside_delivery: "Work outside delivery",
+	new_work_after_integration: "New work after integration",
+	// Pull requests.
+	pull_request_ambiguous: "Several PRs",
+	pull_request_base_mismatch: "PR base mismatch",
+	pull_request_head_mismatch: "PR head mismatch",
+	pull_request_observation_unavailable: "PR state unavailable",
+};
+
+function presentProblemState(problem: AttentionProblem): string {
+	return PROBLEM_STATE_LABELS[problem.code] ?? "Needs attention";
+}
+
 export function presentFeatureCockpit(
 	snapshot: FeatureSnapshot,
 	referenceHealth?: ProjectReferenceBranchHealth,
@@ -152,7 +199,7 @@ function presentSummary(
 	const primaryAlert = alerts[0];
 	if (primaryAlert) {
 		return {
-			label: "Needs you",
+			label: presentProblemState(primaryAlert),
 			tone: primaryAlert.severity === "error" ? "error" : "warning",
 			detail: `${primaryAlert.summary} — ${primaryAlert.detail}`,
 		};

@@ -659,7 +659,7 @@ describe("presentFeatureCockpit", () => {
 		});
 	});
 
-	it("uses Needs you as the shared summary when an intervention is required", () => {
+	it("labels uncommitted worktree changes as In progress, not Needs you", () => {
 		const result = presentFeatureCockpit({
 			...snapshot(),
 			attention: [
@@ -674,7 +674,7 @@ describe("presentFeatureCockpit", () => {
 		});
 
 		expect(result.summary).toEqual({
-			label: "Needs you",
+			label: "In progress",
 			tone: "warning",
 			detail: "Pending changes — Two files are not committed.",
 		});
