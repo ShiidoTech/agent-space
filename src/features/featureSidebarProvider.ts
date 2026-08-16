@@ -572,8 +572,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 		return `
 		<div class="feature-card base-card" data-feature-id="${feature.id}" onclick="selectFeature('${feature.id}')">
-			<div class="card-header" onclick="toggleFeatureCard(event, '${feature.id}')">
-				<span class="card-chevron" id="card-chevron-${feature.id}">${ICON_CHEVRON_DOWN}</span>
+			<div class="card-header">
+				<span class="card-chevron" id="card-chevron-${feature.id}" onclick="toggleFeatureCard(event, '${feature.id}')">${ICON_CHEVRON_DOWN}</span>
 				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
 				<span class="base-label">base</span>
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
@@ -612,8 +612,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 		return `
 		<div class="feature-card" data-feature-id="${feature.id}" onclick="selectFeature('${feature.id}')">
-			<div class="card-header" onclick="toggleFeatureCard(event, '${feature.id}')">
-				<span class="card-chevron" id="card-chevron-${feature.id}">${ICON_CHEVRON_DOWN}</span>
+			<div class="card-header">
+				<span class="card-chevron" id="card-chevron-${feature.id}" onclick="toggleFeatureCard(event, '${feature.id}')">${ICON_CHEVRON_DOWN}</span>
 				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
 				<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
