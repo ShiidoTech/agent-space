@@ -1536,18 +1536,225 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 
 		const stale = coordinator.reconcileFeature("f1"); // blocked on `gate`
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		const fresh = coordinator.reconcileFeature("f1"); // runs to completion first
-		await fresh;
+		const fresh = coordinator.reconcileFeature("f1"); // coalesces onto `stale`
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// No second observation may run concurrently: the later call shared the
+		// in-flight pass instead of re-reading the same SHAs in parallel.
+		expect(call).toBe(1);
 		release?.();
-		await stale;
+		await Promise.all([stale, fresh]);
 
-		// The later-started call's evidence must be what's published, even
-		// though the earlier call's promise resolves last.
+		// The later-started request coalesced onto the in-flight pass, then
+		// scheduled a follow-up re-observation — its evidence is what's
+		// published, even though the earlier pass's own result resolved first.
+		expect(call).toBe(2);
 		const snapshot = coordinator.getSnapshot("f1");
 		expect(snapshot?.git.feature).toMatchObject({
 			status: "known",
 			value: { sha: freshSha },
 		});
+		coordinator.dispose();
+	});
+
+	it("concurrent reconcileFeature requests for the same feature share a single in-flight observation", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let active = 0;
+		let maxActive = 0;
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				active += 1;
+				maxActive = Math.max(maxActive, active);
+				await gate;
+				active -= 1;
+				return git(feature("f1"));
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const first = coordinator.reconcileFeature("f1");
+		const second = coordinator.reconcileFeature("f1");
+		const third = coordinator.reconcileFeature("f1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// All three requests coalesced onto the one in-flight observation
+		// instead of launching three parallel Git reads of the same scope.
+		expect(active).toBe(1);
+		expect(maxActive).toBe(1);
+
+		release?.();
+		await Promise.all([first, second, third]);
+
+		// The coalesced requests drained through follow-up passes; at no point
+		// did two observations of the same feature run simultaneously.
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		expect(maxActive).toBe(1);
+		coordinator.dispose();
+	});
+
+	it("coalescing is scoped per feature — different features still observe concurrently", async () => {
+		const releases: Array<() => void> = [];
+		const gates: Array<Promise<void>> = [];
+		const hold = () => {
+			let release: (() => void) | undefined;
+			gates.push(
+				new Promise<void>((resolve) => {
+					release = resolve;
+				}),
+			);
+			if (release) releases.push(release);
+			return gates[gates.length - 1];
+		};
+		let f1Active = 0;
+		let f2Active = 0;
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				f1Active += 1;
+				await hold();
+				f1Active -= 1;
+				return git(feature("f1"));
+			}),
+			p2: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p2"));
+				f2Active += 1;
+				await hold();
+				f2Active -= 1;
+				return git(feature("f2"));
+			}),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const f1 = coordinator.reconcileFeature("f1");
+		const f2 = coordinator.reconcileFeature("f2");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// Independent scopes: both observations run at the same time — the
+		// per-feature guard must not serialize unrelated features.
+		expect(f1Active).toBe(1);
+		expect(f2Active).toBe(1);
+
+		for (const release of releases) release();
+		await Promise.all([f1, f2]);
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		expect(coordinator.getSnapshot("f2")).toBeDefined();
+		coordinator.dispose();
+	});
+
+	it("reconcileProject coalesces concurrent requests for the same project", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let observeCalls = 0;
+		let active = 0;
+		let maxActive = 0;
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) =>
+				git(featureBranch === "main" ? feature("base:p1") : feature("f1")),
+			),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		fixture.contexts.p1.featureGitInspector.observeProject = vi.fn(async () => {
+			observeCalls += 1;
+			active += 1;
+			maxActive = Math.max(maxActive, active);
+			if (observeCalls === 1) await gate;
+			active -= 1;
+			return {
+				repository: known({ root: "/repo-p1" }),
+				worktrees: known([]),
+			};
+		});
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const first = coordinator.reconcileProject("p1");
+		const second = coordinator.reconcileProject("p1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(observeCalls).toBe(1);
+		expect(maxActive).toBe(1);
+
+		release?.();
+		await Promise.all([first, second]);
+
+		expect(coordinator.isProjectStale("p1")).toBe(false);
+		expect(maxActive).toBe(1);
+		coordinator.dispose();
+	});
+
+	it("a refresh request arriving mid-flight (invalidate + reconcile) still republishes fresh evidence", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				await gate;
+				return git(feature("f1"));
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const inFlight = coordinator.reconcileFeature("f1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// HomePanel's "refresh" message pattern: invalidate, then reconcile.
+		// The reconcile must coalesce onto the in-flight pass (not re-read the
+		// same SHAs in parallel) and its follow-up must land the mutation.
+		coordinator.invalidateFeature("f1");
+		const refreshed = coordinator.reconcileFeature("f1");
+		release?.();
+		await Promise.all([inFlight, refreshed]);
+
+		// The rerun after the superseded pass publishes post-invalidation
+		// evidence and makes the feature deep-fresh again.
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		expect(coordinator.isFeatureStale("f1")).toBe(false);
+		coordinator.dispose();
+	});
+
+	it("a failed observation does not stay sticky — a later reconcileFeature starts a fresh pass", async () => {
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) =>
+				git(featureBranch === "main" ? feature("base:p1") : feature("f1")),
+			),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		// `observeProject` is awaited without a catch in `reconcileFeature`, so
+		// an unexpected throw rejects the pass (unlike `inspect`, which is
+		// degraded to unknown evidence).
+		fixture.contexts.p1.featureGitInspector.observeProject = vi
+			.fn()
+			.mockImplementationOnce(async () => {
+				throw new Error("transient repository failure");
+			})
+			.mockImplementation(async () => ({
+				repository: known({ root: "/repo-p1" }),
+				worktrees: known([]),
+			}));
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await expect(coordinator.reconcileFeature("f1")).rejects.toThrow(
+			"transient repository failure",
+		);
+
+		// The failed pass cleaned up its coalescing slot: a new request starts
+		// a fresh observation instead of awaiting the rejected one forever.
+		await coordinator.reconcileFeature("f1");
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
 		coordinator.dispose();
 	});
 
