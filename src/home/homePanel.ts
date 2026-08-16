@@ -1023,7 +1023,7 @@ export class HomePanel {
 											? "1 script"
 											: `${entry.serviceCount} scripts`;
 								return `
-						<div class="feature-resume-card" onclick="resumeFeature('${f.id}')">
+						<div class="feature-resume-card" onclick="openFeature('${f.id}')">
 							<div class="feature-card-top">
 								<div class="feature-card-color" style="background: ${dotColor}"></div>
 								<div class="feature-card-name">${this.escapeHtml(f.branch)}</div>
@@ -1033,7 +1033,7 @@ export class HomePanel {
 								<span class="feature-card-project">${this.escapeHtml(entry.projectName)}</span>
 								<span class="feature-card-counts">${agentLabel} &middot; ${serviceLabel}</span>
 							</div>
-							<button class="feature-card-resume" onclick="event.stopPropagation(); resumeFeature('${f.id}')">Resume &rarr;</button>
+							<button class="feature-card-resume" onclick="event.stopPropagation(); openFeature('${f.id}')">Open &rarr;</button>
 						</div>`;
 							})
 							.join("")
@@ -1575,7 +1575,7 @@ export class HomePanel {
 							<div class="project-feature-card-body" id="pf-body-${feature.id}">
 								${this.renderProjectFeatureBody(snapshot, feature, agents, services)}
 								<div class="project-feature-actions">
-									<button class="quick-action-btn primary" onclick="resumeFeature('${feature.id}')">Resume</button>
+									<button class="quick-action-btn primary" onclick="openFeature('${feature.id}')">Open</button>
 									<button class="quick-action-btn" onclick="quickAction('openGitView', '${feature.id}')">Open Workspace</button>
 									<button class="quick-action-btn" onclick="quickAction('addAgent', '${feature.id}')">Add Agent</button>
 									<button class="quick-action-btn" onclick="quickAction('addService', '${feature.id}')">Add Service</button>
@@ -2091,7 +2091,7 @@ export class HomePanel {
 					<button class="quick-action-btn danger subtle" onclick="killFeatureSessions('${feature.id}')">Kill Feature Sessions</button>
 					${
 						projectId
-							? `<button class="quick-action-btn subtle" onclick="resumeFeature('${feature.id}')">Open</button>`
+							? `<button class="quick-action-btn subtle" onclick="openFeature('${feature.id}')">Open</button>`
 							: ""
 					}
 				</div>
