@@ -20,6 +20,7 @@ export class SessionNameSyncer {
 	private readonly adapters = new Map<string, ObservableAdapter>();
 	private projectManager: ProjectManager | undefined;
 	private syncTimer?: ReturnType<typeof setInterval>;
+	private syncInFlight: Promise<void> | undefined;
 	private onRenameCallback?: (agentId: string, featureId: string) => void;
 
 	constructor(adapters: ObservableAdapter[]) {
@@ -45,9 +46,24 @@ export class SessionNameSyncer {
 		// require a focus change, while avoiding repeated scans of user-owned
 		// or already-synced sessions.
 		this.syncTimer = setInterval(() => {
-			void this.syncUnnamedAgentsAsync();
+			void this.runSyncPass();
 		}, pollIntervalMs);
 		this.syncTimer.unref?.();
+	}
+
+	/**
+	 * Periodic title pass, serialized like the binder's periodic reconciliation:
+	 * a tick whose pass is still in flight shares that pass instead of starting
+	 * a second one, so a slow provider read can never stack overlapping scans.
+	 */
+	private runSyncPass(): Promise<void> {
+		if (this.syncInFlight) return this.syncInFlight;
+		const run = this.syncUnnamedAgentsAsync();
+		this.syncInFlight = run;
+		void run.finally(() => {
+			if (this.syncInFlight === run) this.syncInFlight = undefined;
+		});
+		return run;
 	}
 
 	syncAll(): void {

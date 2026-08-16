@@ -907,5 +907,53 @@ describe("SessionNameSyncer", () => {
 			expect(name).toBe("async-rename");
 			syncer.dispose();
 		});
+
+		it("serializes overlapping ticks while a pass is in flight", async () => {
+			vi.useFakeTimers();
+			try {
+				const { projectManager, agentManager } =
+					createTestProjectManager(tmpDir, [feature]);
+				const agent = agentManager.createAgent(feature);
+				if (!agent.sessionId) throw new Error("expected session id");
+
+				let readNameAsyncCalls = 0;
+				let resolveTitle: ((title: string | null) => void) | undefined;
+				const titleDeferred = new Promise<string | null>((resolve) => {
+					resolveTitle = resolve;
+				});
+				const stubAdapter = {
+					toolId: "claude",
+					readName: () => null,
+					async: {
+						readName: () => {
+							readNameAsyncCalls += 1;
+							return titleDeferred;
+						},
+					},
+				};
+
+				const syncer = new SessionNameSyncer([stubAdapter]);
+				syncer.start(projectManager, 50);
+
+				await vi.advanceTimersByTimeAsync(50);
+				expect(readNameAsyncCalls).toBe(1);
+
+				// A second tick while the first pass is still suspended on the
+				// async read shares the in-flight pass instead of rescanning.
+				await vi.advanceTimersByTimeAsync(50);
+				expect(readNameAsyncCalls).toBe(1);
+
+				resolveTitle!("async-in-flight");
+				await vi.advanceTimersByTimeAsync(0);
+				await vi.runAllTicks();
+
+				expect(agentManager.getAgents("f1")[0]?.name).toBe(
+					"async-in-flight",
+				);
+				syncer.dispose();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
 	});
 });
