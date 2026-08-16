@@ -273,25 +273,25 @@ function presentSummary(
 		snapshot.integration.status === "known" &&
 		snapshot.integration.outcome === "no_feature_commits"
 	) {
+		// `no_feature_commits` means the Feature tip is still exactly its
+		// creation point: no work was ever committed on this Feature branch.
+		// Integration is only claimed for integrated_by_ancestry /
+		// integrated_by_pull_request, which carry actual integration proof.
+		// The target branch having advanced (possibly with unrelated commits)
+		// does not make this Feature integrated.
 		const featureSha = snapshot.git.feature;
 		const base = snapshot.git.base;
-		// `no_feature_commits` fires when the Feature tip equals its creation
-		// point and is already reachable from the target branch. If the target
-		// branch has moved past that commit, the Feature's work is in the base —
-		// it is integrated, not "not started". Only a Feature still parked
-		// exactly on the current base tip has genuinely not started.
-		const baseMovedPast =
+		const baseAdvanced =
 			featureSha.status === "known" &&
 			base.status === "known" &&
 			featureSha.value.sha.toLowerCase() !== base.value.sha.toLowerCase();
-		return baseMovedPast
-			? {
-					label: "Integrated",
-					tone: "normal",
-					detail:
-						"The Feature branch is already in the target branch; no pending commits.",
-				}
-			: { label: "Not started", tone: "muted" };
+		return {
+			label: "Not started",
+			tone: "muted",
+			detail: baseAdvanced
+				? "Base advanced since this Feature was created."
+				: undefined,
+		};
 	}
 	return { label: "In progress", tone: "normal" };
 }

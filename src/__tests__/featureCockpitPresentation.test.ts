@@ -232,7 +232,7 @@ describe("presentFeatureCockpit", () => {
 		});
 	});
 
-	it("labels a no-commit Feature as Integrated when the target branch has moved past it", () => {
+	it("keeps Not started for a no-commit Feature even when the base has moved on", () => {
 		const base = snapshot();
 		const feature = { ref: "feat/x", sha: SHA.feature };
 		const target = { ref: "main", sha: SHA.base };
@@ -253,17 +253,16 @@ describe("presentFeatureCockpit", () => {
 				evidence: { feature },
 			},
 		});
-		// Feature tip (SHA.feature) differs from base tip (SHA.base), i.e. the
-		// target branch has moved past the Feature.
+		// The Feature tip equals its creation point (no_feature_commits): it is
+		// Not started, even though the base tip (SHA.base) differs from it.
 		expect(result.summary).toEqual({
-			label: "Integrated",
-			tone: "normal",
-			detail:
-				"The Feature branch is already in the target branch; no pending commits.",
+			label: "Not started",
+			tone: "muted",
+			detail: "Base advanced since this Feature was created.",
 		});
 	});
 
-	it("keeps Not started only when the Feature is parked exactly on the current base tip", () => {
+	it("keeps Not started for a Feature parked on the current base tip", () => {
 		const base = snapshot();
 		const parked = { ref: "feat/x", sha: SHA.base };
 		const result = presentFeatureCockpit({

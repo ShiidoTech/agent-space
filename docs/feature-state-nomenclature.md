@@ -78,16 +78,15 @@ affiché en clair sur la page Feature et en tooltip sur la sidebar.
 | `review_finish` | **Ready to finish** |
 | `new_work_after_integration` | **New work after integration** |
 | `integrated_by_ancestry` (local seulement) | **Integrated locally** |
-| `no_feature_commits` + base avancée au-delà | **Integrated** |
-| `no_feature_commits` + branche sur la base courante | **Not started** |
+| `no_feature_commits` | **Not started** |
 | défaut | **In progress** |
 
-> `no_feature_commits` survient quand la branche Feature n'a aucun commit
-> exclusif (pointe == point de création, déjà dans la base). S'il est atteignable
-> depuis la base et que la base a avancé, la Feature est **integrated** — un
-> « Not started » y serait trompeur. « Not started » n'est conservé que lorsque la
-> branche est exactement sur la pointe actuelle de la base (feature réellement
-> pas commencée).
+> `no_feature_commits` signifie que la branche Feature est exactement à son
+> point de création (aucun commit exclusif) — elle n'a pas démarré. L'intégration
+> n'est affirmée que par `integrated_by_ancestry` / `integrated_by_pull_request`,
+> qui portent une preuve réelle. Si la base a avancé depuis la création, un détail
+> « Base advanced since this Feature was created. » l'explicite, sans changer
+> l'état (la base qui avance n'intègre pas pour autant cette Feature).
 
 ## Tones
 
