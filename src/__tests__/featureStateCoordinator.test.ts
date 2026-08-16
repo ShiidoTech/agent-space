@@ -1648,6 +1648,90 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("a second reconcileFeature while one is in flight coalesces before any re-resolution", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				await gate;
+				return git(feature("f1"));
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const first = coordinator.reconcileFeature("f1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const resolveCalls =
+			vi.mocked(fixture.manager.resolveFeature).mock.calls.length;
+		const contextCalls =
+			vi.mocked(fixture.manager.findContextByFeatureId).mock.calls.length;
+		expect(resolveCalls).toBe(1);
+
+		const second = coordinator.reconcileFeature("f1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		// The in-flight guard runs before resolveFeature/findContextByFeatureId
+		// (FeatureManager resolution performs synchronous Git reads), so the
+		// second request coalesced without a single extra resolution.
+		expect(
+			vi.mocked(fixture.manager.resolveFeature).mock.calls.length,
+		).toBe(resolveCalls);
+		expect(
+			vi.mocked(fixture.manager.findContextByFeatureId).mock.calls.length,
+		).toBe(contextCalls);
+
+		release?.();
+		await Promise.all([first, second]);
+
+		// The follow-up pass re-resolves on the current read-model exactly once.
+		expect(
+			vi.mocked(fixture.manager.resolveFeature).mock.calls.length,
+		).toBe(resolveCalls + 1);
+		expect(coordinator.getSnapshot("f1")).toBeDefined();
+		coordinator.dispose();
+	});
+
+	it("a coalesced rerun observes the current read-model after a feature mutation", async () => {
+		let release: (() => void) | undefined;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let inspectCount = 0;
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "main") return git(feature("base:p1"));
+				inspectCount += 1;
+				if (inspectCount === 1) await gate;
+				return git(feature("f1"));
+			}),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		const first = coordinator.reconcileFeature("f1");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const second = coordinator.reconcileFeature("f1"); // coalesces + rerun
+
+		// features.json is mutated while the first pass is still in flight.
+		fixture.featuresByProject.p1[0].branch = "feat/f1-new";
+		release?.();
+		await Promise.all([first, second]);
+
+		// The follow-up pass re-resolved the Feature from the read-model and
+		// observed the post-mutation branch instead of the stale capture.
+		const branches = inspects.p1.mock.calls.map(
+			(call) => call[0].featureBranch,
+		);
+		expect(branches).toContain("feat/f1-new");
+		coordinator.dispose();
+	});
+
 	it("reconcileProject coalesces concurrent requests for the same project", async () => {
 		let release: (() => void) | undefined;
 		const gate = new Promise<void>((resolve) => {

@@ -46,10 +46,21 @@ Coalescence par scope, miroir du motif `inFlight`/`reconcileAfterFlight` de
 `reconcile()` mais par feature et par projet :
 
 - `featureReconciles` / `projectReconciles` : maps `{ promise, rerun }`.
+- **Le garde in-flight est exécuté avant toute résolution** : le check
+  `featureReconciles.get(featureId)` précède `findContextByFeatureId`/
+  `resolveFeature`, car ces résolutions passent par `FeatureManager.getFeature()`
+  → `reconcileFeatureBranches()`, qui effectue déjà des lectures Git synchrones
+  (`symbolic-ref`, `reflog`, `rev-parse`, `merge-base`…). Une requête arrivée en
+  vol coalesce donc sans payer une seule lecture Git de résolution (même principe
+  pour `projectReconciles` avant `getContext`).
 - Une requête `reconcileFeature(featureId)` pendant qu'une observation est en vol
   **partage sa promesse** (une seule observation à la fois, plus de lectures Git
   parallèles sur les mêmes SHAs) et pose `rerun` ; la boucle ré-observe une fois
   après la passe courante. Idem pour `reconcileProject`.
+- **Le ctx et la Feature sont re-résolus à chaque passe** de la boucle, pas
+  capturés avant la première observation : un follow-up demandé après une
+  invalidation travaille sur le read-model courant (reload/modification de
+  `features.json`), pas sur une capture périmée.
 - Sémantique conservée :
   - « later call wins » : le re-fresh d'un appelant arrivé en vol est publié par le
     suivi (test « a later reconcileFeature call always wins »).
@@ -62,8 +73,11 @@ Coalescence par scope, miroir du motif `inFlight`/`reconcileAfterFlight` de
 ## Vérification
 
 - `npm run typecheck`
-- `npx vitest run src/__tests__/featureStateCoordinator.test.ts` — 41 tests
-  (dont 4 nouveaux : partage in-flight 3→1, scoping par feature, coalescence
-  `reconcileProject`, refresh mid-flight invalidate+reconcile).
-- `npm test -- --run` — baseline connue : 16 échecs environnementaux inchangés.
+- `npx vitest run src/__tests__/featureStateCoordinator.test.ts` — 44 tests
+  (ajouts : partage in-flight 3→1, coalescence avant résolution sans lecture Git,
+  rerun sur read-model courant après mutation, scoping par feature, coalescence
+  `reconcileProject`, refresh mid-flight invalidate+reconcile, échec non sticky).
+- `npm test -- --run` — baseline connue : échecs environnementaux inchangés
+  (opencode/tmux : agentManager, featureLifecycle.realGit, featureSidebarProvider,
+  homePanel, openCodeAttention, openCodeSessionProvider).
 - `npm run compile`.

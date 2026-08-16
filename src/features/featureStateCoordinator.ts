@@ -461,11 +461,11 @@ export class FeatureStateCoordinator implements Disposable {
 	 *
 	 * Concurrent requests for the same project coalesce onto the in-flight
 	 * repository observation (see `featureReconciles`); a request arriving
-	 * mid-flight schedules a single follow-up re-observation.
+	 * mid-flight schedules a single follow-up re-observation. The in-flight
+	 * guard runs before any `getContext` resolution.
 	 */
 	async reconcileProject(projectId: string): Promise<void> {
-		const ctx = this.projectManager?.getContext(projectId);
-		if (!ctx || this.disposed) return;
+		if (this.disposed) return;
 		const existing = this.projectReconciles.get(projectId);
 		if (existing) {
 			existing.rerun = true;
@@ -479,6 +479,10 @@ export class FeatureStateCoordinator implements Disposable {
 			try {
 				do {
 					entry.rerun = false;
+					// Resolve the context inside the loop so a follow-up pass
+					// works on the current project state.
+					const ctx = this.projectManager?.getContext(projectId);
+					if (!ctx || this.disposed) return;
 					const startedAt = Date.now();
 					agentSpaceDiagnostic(
 						`reconcile started scope=project:${projectId}`,
@@ -526,11 +530,15 @@ export class FeatureStateCoordinator implements Disposable {
 	 * single follow-up re-observation instead of starting parallel Git reads
 	 * of the same scope. Requests that arrive with no observation in flight
 	 * always run.
+	 *
+	 * The in-flight guard runs before any `findContextByFeatureId`/
+	 * `resolveFeature` — those resolve the feature through FeatureManager,
+	 * whose `reconcileFeatureBranches` already performs synchronous Git reads.
+	 * A second request must coalesce onto the in-flight pass without paying
+	 * those reads again.
 	 */
 	async reconcileFeature(featureId: string): Promise<void> {
-		const ctx = this.projectManager?.findContextByFeatureId(featureId);
-		const resolved = this.projectManager?.resolveFeature(featureId);
-		if (!ctx || !resolved || this.disposed) return;
+		if (this.disposed) return;
 		const existing = this.featureReconciles.get(featureId);
 		if (existing) {
 			existing.rerun = true;
@@ -544,6 +552,16 @@ export class FeatureStateCoordinator implements Disposable {
 			try {
 				do {
 					entry.rerun = false;
+					// Resolve the context and the Feature inside the loop so a
+					// follow-up pass works on the current read-model (a reload or
+					// mutation of features.json while the previous pass was in
+					// flight must be observed, not the stale capture).
+					const ctx =
+						this.projectManager?.findContextByFeatureId(featureId);
+					const resolved = this.projectManager?.resolveFeature(
+						featureId,
+					);
+					if (!ctx || !resolved || this.disposed) return;
 					const startedAt = Date.now();
 					agentSpaceDiagnostic(
 						`reconcile started scope=feature:${featureId}`,
