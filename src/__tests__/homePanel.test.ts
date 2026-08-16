@@ -410,7 +410,10 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		};
 
 		const html = render(
-			{ featureManager: { isProvisioningActive: () => true } },
+			{
+				project: { id: "p1", name: "Project" },
+				featureManager: { isProvisioningActive: () => true },
+			},
 			provisioningFeature,
 		);
 
@@ -443,7 +446,10 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		};
 
 		const html = render(
-			{ featureManager: { isProvisioningActive: () => false } },
+			{
+				project: { id: "p1", name: "Project" },
+				featureManager: { isProvisioningActive: () => false },
+			},
 			failedFeature,
 		);
 

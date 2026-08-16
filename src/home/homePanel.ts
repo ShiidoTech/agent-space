@@ -1163,7 +1163,7 @@ export class HomePanel {
 		const doneAgents = agents.filter((a) => a.status === "done");
 		const stoppedAgents = agents.filter((a) => a.status === "stopped");
 		const body = `
-		<button class="home-nav-bar" onclick="goHome()" title="Back to Agent Space">&#8592; Agent Space</button>
+		<button class="home-nav-bar" onclick="showProject('${snapshot.projectId}')" title="Back to Project">&#8592; ${this.escapeHtml(ctx.project.name)}</button>
 		<div class="workspace-header">
 			<div class="header-color-dot" style="background: ${dotColor}"></div>
 			<div class="header-info">
@@ -1274,7 +1274,7 @@ export class HomePanel {
 			ctx.featureManager?.isProvisioningActive?.(feature.id) ?? false,
 		);
 		const body = `
-		<button class="home-nav-bar" onclick="goHome()" title="Back to Agent Space">&#8592; Agent Space</button>
+		<button class="home-nav-bar" onclick="showProject('${ctx.project.id}')" title="Back to Project">&#8592; ${this.escapeHtml(ctx.project.name)}</button>
 		<div class="workspace-header">
 			<div class="header-color-dot" style="background: ${dotColor}"></div>
 			<div class="header-info">
