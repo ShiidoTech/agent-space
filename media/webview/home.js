@@ -9,7 +9,7 @@ function send(command, data) {
 
 // -- Welcome View Actions ------------------------------------
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
-function resumeFeature(featureId) {
+function openFeature(featureId) {
 	send("showFeature", { featureId });
 }
 

@@ -117,6 +117,52 @@ const OPEN_WORKSPACE_CODES = new Set([
 	"continuation_outside_delivery",
 ]);
 
+/**
+ * Shared human state shown whenever the Feature has an actionable attention
+ * problem. Each problem maps to a specific state so the sidebar badge and the
+ * Feature page headline say *what* is wrong rather than the catch-all
+ * "Needs you". "Needs you" is reserved for cases where an agent is genuinely
+ * waiting on the user (or has failed and needs a decision).
+ */
+const PROBLEM_STATE_LABELS: Record<string, string> = {
+	// An agent is actively waiting on the user.
+	agent_waiting_for_user: "Needs you",
+	agent_failed: "Agent failed",
+	agent_tmux_missing: "Agent terminal missing",
+	service_failed: "Service failed",
+	service_tmux_missing: "Service terminal missing",
+	// Working tree / committed state.
+	working_tree_changes: "In progress",
+	working_tree_conflicted: "Merge conflicts",
+	working_tree_unknown: "Evidence unavailable",
+	// Workspace / branch problems.
+	detached_head: "Detached HEAD",
+	branch_mismatch: "Unexpected branch",
+	worktree_missing: "Worktree missing",
+	worktree_observation_unknown: "Evidence unavailable",
+	// Unavailable evidence / runtime.
+	feature_source_unknown: "Evidence unavailable",
+	git_observation_unknown: "Evidence unavailable",
+	integration_unknown: "Evidence unavailable",
+	agent_runtime_unknown: "Runtime unknown",
+	service_runtime_unknown: "Runtime unknown",
+	// Delivery / upstream.
+	upstream_unknown: "Evidence unavailable",
+	delivery_relation_unknown: "Evidence unavailable",
+	active_delivery_diverged: "Delivery diverged",
+	feature_diverged: "Diverged",
+	continuation_outside_delivery: "Work outside delivery",
+	new_work_after_integration: "New work after integration",
+	// Pull requests.
+	pull_request_ambiguous: "Several PRs",
+	pull_request_base_mismatch: "PR base mismatch",
+	pull_request_head_mismatch: "PR head mismatch",
+};
+
+function presentProblemState(problem: AttentionProblem): string {
+	return PROBLEM_STATE_LABELS[problem.code] ?? "Needs attention";
+}
+
 export function presentFeatureCockpit(
 	snapshot: FeatureSnapshot,
 	referenceHealth?: ProjectReferenceBranchHealth,
@@ -128,7 +174,7 @@ export function presentFeatureCockpit(
 				item.severity === "warning" ||
 				DECISIONAL_INFO.has(item.code),
 		)
-		.sort((left, right) => severityRank(left) - severityRank(right));
+		.sort((left, right) => alertPriority(left) - alertPriority(right));
 	const alerts = actionable.slice(0, 3);
 	const primaryAction = choosePrimaryAction(snapshot, referenceHealth);
 
@@ -152,7 +198,7 @@ function presentSummary(
 	const primaryAlert = alerts[0];
 	if (primaryAlert) {
 		return {
-			label: "Needs you",
+			label: presentProblemState(primaryAlert),
 			tone: primaryAlert.severity === "error" ? "error" : "warning",
 			detail: `${primaryAlert.summary} — ${primaryAlert.detail}`,
 		};
@@ -227,7 +273,25 @@ function presentSummary(
 		snapshot.integration.status === "known" &&
 		snapshot.integration.outcome === "no_feature_commits"
 	) {
-		return { label: "Not started", tone: "muted" };
+		// `no_feature_commits` means the Feature tip is still exactly its
+		// creation point: no work was ever committed on this Feature branch.
+		// Integration is only claimed for integrated_by_ancestry /
+		// integrated_by_pull_request, which carry actual integration proof.
+		// The target branch having advanced (possibly with unrelated commits)
+		// does not make this Feature integrated.
+		const featureSha = snapshot.git.feature;
+		const base = snapshot.git.base;
+		const baseAdvanced =
+			featureSha.status === "known" &&
+			base.status === "known" &&
+			featureSha.value.sha.toLowerCase() !== base.value.sha.toLowerCase();
+		return {
+			label: "Not started",
+			tone: "muted",
+			detail: baseAdvanced
+				? "Base advanced since this Feature was created."
+				: undefined,
+		};
 	}
 	return { label: "In progress", tone: "normal" };
 }
@@ -652,8 +716,16 @@ function hasEssentialUnknownEvidence(snapshot: FeatureSnapshot): boolean {
 	);
 }
 
-function severityRank(problem: AttentionProblem): number {
+/**
+ * Priority used to pick the badge/headline alert. Explicit so a genuinely
+ * user-required action is never shadowed by an earlier, equally-ranked
+ * warning: an agent waiting for the user must beat an uncommitted worktree,
+ * otherwise the summary would say "In progress" while the primary action is
+ * "open_agent". Order: error > agent waiting > other warnings > informational.
+ */
+function alertPriority(problem: AttentionProblem): number {
 	if (problem.severity === "error") return 0;
-	if (problem.severity === "warning") return 1;
-	return 2;
+	if (problem.code === "agent_waiting_for_user") return 1;
+	if (problem.severity === "warning") return 2;
+	return 3;
 }
