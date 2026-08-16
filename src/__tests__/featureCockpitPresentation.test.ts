@@ -232,6 +232,65 @@ describe("presentFeatureCockpit", () => {
 		});
 	});
 
+	it("labels a no-commit Feature as Integrated when the target branch has moved past it", () => {
+		const base = snapshot();
+		const feature = { ref: "feat/x", sha: SHA.feature };
+		const target = { ref: "main", sha: SHA.base };
+		const result = presentFeatureCockpit({
+			...base,
+			git: {
+				...base.git,
+				featureDelta: known({
+					left: target,
+					right: feature,
+					leftOnly: 3,
+					rightOnly: 0,
+				}),
+			},
+			integration: {
+				status: "known",
+				outcome: "no_feature_commits",
+				evidence: { feature },
+			},
+		});
+		// Feature tip (SHA.feature) differs from base tip (SHA.base), i.e. the
+		// target branch has moved past the Feature.
+		expect(result.summary).toEqual({
+			label: "Integrated",
+			tone: "normal",
+			detail:
+				"The Feature branch is already in the target branch; no pending commits.",
+		});
+	});
+
+	it("keeps Not started only when the Feature is parked exactly on the current base tip", () => {
+		const base = snapshot();
+		const parked = { ref: "feat/x", sha: SHA.base };
+		const result = presentFeatureCockpit({
+			...base,
+			git: {
+				...base.git,
+				feature: known(parked),
+				head: known(parked),
+				featureDelta: known({
+					left: parked,
+					right: parked,
+					leftOnly: 0,
+					rightOnly: 0,
+				}),
+			},
+			integration: {
+				status: "known",
+				outcome: "no_feature_commits",
+				evidence: { feature: parked },
+			},
+		});
+		expect(result.summary).toEqual({
+			label: "Not started",
+			tone: "muted",
+		});
+	});
+
 	it("never turns unknown work evidence into clean or zero", () => {
 		const base = snapshot();
 		const result = presentFeatureCockpit({
