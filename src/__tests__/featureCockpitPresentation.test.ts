@@ -808,16 +808,11 @@ describe("presentFeatureCockpit", () => {
 
 	it("opens the agent before a simultaneous workspace problem", () => {
 		const base = snapshot();
+		// `working_tree_changes` is emitted before the runtime/agent problems by
+		// the evaluator; it must NOT shadow the agent that is waiting on the user.
 		const result = presentFeatureCockpit({
 			...base,
 			attention: [
-				{
-					code: "agent_waiting_for_user",
-					severity: "warning",
-					summary: "Agent needs you",
-					detail: "input required",
-					evidence: { agentId: "a1" },
-				},
 				{
 					code: "working_tree_changes",
 					severity: "warning",
@@ -825,12 +820,24 @@ describe("presentFeatureCockpit", () => {
 					detail: "pending",
 					evidence: {},
 				},
+				{
+					code: "agent_waiting_for_user",
+					severity: "warning",
+					summary: "Agent needs you",
+					detail: "input required",
+					evidence: { agentId: "a1" },
+				},
 			],
 		});
 
 		expect(result.primaryAction).toMatchObject({
 			kind: "open_agent",
 			agentId: "a1",
+		});
+		expect(result.summary).toEqual({
+			label: "Needs you",
+			tone: "warning",
+			detail: "Agent needs you — input required",
 		});
 	});
 

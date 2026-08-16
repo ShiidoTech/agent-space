@@ -157,7 +157,6 @@ const PROBLEM_STATE_LABELS: Record<string, string> = {
 	pull_request_ambiguous: "Several PRs",
 	pull_request_base_mismatch: "PR base mismatch",
 	pull_request_head_mismatch: "PR head mismatch",
-	pull_request_observation_unavailable: "PR state unavailable",
 };
 
 function presentProblemState(problem: AttentionProblem): string {
@@ -175,7 +174,7 @@ export function presentFeatureCockpit(
 				item.severity === "warning" ||
 				DECISIONAL_INFO.has(item.code),
 		)
-		.sort((left, right) => severityRank(left) - severityRank(right));
+		.sort((left, right) => alertPriority(left) - alertPriority(right));
 	const alerts = actionable.slice(0, 3);
 	const primaryAction = choosePrimaryAction(snapshot, referenceHealth);
 
@@ -717,8 +716,16 @@ function hasEssentialUnknownEvidence(snapshot: FeatureSnapshot): boolean {
 	);
 }
 
-function severityRank(problem: AttentionProblem): number {
+/**
+ * Priority used to pick the badge/headline alert. Explicit so a genuinely
+ * user-required action is never shadowed by an earlier, equally-ranked
+ * warning: an agent waiting for the user must beat an uncommitted worktree,
+ * otherwise the summary would say "In progress" while the primary action is
+ * "open_agent". Order: error > agent waiting > other warnings > informational.
+ */
+function alertPriority(problem: AttentionProblem): number {
 	if (problem.severity === "error") return 0;
-	if (problem.severity === "warning") return 1;
-	return 2;
+	if (problem.code === "agent_waiting_for_user") return 1;
+	if (problem.severity === "warning") return 2;
+	return 3;
 }

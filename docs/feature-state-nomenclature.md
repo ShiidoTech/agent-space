@@ -13,8 +13,11 @@ partir de trois sources :
 1. **`primaryAction`** — la première action proposée
    (`refresh_evidence`, `open_agent`, `open_workspace`, `open_pull_request`,
    `create_pull_request`, `review_finish`).
-2. **`attention`** — les problèmes détectés par `attentionEvaluator`
-   (liste triée par sévérité : `error` > `warning` > `info`).
+2. **`attention`** — les problèmes détectés par `attentionEvaluator`, triés par
+   priorité explicite : `error` > `agent_waiting_for_user` > autres `warning` >
+   `info` décisional. La priorité est volontaire : un agent qui attend
+   l'utilisateur ne doit jamais être masqué par un warning d'un autre type
+   (ex. worktree non commité).
 3. **`work` / `delivery` / `runtime`** — l'évidence Git/GitHub/runtime.
 
 `presentSummary` choisit l'état dans cet ordre :
@@ -58,7 +61,6 @@ attend réellement l'utilisateur.
 | `pull_request_ambiguous` | **Several PRs** |
 | `pull_request_base_mismatch` | **PR base mismatch** |
 | `pull_request_head_mismatch` | **PR head mismatch** |
-| `pull_request_observation_unavailable` | **PR state unavailable** |
 | (autre) | **Needs attention** |
 
 Le détail (`detail`) complète toujours l'état : `« <summary du problème> — <detail> »`,
