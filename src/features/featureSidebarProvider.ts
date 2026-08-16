@@ -166,6 +166,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private setConsumerVisible(visible: boolean): void {
 		if (visible) {
 			this.consumer ??= this.featureStateCoordinator.acquireConsumer();
+			// Presence seeding is deliberately cheap; the sidebar also needs to
+			// recover deep evidence after an extension restart.
+			void this.featureStateCoordinator.reconcileStaleFeatures();
 			return;
 		}
 		this.consumer?.dispose();

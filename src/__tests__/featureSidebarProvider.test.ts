@@ -33,7 +33,7 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 	};
 
 	const getAgents = vi.fn().mockReturnValue([agent]);
-	const ctx = { agentManager: { getAgents } };
+	const ctx = { agentManager: { getAgents, getAgentsReadModel: getAgents } };
 	const resolveFeature = vi.fn().mockReturnValue({ ctx, feature });
 
 	let postMessage: ReturnType<typeof vi.fn>;
@@ -218,6 +218,7 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 			{
 				acquireConsumer: () => ({ dispose: vi.fn() }),
 				reconcile: () => Promise.resolve(),
+				reconcileStaleFeatures: () => Promise.resolve(),
 			} as never,
 			{} as never,
 			undefined,

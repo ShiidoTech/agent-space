@@ -675,6 +675,22 @@ export class FeatureStateCoordinator implements Disposable {
 		}
 	}
 
+	/** Refreshes stale deep evidence for the features visible in the sidebar. */
+	async reconcileStaleFeatures(): Promise<void> {
+		const manager = this.projectManager;
+		if (!manager || this.disposed) return;
+
+		const featureIds = new Set<string>();
+		for (const ctx of manager.getAllContexts()) {
+			for (const featureId of this.projectFeatureIds(ctx)) {
+				if (this.isFeatureStale(featureId)) featureIds.add(featureId);
+			}
+		}
+		await Promise.all(
+			[...featureIds].map((featureId) => this.reconcileFeature(featureId)),
+		);
+	}
+
 	/** Whether this feature's deep Git/GitHub evidence needs a refresh. A
 	 * feature that only ever received runtime-lane updates (never deep-
 	 * observed) is always stale, regardless of how recently a runtime tick

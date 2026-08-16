@@ -1931,6 +1931,23 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("reconcileStaleFeatures refreshes deep evidence after presence seeding", async () => {
+		const inspects = {
+			p1: vi.fn(async () => git(feature("f1"))),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcilePresence();
+		await coordinator.reconcileStaleFeatures();
+
+		expect(inspects.p1).toHaveBeenCalled();
+		expect(coordinator.isFeatureStale("f1")).toBe(false);
+		expect(coordinator.getSnapshot("f1")?.git.feature.status).toBe("known");
+		coordinator.dispose();
+	});
+
 	it("Project freshness is orthogonal to per-Feature deep freshness", async () => {
 		const inspects = {
 			p1: vi.fn(async () => git(feature("f1"))),
