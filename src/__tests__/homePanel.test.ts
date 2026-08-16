@@ -526,7 +526,9 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		).toHaveLength(1);
 		expect(html).toContain("Needs you");
 		expect(html).toContain("Review continuation");
-		expect(html).toContain("<summary>Evidence</summary>");
+		expect(html).toContain(
+			'class="feature-cockpit-evidence">Evidence : 2026-08-12T10:00:00.000Z · 2026-08-12T10:00:01.000Z',
+		);
 	});
 
 	it("keeps only the non-duplicated bootstrap action below the cockpit", () => {

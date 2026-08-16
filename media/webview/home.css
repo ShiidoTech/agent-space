@@ -777,13 +777,7 @@ body {
 	align-self: flex-end;
 	font-size: 10px;
 	color: var(--vscode-descriptionForeground);
-}
-.feature-cockpit-evidence summary {
-	cursor: pointer;
-	text-align: right;
-}
-.feature-cockpit-evidence div {
-	margin-top: 5px;
+	white-space: nowrap;
 }
 .feature-setup-actions {
 	display: flex;

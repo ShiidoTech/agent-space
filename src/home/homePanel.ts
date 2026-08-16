@@ -1402,10 +1402,7 @@ export class HomePanel {
 					<div class="feature-cockpit-row"><span>Integration</span><div class="feature-cockpit-value feature-cockpit-value--${cockpit.delivery.integration.tone}"><strong>${this.escapeHtml(cockpit.delivery.integration.label)}</strong>${cockpit.delivery.integration.detail ? `<div class="feature-cockpit-breakdown">${this.escapeHtml(cockpit.delivery.integration.detail)}</div>` : ""}</div></div>
 				</div>
 			</div>
-			<details class="feature-cockpit-evidence">
-				<summary>Evidence</summary>
-				<div>Local observation ${this.escapeHtml(cockpit.observedAt)} · GitHub observation ${this.escapeHtml(snapshot.github.observedAt)}</div>
-			</details>
+			<div class="feature-cockpit-evidence">Evidence : ${this.escapeHtml(cockpit.observedAt)} · ${this.escapeHtml(snapshot.github.observedAt)}</div>
 		</section>`;
 	}
 
