@@ -1,9 +1,11 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { ProviderAttentionSignal } from "../providers/types";
 import {
 	type IncrementalJsonlState,
 	readFirstJsonlLine,
+	readFirstJsonlLineAsync,
 	readIncrementalJsonl,
 } from "./incrementalJsonl";
 import type {
@@ -70,6 +72,145 @@ export class ClaudeSessionProvider
 		this.projectsDir = normalizeProjectsDir(
 			projectsDir ?? DEFAULT_PROJECTS_DIR,
 		);
+	}
+
+	/**
+	 * Async observation boundary for the non-blocking periodic passes.
+	 *
+	 * Mirrors the sync methods over `fs/promises` while sharing the same caches,
+	 * so an async scan warms the path/content indexes the sync readers use and
+	 * vice versa. These methods never fall back to the sync filesystem calls.
+	 */
+	readonly async = {
+		scanSessions: async (options?: {
+			fresh?: boolean;
+		}): Promise<SessionInfo[]> => {
+			const now = Date.now();
+			if (
+				!options?.fresh &&
+				this.scanCache &&
+				now - this.scanCache.builtAt < SCAN_CACHE_MS
+			) {
+				return this.scanCache.sessions;
+			}
+			const byId = new Map<string, SessionInfo>();
+			for (const session of await this.scanIndexedSessionsAsync()) {
+				byId.set(session.sessionId, session);
+			}
+			for (const session of await this.scanTranscriptSessionsAsync(
+				this.projectsDir,
+			)) {
+				const existing = byId.get(session.sessionId);
+				byId.set(session.sessionId, {
+					sessionId: session.sessionId,
+					prompt: existing?.prompt || session.prompt,
+					created: session.created || existing?.created || "",
+					projectPath: session.projectPath || existing?.projectPath || "",
+				});
+			}
+			const sessions = [...byId.values()];
+			this.scanCache = { builtAt: now, sessions };
+			return sessions;
+		},
+		hasSession: async (sessionId: string): Promise<boolean> =>
+			(await this.findSessionFileAsync(sessionId)) !== null,
+		readName: async (sessionId: string): Promise<string | null> => {
+			const filePath = await this.findSessionFileAsync(sessionId);
+			if (!filePath) return this.readIndexedNameAsync(sessionId);
+			return (
+				(await this.readTitleAsync(filePath)) ??
+				(await this.readIndexFallbackAsync(
+					path.dirname(filePath),
+					sessionId,
+				)) ??
+				(await this.readIndexedNameAsync(sessionId))
+			);
+		},
+	};
+
+	private async scanTranscriptSessionsAsync(
+		dir: string,
+	): Promise<SessionInfo[]> {
+		const results: SessionInfo[] = [];
+		let entries: fs.Dirent[];
+		try {
+			entries = await fsp.readdir(dir, { withFileTypes: true });
+		} catch {
+			return results;
+		}
+		for (const entry of entries) {
+			const fullPath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				results.push(...(await this.scanTranscriptSessionsAsync(fullPath)));
+				continue;
+			}
+			if (!entry.name.endsWith(".jsonl")) continue;
+			const header = await readTranscriptHeaderAsync(fullPath);
+			if (!header) continue;
+			this.pathCache.set(header.sessionId, fullPath);
+			results.push({
+				sessionId: header.sessionId,
+				prompt: "",
+				created: header.created,
+				projectPath: header.projectPath,
+			});
+		}
+		return results;
+	}
+
+	private async scanIndexedSessionsAsync(): Promise<SessionInfo[]> {
+		const results: SessionInfo[] = [];
+		try {
+			await fsp.access(this.projectsDir);
+		} catch {
+			return results;
+		}
+
+		try {
+			const projectDirs = await fsp.readdir(this.projectsDir);
+			for (const dir of projectDirs) {
+				const indexPath = path.join(
+					this.projectsDir,
+					dir,
+					"sessions-index.json",
+				);
+				let raw: string;
+				try {
+					raw = await fsp.readFile(indexPath, "utf-8");
+				} catch {
+					continue;
+				}
+
+				try {
+					const parsed = JSON.parse(raw);
+
+					const entries = Array.isArray(parsed)
+						? parsed
+						: Array.isArray(parsed?.entries)
+							? parsed.entries
+							: null;
+					if (!entries) continue;
+
+					const fallbackPath = parsed?.originalPath || decodeProjectPath(dir);
+
+					for (const s of entries) {
+						const sessionId = s.sessionId || s.session_id || "";
+						const prompt = s.summary || s.firstPrompt || s.first_prompt || "";
+						const created = s.created || s.createdAt || "";
+						const projectPath = s.projectPath || fallbackPath;
+						if (sessionId) {
+							results.push({ sessionId, prompt, created, projectPath });
+						}
+					}
+				} catch {
+					// Skip unparseable files
+				}
+			}
+		} catch {
+			// Ignore directory errors
+		}
+
+		return results;
 	}
 
 	/**
@@ -310,6 +451,145 @@ export class ClaudeSessionProvider
 		}
 	}
 
+	async findSessionFileAsync(sessionId: string): Promise<string | null> {
+		const cached = this.pathCache.get(sessionId);
+		if (cached) {
+			try {
+				await fsp.access(cached);
+				return cached;
+			} catch {
+				this.pathCache.delete(sessionId);
+			}
+		}
+
+		try {
+			await fsp.access(this.projectsDir);
+		} catch {
+			return null;
+		}
+
+		try {
+			const dirs = await fsp.readdir(this.projectsDir);
+			for (const dir of dirs) {
+				const indexPath = path.join(
+					this.projectsDir,
+					dir,
+					"sessions-index.json",
+				);
+				const indexedPath = await this.findIndexedSessionFileAsync(
+					indexPath,
+					sessionId,
+				);
+				if (indexedPath) {
+					this.pathCache.set(sessionId, indexedPath);
+					return indexedPath;
+				}
+				const candidate = path.join(
+					this.projectsDir,
+					dir,
+					`${sessionId}.jsonl`,
+				);
+				try {
+					await fsp.access(candidate);
+					this.pathCache.set(sessionId, candidate);
+					return candidate;
+				} catch {
+					// Not in this project dir; keep looking.
+				}
+			}
+			await this.ensureContentPathIndexAsync();
+			const found = this.contentPathIndex.get(sessionId);
+			if (found) {
+				this.pathCache.set(sessionId, found);
+				return found;
+			}
+			if (Date.now() - this.contentPathIndexBuiltAt > 1000) {
+				await this.buildContentPathIndexAsync();
+				const refreshed = this.contentPathIndex.get(sessionId);
+				if (refreshed) {
+					this.pathCache.set(sessionId, refreshed);
+					return refreshed;
+				}
+			}
+		} catch {
+			// Ignore directory read errors
+		}
+
+		return null;
+	}
+
+	private async findIndexedSessionFileAsync(
+		indexPath: string,
+		sessionId: string,
+	): Promise<string | null> {
+		let raw: string;
+		try {
+			raw = await fsp.readFile(indexPath, "utf-8");
+		} catch {
+			return null;
+		}
+		try {
+			const parsed = JSON.parse(raw);
+			const entries = Array.isArray(parsed)
+				? parsed
+				: Array.isArray(parsed?.entries)
+					? parsed.entries
+					: [];
+			const entry = entries.find(
+				(candidate: Record<string, unknown>) =>
+					candidate.sessionId === sessionId &&
+					typeof candidate.fullPath === "string",
+			);
+			if (!entry) return null;
+			try {
+				await fsp.access(entry.fullPath as string);
+				return entry.fullPath as string;
+			} catch {
+				return null;
+			}
+		} catch {
+			return null;
+		}
+	}
+
+	private async ensureContentPathIndexAsync(): Promise<void> {
+		if (this.contentPathIndexBuiltAt > 0) return;
+		await this.buildContentPathIndexAsync();
+	}
+
+	private async buildContentPathIndexAsync(): Promise<void> {
+		this.contentPathIndex.clear();
+		this.contentPathIndexBuiltAt = Date.now();
+		await this.indexSessionFilesAsync(this.projectsDir);
+	}
+
+	private async indexSessionFilesAsync(dir: string): Promise<void> {
+		let entries: fs.Dirent[];
+		try {
+			entries = await fsp.readdir(dir, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const candidate = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				await this.indexSessionFilesAsync(candidate);
+				continue;
+			}
+			if (!entry.name.endsWith(".jsonl")) continue;
+			try {
+				const firstLine = await readFirstJsonlLineAsync(candidate);
+				if (!firstLine) continue;
+				const parsed = JSON.parse(firstLine) as Record<string, unknown>;
+				if (typeof parsed.sessionId === "string") {
+					this.contentPathIndex.set(parsed.sessionId, candidate);
+				}
+			} catch {
+				// Ignore files that are not readable session JSONL.
+			}
+		}
+	}
+
 	readName(sessionId: string): string | null {
 		const filePath = this.findSessionFile(sessionId);
 		if (!filePath) return this.readIndexedName(sessionId);
@@ -348,6 +628,108 @@ export class ClaudeSessionProvider
 			return null;
 		}
 		return null;
+	}
+
+	private async readIndexedNameAsync(
+		sessionId: string,
+	): Promise<string | null> {
+		try {
+			await fsp.access(this.projectsDir);
+		} catch {
+			return null;
+		}
+		try {
+			for (const dir of await fsp.readdir(this.projectsDir)) {
+				const indexPath = path.join(
+					this.projectsDir,
+					dir,
+					"sessions-index.json",
+				);
+				let raw: string;
+				try {
+					raw = await fsp.readFile(indexPath, "utf-8");
+				} catch {
+					continue;
+				}
+				const parsed = JSON.parse(raw);
+				const entries = Array.isArray(parsed)
+					? parsed
+					: Array.isArray(parsed?.entries)
+						? parsed.entries
+						: [];
+				const entry = entries.find(
+					(candidate: Record<string, unknown>) =>
+						candidate.sessionId === sessionId,
+				);
+				const title =
+					entry?.summary ?? entry?.firstPrompt ?? entry?.first_prompt;
+				if (typeof title === "string" && title.trim()) return title.trim();
+			}
+		} catch {
+			return null;
+		}
+		return null;
+	}
+
+	private async readIndexFallbackAsync(
+		projectDir: string,
+		sessionId: string,
+	): Promise<string | null> {
+		const indexPath = path.join(projectDir, "sessions-index.json");
+		try {
+			const stat = await fsp.stat(indexPath);
+			let cached = this.indexCache.get(projectDir);
+			if (!cached || cached.mtimeMs !== stat.mtimeMs) {
+				const parsed = JSON.parse(await fsp.readFile(indexPath, "utf-8"));
+				const entries = Array.isArray(parsed)
+					? parsed
+					: Array.isArray(parsed?.entries)
+						? parsed.entries
+						: [];
+				const titles = new Map<string, string>();
+				for (const entry of entries) {
+					if (typeof entry?.sessionId !== "string") continue;
+					const title =
+						typeof entry.summary === "string" && entry.summary.trim()
+							? entry.summary.trim()
+							: typeof entry.firstPrompt === "string"
+								? entry.firstPrompt.trim()
+								: "";
+					if (title) titles.set(entry.sessionId, title);
+				}
+				cached = { mtimeMs: stat.mtimeMs, titles };
+				this.indexCache.set(projectDir, cached);
+			}
+			return cached.titles.get(sessionId) ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	private async readTitleAsync(filePath: string): Promise<string | null> {
+		let aiTitle: string | null = null;
+		let content: string;
+		try {
+			content = await fsp.readFile(filePath, "utf-8");
+		} catch {
+			return null;
+		}
+		const lines = content.split("\n");
+		for (let i = lines.length - 1; i >= 0; i--) {
+			const trimmed = lines[i].trim();
+			if (!trimmed) continue;
+			try {
+				const parsed = JSON.parse(trimmed);
+				const title = titleFromEvent(parsed);
+				if (title?.kind === "custom" && title.value) return title.value;
+				if (title?.kind === "ai" && title.value && !aiTitle) {
+					aiTitle = title.value;
+				}
+			} catch {
+				// Skip non-JSON lines
+			}
+		}
+		return aiTitle;
 	}
 
 	/**
@@ -625,6 +1007,55 @@ function readTranscriptHeader(filePath: string): TranscriptHeader | null {
 		return null;
 	} finally {
 		if (fd !== undefined) fs.closeSync(fd);
+	}
+}
+
+/** Async twin of {@link readTranscriptHeader} for the non-blocking boundary. */
+async function readTranscriptHeaderAsync(
+	filePath: string,
+): Promise<TranscriptHeader | null> {
+	let fd: fsp.FileHandle | undefined;
+	try {
+		fd = await fsp.open(filePath, "r");
+		const stat = await fd.stat();
+		const size = stat.size;
+		if (size === 0) return null;
+		const length = Math.min(HEADER_SCAN_BYTES, size);
+		const buffer = Buffer.alloc(length);
+		await fd.read(buffer, 0, length, 0);
+
+		let sessionId = "";
+		let projectPath = "";
+		let created = "";
+		const lines = buffer.toString("utf-8").split("\n");
+		// The final line may be truncated by the bounded read.
+		const complete = length < size ? lines.slice(0, -1) : lines;
+		for (const line of complete) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+			let event: Record<string, unknown>;
+			try {
+				event = JSON.parse(trimmed) as Record<string, unknown>;
+			} catch {
+				continue;
+			}
+			if (!sessionId && typeof event.sessionId === "string") {
+				sessionId = event.sessionId;
+			}
+			if (!projectPath && typeof event.cwd === "string") {
+				projectPath = event.cwd;
+			}
+			if (!created && typeof event.timestamp === "string") {
+				created = event.timestamp;
+			}
+			if (sessionId && projectPath && created) break;
+		}
+		if (!sessionId) return null;
+		return { sessionId, projectPath, created };
+	} catch {
+		return null;
+	} finally {
+		await fd?.close();
 	}
 }
 

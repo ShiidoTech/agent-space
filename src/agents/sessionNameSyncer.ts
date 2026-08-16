@@ -3,19 +3,27 @@ import type {
 	ProjectManager,
 } from "../projects/projectManager";
 import type { Agent } from "../types";
-import type { SessionRenameAdapter } from "./sessionProviders/types";
+import type {
+	AsyncSessionObservationAdapter,
+	SessionRenameAdapter,
+} from "./sessionProviders/types";
 
 const MAX_TITLE_LENGTH = 40;
 const UNNAMED_SYNC_INTERVAL_MS = 15_000;
 
+type ObservableAdapter = SessionRenameAdapter & {
+	readonly async?: AsyncSessionObservationAdapter;
+};
+
 export class SessionNameSyncer {
 	private readonly knownTitles = new Map<string, string>();
-	private readonly adapters = new Map<string, SessionRenameAdapter>();
+	private readonly adapters = new Map<string, ObservableAdapter>();
 	private projectManager: ProjectManager | undefined;
 	private syncTimer?: ReturnType<typeof setInterval>;
+	private syncInFlight: Promise<void> | undefined;
 	private onRenameCallback?: (agentId: string, featureId: string) => void;
 
-	constructor(adapters: SessionRenameAdapter[]) {
+	constructor(adapters: ObservableAdapter[]) {
 		for (const adapter of adapters) {
 			this.adapters.set(adapter.toolId, adapter);
 		}
@@ -37,11 +45,25 @@ export class SessionNameSyncer {
 		// only still-unnamed agents so a long-running active terminal does not
 		// require a focus change, while avoiding repeated scans of user-owned
 		// or already-synced sessions.
-		this.syncTimer = setInterval(
-			() => this.syncUnnamedAgents(),
-			pollIntervalMs,
-		);
+		this.syncTimer = setInterval(() => {
+			void this.runSyncPass();
+		}, pollIntervalMs);
 		this.syncTimer.unref?.();
+	}
+
+	/**
+	 * Periodic title pass, serialized like the binder's periodic reconciliation:
+	 * a tick whose pass is still in flight shares that pass instead of starting
+	 * a second one, so a slow provider read can never stack overlapping scans.
+	 */
+	private runSyncPass(): Promise<void> {
+		if (this.syncInFlight) return this.syncInFlight;
+		const run = this.syncUnnamedAgentsAsync();
+		this.syncInFlight = run;
+		void run.finally(() => {
+			if (this.syncInFlight === run) this.syncInFlight = undefined;
+		});
+		return run;
 	}
 
 	syncAll(): void {
@@ -109,6 +131,25 @@ export class SessionNameSyncer {
 		}
 	}
 
+	/**
+	 * Periodic title pass, async-only like the binder's periodic reconciliation.
+	 * Titles are read exclusively through the adapters' `async` boundary so the
+	 * Extension Host is never blocked on a synchronous provider read; an adapter
+	 * without an async `readName` simply yields nothing for this pass.
+	 */
+	private async syncUnnamedAgentsAsync(): Promise<void> {
+		if (!this.projectManager) return;
+
+		for (const ctx of this.projectManager.getAllContexts()) {
+			for (const featureId of this.getManagedFeatureIds(ctx)) {
+				for (const agent of ctx.agentManager.getAgents(featureId)) {
+					if (!this.isUnnamed(agent.name)) continue;
+					await this.syncAgentAsync(ctx, featureId, agent);
+				}
+			}
+		}
+	}
+
 	private syncAgent(
 		ctx: ProjectContext,
 		featureId: string,
@@ -122,10 +163,40 @@ export class SessionNameSyncer {
 		const title = adapter.readName(agent.sessionId);
 		if (!title) return;
 
+		this.applyTitle(ctx, featureId, agent, title);
+	}
+
+	private async syncAgentAsync(
+		ctx: ProjectContext,
+		featureId: string,
+		agent: Agent,
+	): Promise<void> {
+		const adapter = this.getAdapter(agent.toolId);
+		if (!adapter?.async?.readName) return;
+		if (agent.status === "done") return;
+		if (!agent.sessionId) return;
+
+		let title: string | null;
+		try {
+			title = await adapter.async.readName(agent.sessionId);
+		} catch {
+			return;
+		}
+		if (!title) return;
+
+		this.applyTitle(ctx, featureId, agent, title);
+	}
+
+	private applyTitle(
+		ctx: ProjectContext,
+		featureId: string,
+		agent: Agent,
+		title: string,
+	): void {
 		const truncated = this.truncateTitle(title);
 		ctx.agentManager.updateAgentSessionTitle(agent.id, featureId, truncated);
-		const previous = this.knownTitles.get(agent.sessionId);
-		this.knownTitles.set(agent.sessionId, truncated);
+		const previous = this.knownTitles.get(agent.sessionId!);
+		this.knownTitles.set(agent.sessionId!, truncated);
 
 		if (agent.name !== truncated && this.shouldRename(agent, previous)) {
 			ctx.agentManager.renameAgentFromProvider(agent.id, featureId, truncated);
@@ -150,7 +221,7 @@ export class SessionNameSyncer {
 		this.syncTimer = undefined;
 	}
 
-	private getAdapter(toolId?: string): SessionRenameAdapter | undefined {
+	private getAdapter(toolId?: string): ObservableAdapter | undefined {
 		return this.adapters.get(toolId ?? "claude");
 	}
 

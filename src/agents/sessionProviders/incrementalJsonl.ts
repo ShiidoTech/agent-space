@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 
 const INITIAL_READ_BYTES = 64 * 1024;
 const MAX_INCREMENT_BYTES = 256 * 1024;
@@ -55,8 +56,45 @@ export function readFirstJsonlLine(filePath: string): string | undefined {
 	}
 }
 
-/** Read only the new/bounded tail of a JSONL file and retain the last value. */
-export function readIncrementalJsonl<T>(
+/**
+ * Async twin of {@link readFirstJsonlLine}, for session providers that expose
+ * an async observation boundary (used by the periodic, non-blocking passes).
+ */
+export async function readFirstJsonlLineAsync(
+	filePath: string,
+): Promise<string | undefined> {
+	let fd: fsp.FileHandle | undefined;
+	try {
+		fd = await fsp.open(filePath, "r");
+		const stat = await fd.stat();
+		const size = stat.size;
+		if (size === 0) return undefined;
+		const limit = Math.min(size, FIRST_LINE_MAX_BYTES);
+
+		let read = 0;
+		let content = "";
+		while (read < limit) {
+			const chunkSize = Math.min(FIRST_LINE_CHUNK_BYTES, limit - read);
+			const buffer = Buffer.alloc(chunkSize);
+			const { bytesRead } = await fd.read(buffer, 0, chunkSize, read);
+			if (bytesRead <= 0) break;
+			read += bytesRead;
+			content += buffer.toString("utf-8", 0, bytesRead);
+			const newline = content.indexOf("\n");
+			if (newline >= 0) return content.slice(0, newline).trim();
+		}
+		// No newline at all: the file holds a single record.
+		return read >= size ? content.trim() : undefined;
+	} catch {
+		return undefined;
+	} finally {
+		await fd?.close();
+	}
+}
+
+/** Read only the new/bounded tail of a JSONL file and retain the last value. */ export function readIncrementalJsonl<
+	T,
+>(
 	filePath: string,
 	state: IncrementalJsonlState<T> | undefined,
 	parseLine: (line: string, previous: T | undefined) => T | undefined,

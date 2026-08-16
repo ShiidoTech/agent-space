@@ -321,9 +321,16 @@ function finishDecision(
 	}
 
 	if (integration.status === "unknown") {
-		return blockedDecision(
-			`Integration evidence is unknown (${integration.reason})${integration.detail ? `: ${integration.detail}` : "."}`,
-		);
+		const integrationReason = `Integration evidence is unknown (${integration.reason})${integration.detail ? `: ${integration.detail}` : "."}`;
+		return {
+			safe: false,
+			// A human may explicitly accept the unknown GitHub state when local
+			// worktree deletion is independently forceable. Branches are retained;
+			// this only removes the worktree and Agent Space records.
+			forceable: safety.forceable,
+			requiresForce: safety.forceable,
+			reasons: [integrationReason, ...safety.reasons],
+		};
 	}
 	if (integration.outcome !== "integrated_by_pull_request") {
 		return decisionFromSafety(safety);

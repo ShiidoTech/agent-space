@@ -247,14 +247,14 @@ describe("Feature Finish", () => {
 				reasons: [],
 			});
 		const ctx = context(
-				"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
-			);
+			"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
+		);
 		ctx.gitClient.readSync = (args: readonly string[]) =>
-				args[0] === "symbolic-ref"
-					? { ...gitResult(""), exitCode: 1 }
-					: gitResult(
-							"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
-						);
+			args[0] === "symbolic-ref"
+				? { ...gitResult(""), exitCode: 1 }
+				: gitResult(
+						"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
+					);
 
 		const assessment = assessFeatureFinish(ctx, feature(), finishEvidence());
 
@@ -415,7 +415,11 @@ describe("Feature Finish", () => {
 			return gitResult("worktree /repo\n");
 		});
 		ctx.gitClient.readSync = readSync;
-		const named = { ...feature(), name: "feature-player", branch: "feature-player" };
+		const named = {
+			...feature(),
+			name: "feature-player",
+			branch: "feature-player",
+		};
 		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
 			branch: "feature/player",
 			baseBranch: "v2_ia_first",
@@ -435,7 +439,13 @@ describe("Feature Finish", () => {
 		const assessment = assessFeatureFinish(
 			ctx,
 			named,
-			{ integration: { status: "unknown", reason: "ancestry_unknown", evidence: {} } },
+			{
+				integration: {
+					status: "unknown",
+					reason: "ancestry_unknown",
+					evidence: {},
+				},
+			},
 			() => false,
 		);
 
@@ -642,7 +652,7 @@ describe("Feature Finish", () => {
 		expect(assessment.reasons.join("\n")).toContain("2 commits");
 	});
 
-	it("fails closed when GitHub integration evidence is unavailable", () => {
+	it("keeps unknown GitHub evidence forceable when the worktree deletion is forceable", () => {
 		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
 			worktreePath: "/worktrees/f1",
 			safe: false,
@@ -672,8 +682,51 @@ describe("Feature Finish", () => {
 			}),
 		);
 
-		expect(assessment).toMatchObject({ safe: false, forceable: false });
+		expect(assessment).toMatchObject({ safe: false, forceable: true });
+		expect(assessment.checks[0]?.requiresForce).toBe(true);
 		expect(assessment.reasons.join("\n")).toContain("GitHub unavailable");
+	});
+
+	it("fails closed when GitHub evidence is unknown and deletion is not forceable", () => {
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+			worktreePath: "/worktrees/f1",
+			safe: false,
+			forceable: false,
+			insideBase: true,
+			statusObserved: true,
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			dirty: false,
+			hasLocalCommits: true,
+			unmerged: true,
+			workingTreeStatus: "",
+			localCommitCount: 1,
+			featureSha: "1".repeat(40),
+			baseSha: "2".repeat(40),
+			reasons: ["Branch feat/f1 is not an ancestor of main."],
+		});
+		const assessment = assessFeatureFinish(
+			context("worktree /repo\n\nworktree /worktrees/f1\n"),
+			feature(),
+			finishEvidence({
+				status: "unknown",
+				reason: "integration_unknown",
+				detail: "GitHub unavailable",
+				evidence: {},
+			}),
+		);
+
+		expect(assessment).toMatchObject({
+			safe: false,
+			forceable: false,
+		});
+		expect(assessment.checks[0]?.requiresForce).toBe(false);
+		expect(assessment.reasons.join("\n")).toContain("GitHub unavailable");
+		expect(assessment.checks[0]).toMatchObject({
+			safe: false,
+			forceable: false,
+		});
 	});
 
 	it("plans force independently for a risky Feature and a clean agent", () => {

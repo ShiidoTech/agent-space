@@ -800,4 +800,160 @@ describe("SessionNameSyncer", () => {
 			syncer.dispose();
 		});
 	});
+
+	describe("async observation boundary", () => {
+		it("claude async.readName resolves a custom title", async () => {
+			const sessionId = "async-claude-title";
+			writeJsonlFile(sessionId, [
+				customTitleEvent("async-claude-title", sessionId),
+			]);
+
+			expect(await claudeProvider.async.readName(sessionId)).toBe(
+				"async-claude-title",
+			);
+		});
+
+		it("claude async.hasSession resolves for an existing transcript", async () => {
+			const sessionId = "async-claude-has";
+			writeJsonlFile(sessionId, [messageEvent("hello")]);
+
+			expect(await claudeProvider.async.hasSession(sessionId)).toBe(true);
+			expect(await claudeProvider.async.hasSession("missing-session")).toBe(
+				false,
+			);
+		});
+
+		it("claude async.scanSessions finds transcripts with their project path", async () => {
+			const sessionId = "async-claude-scan";
+			writeJsonlFile(sessionId, [
+				JSON.stringify({
+					type: "assistant",
+					sessionId,
+					cwd: "/tmp/project",
+					timestamp: "2026-03-06T16:28:46.000Z",
+				}),
+			]);
+
+			const sessions = await claudeProvider.async.scanSessions({ fresh: true });
+			const session = sessions.find((s) => s.sessionId === sessionId);
+			expect(session?.projectPath).toBe("/tmp/project");
+		});
+
+		it("codex async.readName resolves a thread name from the index", async () => {
+			const sessionId = "async-codex-title";
+			writeCodexSessionIndex([
+				JSON.stringify({
+					id: sessionId,
+					thread_name: "async-codex-title",
+					updated_at: "2026-03-06T16:28:46.350986641Z",
+				}),
+			]);
+
+			expect(await codexProvider.async.readName(sessionId)).toBe(
+				"async-codex-title",
+			);
+		});
+
+		it("codex async.hasSession resolves for an existing rollout", async () => {
+			const sessionId = "async-codex-has";
+			writeCodexSession(sessionId, [
+				JSON.stringify({
+					type: "session_meta",
+					payload: { id: sessionId, cwd: "/tmp/project" },
+				}),
+			]);
+
+			expect(await codexProvider.async.hasSession(sessionId)).toBe(true);
+			expect(await codexProvider.async.hasSession("missing-session")).toBe(
+				false,
+			);
+		});
+
+		it("codex async.scanSessions finds rollouts", async () => {
+			const sessionId = "async-codex-scan";
+			writeCodexSession(sessionId, [
+				JSON.stringify({
+					type: "session_meta",
+					payload: { id: sessionId, cwd: "/tmp/project" },
+				}),
+			]);
+
+			const sessions = await codexProvider.async.scanSessions();
+			expect(sessions.some((s) => s.sessionId === sessionId)).toBe(true);
+		});
+
+		it("periodic poll renames an unnamed agent through the async boundary", async () => {
+			const { projectManager, agentManager } = createTestProjectManager(
+				tmpDir,
+				[feature],
+			);
+			const agent = agentManager.createAgent(feature);
+			writeJsonlFile(sid(agent), [
+				customTitleEvent("async-rename", sid(agent)),
+			]);
+
+			const syncer = makeSyncer();
+			syncer.start(projectManager, 10);
+
+			// The periodic pass reads through the async boundary, so poll for
+			// the rename instead of racing a fixed sleep.
+			const deadline = Date.now() + 2000;
+			let name = agentManager.getAgents("f1")[0]?.name;
+			while (name !== "async-rename" && Date.now() < deadline) {
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				name = agentManager.getAgents("f1")[0]?.name;
+			}
+
+			expect(name).toBe("async-rename");
+			syncer.dispose();
+		});
+
+		it("serializes overlapping ticks while a pass is in flight", async () => {
+			vi.useFakeTimers();
+			try {
+				const { projectManager, agentManager } =
+					createTestProjectManager(tmpDir, [feature]);
+				const agent = agentManager.createAgent(feature);
+				if (!agent.sessionId) throw new Error("expected session id");
+
+				let readNameAsyncCalls = 0;
+				let resolveTitle: ((title: string | null) => void) | undefined;
+				const titleDeferred = new Promise<string | null>((resolve) => {
+					resolveTitle = resolve;
+				});
+				const stubAdapter = {
+					toolId: "claude",
+					readName: () => null,
+					async: {
+						readName: () => {
+							readNameAsyncCalls += 1;
+							return titleDeferred;
+						},
+					},
+				};
+
+				const syncer = new SessionNameSyncer([stubAdapter]);
+				syncer.start(projectManager, 50);
+
+				await vi.advanceTimersByTimeAsync(50);
+				expect(readNameAsyncCalls).toBe(1);
+
+				// A second tick while the first pass is still suspended on the
+				// async read shares the in-flight pass instead of rescanning.
+				await vi.advanceTimersByTimeAsync(50);
+				expect(readNameAsyncCalls).toBe(1);
+
+				resolveTitle!("async-in-flight");
+				await vi.advanceTimersByTimeAsync(0);
+				await vi.runAllTicks();
+
+				expect(agentManager.getAgents("f1")[0]?.name).toBe(
+					"async-in-flight",
+				);
+				syncer.dispose();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	});
 });
