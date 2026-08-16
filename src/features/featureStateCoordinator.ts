@@ -79,6 +79,27 @@ export class FeatureStateCoordinator implements Disposable {
 	>();
 	private inFlight?: Promise<void>;
 	private reconcileAfterFlight = false;
+	/**
+	 * Per-feature in-flight deep observations. A `reconcileFeature` request
+	 * for a feature that already has an observation in flight shares that
+	 * observation instead of launching a second (and a third, and a fourth)
+	 * full Git read of the same SHAs. The `rerun` flag coalesces requests
+	 * that arrive mid-flight: the loop re-observes once after the current
+	 * pass settles so the later request's fresh evidence is still published
+	 * (mirroring the `reconcileAfterFlight` guard on `reconcile()`, scoped
+	 * per feature). Invalidations remain demand-driven: `invalidateFeature`
+	 * supersedes an in-flight pass via the generation bump and nothing
+	 * re-observes until the focused scope requests it.
+	 */
+	private featureReconciles = new Map<
+		string,
+		{ promise: Promise<void>; rerun: boolean }
+	>();
+	/** Same shape, scoped per project for `reconcileProject`. */
+	private projectReconciles = new Map<
+		string,
+		{ promise: Promise<void>; rerun: boolean }
+	>();
 	private disposed = false;
 	private generation = 0;
 	private consumers = 0;
@@ -437,64 +458,163 @@ export class FeatureStateCoordinator implements Disposable {
 	 * lightweight per-feature presence. Deep per-feature Git/GitHub inspection
 	 * stays demand-driven — it only happens when that specific Feature is
 	 * opened (see `reconcileFeature`).
+	 *
+	 * Concurrent requests for the same project coalesce onto the in-flight
+	 * repository observation (see `featureReconciles`); a request arriving
+	 * mid-flight schedules a single follow-up re-observation. The in-flight
+	 * guard runs before any `getContext` resolution.
 	 */
 	async reconcileProject(projectId: string): Promise<void> {
-		const ctx = this.projectManager?.getContext(projectId);
-		if (!ctx || this.disposed) return;
-		const startedAt = Date.now();
-		agentSpaceDiagnostic(`reconcile started scope=project:${projectId}`);
-		const generation = this.beginProjectObservation(projectId);
-		await this.refreshProjectRepositoryFacts(ctx, generation);
-		await this.reconcilePresence(projectId);
-		// Compare-and-commit: only re-stamp the project fresh if this
-		// observation is still the current one. A mutation that arrived during
-		// the observation bumped the project generation, so a stale pass cannot
-		// revive a project invalidated mid-flight.
-		if (this.isProjectObservationCurrent(projectId, generation)) {
-			this.projectRepositoryObservedAt.set(projectId, Date.now());
+		if (this.disposed) return;
+		const existing = this.projectReconciles.get(projectId);
+		if (existing) {
+			existing.rerun = true;
+			return existing.promise;
 		}
-		agentSpaceDiagnostic(
-			`reconcile completed in ${Date.now() - startedAt}ms scope=project:${projectId}`,
-		);
+		const entry: { promise: Promise<void>; rerun: boolean } = {
+			promise: Promise.resolve(),
+			rerun: false,
+		};
+		const run = (async () => {
+			try {
+				do {
+					entry.rerun = false;
+					// Resolve the context inside the loop so a follow-up pass
+					// works on the current project state.
+					const ctx = this.projectManager?.getContext(projectId);
+					if (!ctx || this.disposed) return;
+					const startedAt = Date.now();
+					agentSpaceDiagnostic(
+						`reconcile started scope=project:${projectId}`,
+					);
+					const generation = this.beginProjectObservation(projectId);
+					await this.refreshProjectRepositoryFacts(ctx, generation);
+					await this.reconcilePresence(projectId);
+					// Compare-and-commit: only re-stamp the project fresh if this
+					// observation is still the current one. A mutation that arrived
+					// during the observation bumped the project generation, so a
+					// stale pass cannot revive a project invalidated mid-flight.
+					if (
+						this.isProjectObservationCurrent(projectId, generation)
+					) {
+						this.projectRepositoryObservedAt.set(
+							projectId,
+							Date.now(),
+						);
+					}
+					agentSpaceDiagnostic(
+						`reconcile completed in ${Date.now() - startedAt}ms scope=project:${projectId}`,
+					);
+				} while (entry.rerun && !this.disposed);
+			} finally {
+				// Deleting the entry synchronously with the exit decision closes
+				// the race where a request arriving between the final loop check
+				// and an async cleanup would coalesce onto a settled run and
+				// lose its follow-up; on failure it also stops a rejected pass
+				// from staying sticky.
+				this.projectReconciles.delete(projectId);
+			}
+		})();
+		entry.promise = run;
+		this.projectReconciles.set(projectId, entry);
+		return run;
 	}
 
 	/**
 	 * Deep observation of exactly one feature, plus the minimal local
 	 * repository fact it needs (the worktree list, to resolve its active
 	 * branch). Never touches another feature or another project.
+	 *
+	 * Concurrent requests for the same feature coalesce: while one deep
+	 * observation is in flight, further requests share it and mark it for a
+	 * single follow-up re-observation instead of starting parallel Git reads
+	 * of the same scope. Requests that arrive with no observation in flight
+	 * always run.
+	 *
+	 * The in-flight guard runs before any `findContextByFeatureId`/
+	 * `resolveFeature` — those resolve the feature through FeatureManager,
+	 * whose `reconcileFeatureBranches` already performs synchronous Git reads.
+	 * A second request must coalesce onto the in-flight pass without paying
+	 * those reads again.
 	 */
 	async reconcileFeature(featureId: string): Promise<void> {
-		const ctx = this.projectManager?.findContextByFeatureId(featureId);
-		const resolved = this.projectManager?.resolveFeature(featureId);
-		if (!ctx || !resolved || this.disposed) return;
-		const startedAt = Date.now();
-		agentSpaceDiagnostic(`reconcile started scope=feature:${featureId}`);
-		// Capture the deep generation before any await: a mutation that lands
-		// while the shared repository reads below are in flight must supersede
-		// this pass, even though it hasn't reached `observe`/`commitDeep` yet.
-		// Renewing the generation here would let a pre-mutation observation
-		// publish stale inputs and re-stamp the feature fresh.
-		const gen = this.beginDeepObservation(featureId);
-		const baseRef = await observeBaseRef(ctx);
-		const projectObservation = await ctx.featureGitInspector.observeProject(
-			ctx.project.repoPath,
-		);
-		const tmuxSessions = this.observeTmuxRuntime(this.projectManager!);
-		const source: FeatureSnapshotSource = { status: "known" };
-		const isBaseFeature = resolved.feature.id === `base:${ctx.project.id}`;
-		const snapshot = await this.observe(
-			ctx,
-			resolved.feature,
-			isBaseFeature,
-			baseRef,
-			tmuxSessions,
-			projectObservation,
-			source,
-		);
-		this.commitDeep(gen, ctx.project.id, resolved.feature, snapshot);
-		agentSpaceDiagnostic(
-			`reconcile completed in ${Date.now() - startedAt}ms scope=feature:${featureId}`,
-		);
+		if (this.disposed) return;
+		const existing = this.featureReconciles.get(featureId);
+		if (existing) {
+			existing.rerun = true;
+			return existing.promise;
+		}
+		const entry: { promise: Promise<void>; rerun: boolean } = {
+			promise: Promise.resolve(),
+			rerun: false,
+		};
+		const run = (async () => {
+			try {
+				do {
+					entry.rerun = false;
+					// Resolve the context and the Feature inside the loop so a
+					// follow-up pass works on the current read-model (a reload or
+					// mutation of features.json while the previous pass was in
+					// flight must be observed, not the stale capture).
+					const ctx =
+						this.projectManager?.findContextByFeatureId(featureId);
+					const resolved = this.projectManager?.resolveFeature(
+						featureId,
+					);
+					if (!ctx || !resolved || this.disposed) return;
+					const startedAt = Date.now();
+					agentSpaceDiagnostic(
+						`reconcile started scope=feature:${featureId}`,
+					);
+					// Capture the deep generation before any await: a mutation that
+					// lands while the shared repository reads below are in flight
+					// must supersede this pass, even though it hasn't reached
+					// `observe`/`commitDeep` yet. Renewing the generation here would
+					// let a pre-mutation observation publish stale inputs and
+					// re-stamp the feature fresh.
+					const gen = this.beginDeepObservation(featureId);
+					const baseRef = await observeBaseRef(ctx);
+					const projectObservation =
+						await ctx.featureGitInspector.observeProject(
+							ctx.project.repoPath,
+						);
+					const tmuxSessions = this.observeTmuxRuntime(
+						this.projectManager!,
+					);
+					const source: FeatureSnapshotSource = { status: "known" };
+					const isBaseFeature =
+						resolved.feature.id === `base:${ctx.project.id}`;
+					const snapshot = await this.observe(
+						ctx,
+						resolved.feature,
+						isBaseFeature,
+						baseRef,
+						tmuxSessions,
+						projectObservation,
+						source,
+					);
+					this.commitDeep(
+						gen,
+						ctx.project.id,
+						resolved.feature,
+						snapshot,
+					);
+					agentSpaceDiagnostic(
+						`reconcile completed in ${Date.now() - startedAt}ms scope=feature:${featureId}`,
+					);
+				} while (entry.rerun && !this.disposed);
+			} finally {
+				// Deleting the entry synchronously with the exit decision closes
+				// the race where a request arriving between the final loop check
+				// and an async cleanup would coalesce onto a settled run and
+				// lose its follow-up; on failure it also stops a rejected pass
+				// from staying sticky.
+				this.featureReconciles.delete(featureId);
+			}
+		})();
+		entry.promise = run;
+		this.featureReconciles.set(featureId, entry);
+		return run;
 	}
 
 	/**
