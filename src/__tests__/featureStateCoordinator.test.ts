@@ -774,6 +774,32 @@ describe("FeatureStateCoordinator", () => {
 		expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
 			queriedHeadSha: deliverySha,
 		});
+
+		listPullRequests.mockResolvedValue({
+			status: "ok",
+			pulls: [
+				{
+					number: 74,
+					html_url: "https://github.com/shiidotech/agent-space/pull/74",
+					state: "closed",
+					merged_at: "2026-08-17T09:00:00Z",
+					draft: false,
+					head: { ref: "feat/audit_and_go", sha: deliverySha },
+					base: { ref: "main" },
+				},
+			],
+		} as never);
+		coordinator.invalidateFeature("f1");
+		await coordinator.reconcileFeature("f1");
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+			resolution: {
+				outcome: "selected",
+				pull: { state: "merged" },
+			},
+		}),
+		);
+		expect(listPullRequests.mock.calls.length).toBeGreaterThan(1);
 		expect(coordinator.getSnapshot("f1")?.delivery).toMatchObject({
 			branchRef: "feat/audit_and_go",
 			head: { status: "known", value: { sha: deliverySha } },

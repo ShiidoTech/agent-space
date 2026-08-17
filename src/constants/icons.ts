@@ -23,3 +23,5 @@ export const ICON_CHEVRON_DOWN = `<svg width="16" height="16" viewBox="0 0 16 16
 export const ICON_WORKSPACE = `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v12H2V2zm1 5v6h10V7H3zm0-4v3h10V3H3z"/></svg>`;
 
 export const ICON_GIT = `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M10.5 1.5a2.5 2.5 0 11-.001 5.001A2.5 2.5 0 0110.5 1.5zM7 4h2.05a3.5 3.5 0 00-.05.58c0 .5.1.98.28 1.42H7.75A2.75 2.75 0 005 8.75v1.8a2.5 2.5 0 11-1 0v-1.8A3.75 3.75 0 017.75 5h1.03A3.48 3.48 0 018 4.58c0-.2.02-.39.05-.58H7zm5.25 6.5a2.5 2.5 0 11-1 0V9.75A2.75 2.75 0 008.5 7H8V6h.5A3.75 3.75 0 0112.25 9.75v.75z"/></svg>`;
+
+export const ICON_HOME = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 5V2.5M6.5 8.5L4 11M9.5 8.5L12 11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="8" r="2" fill="currentColor"/><circle cx="8" cy="2" r="1.3" fill="currentColor"/><circle cx="3" cy="12" r="1.3" fill="currentColor"/><circle cx="13" cy="12" r="1.3" fill="currentColor"/></svg>`;

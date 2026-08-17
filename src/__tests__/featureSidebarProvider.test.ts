@@ -8,9 +8,34 @@ vi.mock("vscode", () => ({
 }));
 
 import * as vscode from "vscode";
-import { FeatureSidebarProvider } from "../features/featureSidebarProvider";
+import {
+	FeatureSidebarProvider,
+	presentSidebarFeatureSummary,
+} from "../features/featureSidebarProvider";
 
 describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
+	it("keeps runtime attention visible before deep evidence exists", () => {
+		const snapshot = {
+			feature: { id: "f1" },
+			attention: [
+				{
+					code: "agent_waiting_for_user",
+					severity: "warning",
+					summary: "Agent needs attention",
+					detail: "The agent is waiting for input.",
+				},
+			],
+		} as never;
+
+		expect(presentSidebarFeatureSummary(snapshot, false)).toEqual({
+			label: "Agent needs attention",
+			tone: "warning",
+			detail: "The agent is waiting for input.",
+		});
+		expect(presentSidebarFeatureSummary(snapshot, false)?.label).not.toBe(
+			"Evidence unavailable",
+		);
+	});
 	const feature = {
 		id: "f1",
 		name: "Feature One",
@@ -33,7 +58,7 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 	};
 
 	const getAgents = vi.fn().mockReturnValue([agent]);
-	const ctx = { agentManager: { getAgents } };
+	const ctx = { agentManager: { getAgents, getAgentsReadModel: getAgents } };
 	const resolveFeature = vi.fn().mockReturnValue({ ctx, feature });
 
 	let postMessage: ReturnType<typeof vi.fn>;

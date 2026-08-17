@@ -152,9 +152,11 @@ export class FeatureStateCoordinator implements Disposable {
 		string,
 		GitLsRemoteBranchHeadSource
 	>();
-	private githubRefreshes = new Set<string>();
+	private githubRefreshes = new Map<string, number>();
+	private githubRefreshSequence = 0;
 	private githubObservations = new Map<string, GitHubObservation>();
 	private githubFallbacks = new Map<string, GitHubObservation>();
+	private githubObservationGenerations = new Map<string, number>();
 
 	constructor(
 		projectManager?: ProjectManager,
@@ -217,8 +219,10 @@ export class FeatureStateCoordinator implements Disposable {
 		this.worktreeInventories.clear();
 		this.referenceBranchRemotes.clear();
 		this.githubRefreshes.clear();
+		this.githubRefreshSequence = 0;
 		this.githubObservations.clear();
 		this.githubFallbacks.clear();
+		this.githubObservationGenerations.clear();
 	}
 
 	getSnapshot(featureId: string): FeatureSnapshot | undefined {
@@ -290,6 +294,11 @@ export class FeatureStateCoordinator implements Disposable {
 		if (this.disposed) return;
 		this.beginDeepObservation(featureId);
 		this.featureDeepObservedAt.delete(featureId);
+		const projectId = this.snapshots.get(featureId)?.projectId;
+		const ctx = projectId
+			? this.projectManager?.getContext(projectId)
+			: this.projectManager?.findContextByFeatureId(featureId);
+		if (ctx) this.invalidateGithubFeature(ctx.project.repoPath, featureId);
 	}
 
 	/** Rarely-needed global fallback (e.g. extension-wide settings change). */
@@ -683,6 +692,11 @@ export class FeatureStateCoordinator implements Disposable {
 		const observedAt = this.featureDeepObservedAt.get(featureId);
 		if (observedAt === undefined) return true;
 		return Date.now() - observedAt > maxAgeMs;
+	}
+
+	/** Whether this feature has ever received a deep observation. */
+	hasFeatureDeepObservation(featureId: string): boolean {
+		return this.featureDeepObservedAt.has(featureId);
 	}
 
 	/** Whether this project's repository-level facts (base ref, worktree
@@ -1175,9 +1189,12 @@ export class FeatureStateCoordinator implements Disposable {
 				baseRef,
 			),
 		].join("\u0000");
+		const githubGeneration =
+			this.githubObservationGenerations.get(feature.id) ?? 0;
 		if (this.githubObservations.has(key)) return;
 		if (this.githubRefreshes.has(key)) return;
-		this.githubRefreshes.add(key);
+		const refreshToken = ++this.githubRefreshSequence;
+		this.githubRefreshes.set(key, refreshToken);
 		void this.observeGithub(
 			ctx,
 			feature,
@@ -1188,6 +1205,12 @@ export class FeatureStateCoordinator implements Disposable {
 			baseRef,
 		)
 			.then((observation) => {
+				if (
+					(this.githubObservationGenerations.get(feature.id) ?? 0) !==
+					githubGeneration
+				) {
+					return;
+				}
 				this.githubObservations.set(key, observation);
 				this.githubFallbacks.delete(key);
 				// The GitHub cache now has fresh evidence for this one feature;
@@ -1199,7 +1222,29 @@ export class FeatureStateCoordinator implements Disposable {
 			.catch((error) =>
 				console.warn(`[agentSpace] deferred GitHub observation failed: ${String(error)}`),
 			)
-			.finally(() => this.githubRefreshes.delete(key));
+			.finally(() => {
+				if (this.githubRefreshes.get(key) === refreshToken) {
+					this.githubRefreshes.delete(key);
+				}
+			});
+	}
+
+	private invalidateGithubFeature(repoPath: string, featureId: string): void {
+		this.githubObservationGenerations.set(
+			featureId,
+			(this.githubObservationGenerations.get(featureId) ?? 0) + 1,
+		);
+		const prefix = `${repoPath}\u0000${featureId}\u0000`;
+		for (const key of this.githubObservations.keys()) {
+			if (key.startsWith(prefix)) this.githubObservations.delete(key);
+		}
+		for (const key of this.githubFallbacks.keys()) {
+			if (key.startsWith(prefix)) this.githubFallbacks.delete(key);
+		}
+		for (const key of this.githubRefreshes.keys()) {
+			if (key.startsWith(prefix)) this.githubRefreshes.delete(key);
+		}
+		this.githubServices.get(repoPath)?.invalidate();
 	}
 
 	private githubObservationKey(

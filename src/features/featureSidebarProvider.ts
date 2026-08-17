@@ -13,6 +13,7 @@ import {
 	ICON_CHEVRON_RIGHT,
 	ICON_DELETE,
 	ICON_GIT,
+	ICON_HOME,
 	ICON_RESTART,
 	ICON_STOP,
 } from "../constants/icons";
@@ -20,10 +21,40 @@ import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
+import type { ProjectReferenceBranchHealth } from "../projects/referenceBranchHealth";
 import type { Agent, Feature, Service } from "../types";
 import { presentFeatureCockpit } from "./featureCockpitPresentation";
 import type { FeatureSnapshot } from "./featureSnapshot";
 import type { FeatureStateCoordinator } from "./featureStateCoordinator";
+
+export function presentSidebarFeatureSummary(
+	snapshot: FeatureSnapshot,
+	hasDeepEvidence: boolean,
+	referenceHealth?: ProjectReferenceBranchHealth,
+): { label: string; tone: string; detail?: string } | undefined {
+	if (snapshot.feature.id.startsWith("base:")) return undefined;
+	if (hasDeepEvidence) {
+		return presentFeatureCockpit(snapshot, referenceHealth).summary;
+	}
+
+	const runtimeAlert = snapshot.attention.find(
+		(problem) =>
+			problem.code === "agent_failed" ||
+			problem.code === "agent_waiting_for_user",
+	);
+	if (runtimeAlert) {
+		return {
+			label: runtimeAlert.summary,
+			tone: runtimeAlert.severity === "error" ? "error" : "warning",
+			detail: runtimeAlert.detail,
+		};
+	}
+	return {
+		label: "Syncing evidence",
+		tone: "muted",
+		detail: "Git and GitHub evidence is observed when the Feature is opened.",
+	};
+}
 
 export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = "agentSpace.features";
@@ -246,14 +277,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				const features: SidebarFeature[] = snapshots.map((snapshot) => {
 					const agents = this.snapshotAgents(snapshot);
 					const services = this.snapshotServices(snapshot);
-					const summary = snapshot.feature.id.startsWith("base:")
-						? undefined
-						: presentFeatureCockpit(
-								snapshot,
-								this.featureStateCoordinator.getProjectReferenceHealth(
-									ctx.project.id,
-								),
-							).summary;
+					const summary = this.presentSidebarSummary(snapshot);
 					return {
 						id: snapshot.feature.id,
 						branch: snapshot.feature.branch,
@@ -507,6 +531,10 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 </style>
 </head>
 <body>
+	<button class="btn-home" onclick="openHome(event)" title="Open Agent Space home">
+		<span class="home-icon">${ICON_HOME}</span>
+		<span>Agent Space</span>
+	</button>
 	${body}
 	<div id="agentContextMenu" class="context-menu">
 		<button class="context-menu-item" id="menuRename">Rename Agent</button>
@@ -597,12 +625,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			agents.filter((a) => a.status !== "done").length +
 			services.filter((s) => s.status === "running").length;
 
-		const summary = presentFeatureCockpit(
-			snapshot,
-			this.featureStateCoordinator.getProjectReferenceHealth(
-				snapshot.projectId,
-			),
-		).summary;
+		const summary = this.presentSidebarSummary(snapshot);
 		const bodyHtml = this.renderSnapshotCardBody(snapshot, agents, services);
 		const count = this.snapshotRuntimeKnown(snapshot)
 			? totalCount > 0
@@ -615,7 +638,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="card-header">
 				<span class="card-chevron" id="card-chevron-${feature.id}" onclick="toggleFeatureCard(event, '${feature.id}')">${ICON_CHEVRON_DOWN}</span>
 				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
-				<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>
+				${summary ? `<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>` : ""}
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
 				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Finish Feature">${ICON_DELETE}</button>
 			</div>
@@ -634,6 +657,16 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		return snapshot.runtime.agents.status === "known"
 			? snapshot.runtime.agents.value.map(({ agent }) => agent as Agent)
 			: [];
+	}
+
+	private presentSidebarSummary(
+		snapshot: FeatureSnapshot,
+	): { label: string; tone: string; detail?: string } | undefined {
+		return presentSidebarFeatureSummary(
+			snapshot,
+			this.featureStateCoordinator.hasFeatureDeepObservation(snapshot.feature.id),
+			this.featureStateCoordinator.getProjectReferenceHealth(snapshot.projectId),
+		);
 	}
 
 	private snapshotServices(snapshot: FeatureSnapshot): Service[] {
