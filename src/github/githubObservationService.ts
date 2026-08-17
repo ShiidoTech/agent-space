@@ -117,9 +117,12 @@ export class GitHubObservationService {
 		if (cached && this.now() - cached.at < this.repositoryFactTtlMs) {
 			return cached.facts;
 		}
+		const generation = this.generation;
 		const facts =
 			await this.inspectorFor(repoRoot).observeRepositoryFacts(repoRoot);
-		this.repositoryFacts.set(repoRoot, { facts, at: this.now() });
+		if (generation === this.generation) {
+			this.repositoryFacts.set(repoRoot, { facts, at: this.now() });
+		}
 		return facts;
 	}
 

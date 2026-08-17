@@ -45,5 +45,6 @@ describe("GitHubObservationService invalidation", () => {
 
 		expect(second).toBe(merged);
 		expect(third).toBe(merged);
+		expect(calls).toBe(2);
 	});
 });
