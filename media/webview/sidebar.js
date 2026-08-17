@@ -276,20 +276,11 @@ window.addEventListener("message", function (event) {
 			// Update the same human-facing Feature summary used by the full page.
 			if (!feat.isBase && feat.statusLabel && feat.statusTone) {
 				var badge = card.querySelector('[data-status-badge="' + feat.id + '"]');
-				if (!badge) {
-					badge = document.createElement("span");
-					badge.setAttribute("data-status-badge", feat.id);
-					var count = card.querySelector(".collapse-count");
-					if (count) card.querySelector(".card-header").insertBefore(badge, count);
-				}
 				if (badge) {
 					badge.className = "status-badge status-" + feat.statusTone;
 					badge.textContent = feat.statusLabel;
 					badge.title = feat.statusDetail || feat.statusLabel;
 				}
-			} else if (!feat.isBase) {
-				var staleBadge = card.querySelector('[data-status-badge="' + feat.id + '"]');
-				if (staleBadge) staleBadge.remove();
 			}
 
 			// Update agent lifecycle + attention status

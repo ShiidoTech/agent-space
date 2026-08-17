@@ -780,7 +780,7 @@ export async function activate(
 							void featureStateCoordinator
 								.reconcileFeature(feature.id)
 								.then(() => {
-									sidebarProvider.refreshState();
+									sidebarProvider.refresh();
 									HomePanel.refreshAll();
 								})
 								.catch(() => {});
