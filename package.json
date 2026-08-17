@@ -200,13 +200,6 @@
 			}
 		],
 		"menus": {
-			"view/title": [
-				{
-					"command": "agentSpace.openHome",
-					"when": "view == agentSpace.features",
-					"group": "navigation@1"
-				}
-			],
 			"view/item/context": [
 				{
 					"command": "agentSpace.addAgent",

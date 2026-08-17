@@ -48,6 +48,7 @@ export class GitHubObservationService {
 		string,
 		{ readonly observation: GitHubObservation; readonly at: number }
 	>();
+	private generation = 0;
 
 	constructor(private readonly options: GithubObservationServiceOptions) {
 		this.ttlMs = options.ttlMs ?? GITHUB_OBSERVATION_TTL_MS;
@@ -67,6 +68,7 @@ export class GitHubObservationService {
 		if (cached && this.now() - cached.at < this.ttlMs) {
 			return cached.observation;
 		}
+		const generation = this.generation;
 
 		const facts = await this.observeRepositoryFacts(request.repoRoot);
 		let observation: GitHubObservation;
@@ -86,15 +88,18 @@ export class GitHubObservationService {
 				auth: facts.auth,
 			});
 		}
-		this.branchObservations.set(branchKey, {
-			observation,
-			at: this.now(),
-		});
+		if (generation === this.generation) {
+			this.branchObservations.set(branchKey, {
+				observation,
+				at: this.now(),
+			});
+		}
 		return observation;
 	}
 
 	/** Drop every cached GitHub fact; the next observe re-queries the API. */
 	invalidate(): void {
+		this.generation += 1;
 		this.repositoryFacts.clear();
 		this.branchObservations.clear();
 	}

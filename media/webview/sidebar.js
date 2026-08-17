@@ -8,6 +8,11 @@ function selectFeature(id) {
 	send("selectFeature", { featureId: id });
 }
 
+function openHome(e) {
+	e.stopPropagation();
+	send("openHome", {});
+}
+
 function openProject(e, projectId) {
 	e.stopPropagation();
 	send("openProject", { projectId });

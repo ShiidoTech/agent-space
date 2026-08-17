@@ -152,7 +152,8 @@ export class FeatureStateCoordinator implements Disposable {
 		string,
 		GitLsRemoteBranchHeadSource
 	>();
-	private githubRefreshes = new Set<string>();
+	private githubRefreshes = new Map<string, number>();
+	private githubRefreshSequence = 0;
 	private githubObservations = new Map<string, GitHubObservation>();
 	private githubFallbacks = new Map<string, GitHubObservation>();
 	private githubObservationGenerations = new Map<string, number>();
@@ -218,6 +219,7 @@ export class FeatureStateCoordinator implements Disposable {
 		this.worktreeInventories.clear();
 		this.referenceBranchRemotes.clear();
 		this.githubRefreshes.clear();
+		this.githubRefreshSequence = 0;
 		this.githubObservations.clear();
 		this.githubFallbacks.clear();
 		this.githubObservationGenerations.clear();
@@ -1191,7 +1193,8 @@ export class FeatureStateCoordinator implements Disposable {
 			this.githubObservationGenerations.get(feature.id) ?? 0;
 		if (this.githubObservations.has(key)) return;
 		if (this.githubRefreshes.has(key)) return;
-		this.githubRefreshes.add(key);
+		const refreshToken = ++this.githubRefreshSequence;
+		this.githubRefreshes.set(key, refreshToken);
 		void this.observeGithub(
 			ctx,
 			feature,
@@ -1219,7 +1222,11 @@ export class FeatureStateCoordinator implements Disposable {
 			.catch((error) =>
 				console.warn(`[agentSpace] deferred GitHub observation failed: ${String(error)}`),
 			)
-			.finally(() => this.githubRefreshes.delete(key));
+			.finally(() => {
+				if (this.githubRefreshes.get(key) === refreshToken) {
+					this.githubRefreshes.delete(key);
+				}
+			});
 	}
 
 	private invalidateGithubFeature(repoPath: string, featureId: string): void {
@@ -1234,7 +1241,7 @@ export class FeatureStateCoordinator implements Disposable {
 		for (const key of this.githubFallbacks.keys()) {
 			if (key.startsWith(prefix)) this.githubFallbacks.delete(key);
 		}
-		for (const key of this.githubRefreshes) {
+		for (const key of this.githubRefreshes.keys()) {
 			if (key.startsWith(prefix)) this.githubRefreshes.delete(key);
 		}
 		this.githubServices.get(repoPath)?.invalidate();
