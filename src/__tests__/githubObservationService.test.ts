@@ -25,9 +25,9 @@ describe("GitHubObservationService invalidation", () => {
 				auth: { state: "authenticated" as const, source: "env" as const, token: "test" },
 			}),
 			observe: async () => {
-				calls += 1;
-				if (calls === 1) await firstGate;
-				return (calls === 1 ? open : merged) as never;
+				const call = ++calls;
+				if (call === 1) await firstGate;
+				return (call === 1 ? open : merged) as never;
 			},
 		};
 		const service = new GitHubObservationService({
