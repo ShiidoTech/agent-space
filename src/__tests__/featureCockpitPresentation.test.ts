@@ -232,6 +232,64 @@ describe("presentFeatureCockpit", () => {
 		});
 	});
 
+	it("keeps Not started for a no-commit Feature even when the base has moved on", () => {
+		const base = snapshot();
+		const feature = { ref: "feat/x", sha: SHA.feature };
+		const target = { ref: "main", sha: SHA.base };
+		const result = presentFeatureCockpit({
+			...base,
+			git: {
+				...base.git,
+				featureDelta: known({
+					left: target,
+					right: feature,
+					leftOnly: 3,
+					rightOnly: 0,
+				}),
+			},
+			integration: {
+				status: "known",
+				outcome: "no_feature_commits",
+				evidence: { feature },
+			},
+		});
+		// The Feature tip equals its creation point (no_feature_commits): it is
+		// Not started, even though the base tip (SHA.base) differs from it.
+		expect(result.summary).toEqual({
+			label: "Not started",
+			tone: "muted",
+			detail: "Base advanced since this Feature was created.",
+		});
+	});
+
+	it("keeps Not started for a Feature parked on the current base tip", () => {
+		const base = snapshot();
+		const parked = { ref: "feat/x", sha: SHA.base };
+		const result = presentFeatureCockpit({
+			...base,
+			git: {
+				...base.git,
+				feature: known(parked),
+				head: known(parked),
+				featureDelta: known({
+					left: parked,
+					right: parked,
+					leftOnly: 0,
+					rightOnly: 0,
+				}),
+			},
+			integration: {
+				status: "known",
+				outcome: "no_feature_commits",
+				evidence: { feature: parked },
+			},
+		});
+		expect(result.summary).toEqual({
+			label: "Not started",
+			tone: "muted",
+		});
+	});
+
 	it("never turns unknown work evidence into clean or zero", () => {
 		const base = snapshot();
 		const result = presentFeatureCockpit({
@@ -659,7 +717,7 @@ describe("presentFeatureCockpit", () => {
 		});
 	});
 
-	it("uses Needs you as the shared summary when an intervention is required", () => {
+	it("labels uncommitted worktree changes as In progress, not Needs you", () => {
 		const result = presentFeatureCockpit({
 			...snapshot(),
 			attention: [
@@ -674,7 +732,7 @@ describe("presentFeatureCockpit", () => {
 		});
 
 		expect(result.summary).toEqual({
-			label: "Needs you",
+			label: "In progress",
 			tone: "warning",
 			detail: "Pending changes — Two files are not committed.",
 		});
@@ -749,16 +807,11 @@ describe("presentFeatureCockpit", () => {
 
 	it("opens the agent before a simultaneous workspace problem", () => {
 		const base = snapshot();
+		// `working_tree_changes` is emitted before the runtime/agent problems by
+		// the evaluator; it must NOT shadow the agent that is waiting on the user.
 		const result = presentFeatureCockpit({
 			...base,
 			attention: [
-				{
-					code: "agent_waiting_for_user",
-					severity: "warning",
-					summary: "Agent needs you",
-					detail: "input required",
-					evidence: { agentId: "a1" },
-				},
 				{
 					code: "working_tree_changes",
 					severity: "warning",
@@ -766,12 +819,24 @@ describe("presentFeatureCockpit", () => {
 					detail: "pending",
 					evidence: {},
 				},
+				{
+					code: "agent_waiting_for_user",
+					severity: "warning",
+					summary: "Agent needs you",
+					detail: "input required",
+					evidence: { agentId: "a1" },
+				},
 			],
 		});
 
 		expect(result.primaryAction).toMatchObject({
 			kind: "open_agent",
 			agentId: "a1",
+		});
+		expect(result.summary).toEqual({
+			label: "Needs you",
+			tone: "warning",
+			detail: "Agent needs you — input required",
 		});
 	});
 
