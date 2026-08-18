@@ -118,4 +118,26 @@ describe("Feature lifecycle: create renders locally, finish reassesses with cach
 		// Finish decision: no worktree or metadata would be removed.
 		expect(assessment.reasons.length).toBeGreaterThan(0);
 	});
+
+	it("reuses an already-existing branch instead of failing, reporting drift from base", async () => {
+		const { repo, worktrees } = repository();
+		const { FeatureManager } = await import("../features/featureManager");
+		const { Store } = await import("../storage/store");
+		const store = new Store(path.join(path.dirname(repo), "store"));
+
+		git(repo, "branch", "feat/pre-existing");
+		git(repo, "commit", "--allow-empty", "-m", "advance base");
+
+		const manager = new FeatureManager(store, repo, worktrees, {});
+		const feature = manager.createFeatureRecord("pre-existing", "shared");
+		const ready = await manager.provisionFeature(feature.id);
+
+		expect(ready?.provisioning?.state).toBe("ready");
+		expect(ready?.reusedExistingBranch).toEqual({ behind: 1 });
+		expect(ready?.createdFromSha).toBeUndefined();
+		expect(require("node:fs").existsSync(feature.worktreePath)).toBe(true);
+		expect(git(feature.worktreePath, "rev-parse", "--abbrev-ref", "HEAD")).toBe(
+			"feat/pre-existing",
+		);
+	});
 });
