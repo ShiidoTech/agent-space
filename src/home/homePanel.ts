@@ -916,6 +916,15 @@ export class HomePanel {
 		}
 	}
 
+	private renderReusedBranchChip(feature: Feature): string {
+		const reused = feature.reusedExistingBranch;
+		if (!reused) return "";
+		if (reused.behind > 0) {
+			return `<span class="project-base-chip project-base-chip--warning" title="Branch ${this.escapeHtml(feature.branch)} already existed when this feature was created; the existing branch was reused and is ${reused.behind} commits behind the base branch">reused &middot; ${reused.behind} behind</span>`;
+		}
+		return `<span class="project-base-chip" title="Branch ${this.escapeHtml(feature.branch)} already existed when this feature was created; the existing branch was reused">reused branch</span>`;
+	}
+
 	private renderGitStatsContent(stats: GitStats): string {
 		if (stats.filesChanged === 0) {
 			return '<div class="activity-empty">No changes yet</div>';
@@ -1569,6 +1578,7 @@ export class HomePanel {
 								<div class="project-feature-color" style="background: ${dotColor}"></div>
 								<span class="project-feature-branch">${this.escapeHtml(feature.branch)}</span>
 								${statusBadge}
+								${this.renderReusedBranchChip(feature)}
 								<span class="project-feature-counts">${counts}</span>
 								<button class="project-feature-delete" onclick="event.stopPropagation(); deleteFeature('${feature.id}')" title="Finish Feature">&times;</button>
 							</div>

@@ -117,11 +117,134 @@ describe("FeatureManager", () => {
 			expect(mockExecFile).toHaveBeenNthCalledWith(
 				2,
 				"git",
+				["rev-parse", "--verify", "refs/heads/feat/async-feature^{commit}"],
+				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
+				expect.any(Function),
+			);
+			expect(mockExecFile).toHaveBeenNthCalledWith(
+				3,
+				"git",
 				expect.arrayContaining(["worktree", "add", feature.worktreePath]),
 				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
 				expect.any(Function),
 			);
 			expect(feature.provisioning?.state).toBe("ready");
+		});
+
+		it("reuses an existing branch asynchronously and reports how far behind it is", async () => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				args: readonly string[],
+				_options: unknown,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
+			) => {
+				if (args[0] === "rev-parse" && args[1] === "--verify") {
+					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
+					return;
+				}
+				if (args[0] === "rev-list") {
+					callback(null, { stdout: "3\n", stderr: "" });
+					return;
+				}
+				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord(
+				"reuse-branch",
+				"shared",
+			);
+			const ready = await asyncManager.provisionFeature(feature.id);
+
+			expect(ready?.provisioning?.state).toBe("ready");
+			expect(ready?.reusedExistingBranch).toEqual({ behind: 3 });
+			expect(ready?.createdFromSha).toBeUndefined();
+			expect(ready?.provisioning?.steps[1].label).toBe(
+				"Reusing existing branch feat/reuse-branch (3 commits behind main)",
+			);
+			// Existing branch reused: no `-b` and no base branch in the add.
+			expect(mockExecFile).toHaveBeenCalledWith(
+				"git",
+				["worktree", "add", feature.worktreePath, "feat/reuse-branch"],
+				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
+				expect.any(Function),
+			);
+		});
+
+		it("reuses an existing branch without a behind warning when it is up to date", async () => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				args: readonly string[],
+				_options: unknown,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
+			) => {
+				if (args[0] === "rev-parse" && args[1] === "--verify") {
+					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
+					return;
+				}
+				if (args[0] === "rev-list") {
+					callback(null, { stdout: "0\n", stderr: "" });
+					return;
+				}
+				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord("reuse-fresh", "shared");
+			const ready = await asyncManager.provisionFeature(feature.id);
+
+			expect(ready?.reusedExistingBranch).toEqual({ behind: 0 });
+			expect(ready?.provisioning?.steps[1].label).toBe(
+				"Reusing existing branch feat/reuse-fresh",
+			);
+			expect(mockExecFile).toHaveBeenCalledWith(
+				"git",
+				["worktree", "add", feature.worktreePath, "feat/reuse-fresh"],
+				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
+				expect.any(Function),
+			);
+		});
+
+		it("reuses an existing branch synchronously with a behind warning label", () => {
+			mockExecSync.mockImplementation((command: string) => {
+				const value = String(command);
+				if (value.includes("rev-parse --verify")) return `${featureSha}\n`;
+				if (value.includes("rev-list --count")) return "2\n";
+				return "";
+			});
+			const feature = manager.createFeature("reuse-sync", "shared");
+
+			expect(feature.reusedExistingBranch).toEqual({ behind: 2 });
+			expect(feature.createdFromSha).toBeUndefined();
+			expect(feature.provisioning?.steps[1].label).toBe(
+				"Reusing existing branch feat/reuse-sync (2 commits behind main)",
+			);
+			expect(mockExecSync).toHaveBeenCalledWith(
+				expect.stringContaining(
+					`git worktree add "${path.join(repoRoot, ".worktrees", "feat-reuse-sync")}" "feat/reuse-sync"`,
+				),
+				expect.any(Object),
+			);
+			expect(mockExecSync).not.toHaveBeenCalledWith(
+				expect.stringContaining("-b \"feat/reuse-sync\""),
+				expect.any(Object),
+			);
 		});
 
 		it("persists completion when the storage watcher reloads between Git steps", async () => {

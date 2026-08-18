@@ -118,6 +118,11 @@ export interface Feature {
 	provisioning?: FeatureProvisioning;
 	/** Commit the feature branch was created from, when known. */
 	createdFromSha?: string;
+	/**
+	 * Set when the feature reused an already-existing Git branch at creation.
+	 * `behind` is the number of base commits the existing branch was missing.
+	 */
+	reusedExistingBranch?: { behind: number };
 }
 
 /**

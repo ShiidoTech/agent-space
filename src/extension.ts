@@ -773,7 +773,21 @@ export async function activate(
 									"Feature created, but no coding tools are available. Add an agent later with 'Add Agent'.",
 								);
 							}
-							await provisioning;
+							const provisioned = await provisioning;
+							const reused = provisioned?.reusedExistingBranch;
+							if (reused) {
+								const baseName =
+									ctx.featureManager.getBaseBranchName();
+								const detail =
+									reused.behind > 0
+										? `Branch ${provisioned.branch} already existed and was reused; it is ${reused.behind} commit${reused.behind > 1 ? "s" : ""} behind ${baseName}.`
+										: `Branch ${provisioned.branch} already existed and was reused.`;
+								if (reused.behind > 0) {
+									vscode.window.showWarningMessage(detail);
+								} else {
+									vscode.window.showInformationMessage(detail);
+								}
+							}
 							progress.report({ message: "Feature worktree ready" });
 							// Refresh only the feature just created; the sidebar must not
 							// trigger a workspace-wide deep observation on startup.

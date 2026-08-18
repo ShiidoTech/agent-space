@@ -494,6 +494,20 @@ export class FeatureManager {
 		}
 	}
 
+	/** Commits present in the base branch but missing from the given branch. */
+	private commitsBehind(branch: string, baseBranch: string): number {
+		try {
+			const output = this.git(
+				`git rev-list --count "${branch}..${baseBranch}"`,
+				this.repoRoot,
+			);
+			const count = Number.parseInt(output.trim(), 10);
+			return Number.isFinite(count) && count >= 0 ? count : 0;
+		} catch {
+			return 0;
+		}
+	}
+
 	private isAncestor(ancestorSha: string, descendantSha: string): boolean {
 		try {
 			this.git(
@@ -741,25 +755,59 @@ export class FeatureManager {
 			cwd: this.repoRoot,
 			encoding: "utf8",
 		});
+		let branchExists = false;
+		let behind = 0;
+		try {
+			const branchResult = await execFileAsync(
+				"git",
+				["rev-parse", "--verify", `refs/heads/${expectedBranch}^{commit}`],
+				{ cwd: this.repoRoot, encoding: "utf8" },
+			);
+			branchExists = isCommitSha(String(branchResult.stdout).trim());
+		} catch {
+			// Ref not found: a new branch will be created.
+		}
+		if (branchExists) {
+			const behindResult = await execFileAsync(
+				"git",
+				["rev-list", "--count", `${expectedBranch}..${baseBranch}`],
+				{ cwd: this.repoRoot, encoding: "utf8" },
+			);
+			const parsed = Number.parseInt(String(behindResult.stdout).trim(), 10);
+			behind = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+		}
 		const afterBase = this.getProvisioningFeature(
 			id,
 			expectedBranch,
 			expectedWorktreePath,
 		);
-		afterBase.createdFromSha = String(baseResult.stdout).trim();
+		if (branchExists) {
+			// The branch already exists in git (e.g. created manually or by a
+			// previously finished feature). Reuse it instead of failing, and
+			// surface how far behind the base branch it has drifted.
+			const worktreeStep = afterBase.provisioning.steps[1];
+			worktreeStep.label =
+				behind > 0
+					? `Reusing existing branch ${expectedBranch} (${behind} commits behind ${baseBranch})`
+					: `Reusing existing branch ${expectedBranch}`;
+		} else {
+			afterBase.createdFromSha = String(baseResult.stdout).trim();
+		}
 		afterBase.provisioning.steps[0].status = "completed";
 		afterBase.provisioning.steps[1].status = "running";
 		this.saveAndNotify();
 		await execFileAsync(
 			"git",
-			[
-				"worktree",
-				"add",
-				expectedWorktreePath,
-				"-b",
-				expectedBranch,
-				baseBranch,
-			],
+			branchExists
+				? ["worktree", "add", expectedWorktreePath, expectedBranch]
+				: [
+						"worktree",
+						"add",
+						expectedWorktreePath,
+						"-b",
+						expectedBranch,
+						baseBranch,
+					],
 			{ cwd: this.repoRoot, encoding: "utf8" },
 		);
 		const completed = this.getProvisioningFeature(
@@ -767,6 +815,9 @@ export class FeatureManager {
 			expectedBranch,
 			expectedWorktreePath,
 		);
+		if (branchExists) {
+			completed.reusedExistingBranch = { behind };
+		}
 		completed.provisioning.state = "ready";
 		completed.provisioning.currentStepId = undefined;
 		for (const step of completed.provisioning.steps) step.status = "completed";
@@ -868,10 +919,29 @@ export class FeatureManager {
 		feature.provisioning.steps[0].status = "completed";
 		feature.provisioning.steps[1].status = "running";
 		this.saveAndNotify();
-		execSync(
-			`git worktree add "${feature.worktreePath}" -b "${feature.branch}" "${baseBranch}"`,
-			{ cwd: this.repoRoot },
-		);
+		const worktreeStep = feature.provisioning.steps[1];
+		if (this.resolveBranch(feature.branch)) {
+			// The branch already exists in git (e.g. created manually or by a
+			// previously finished feature). Reuse it instead of failing, and
+			// surface how far behind the base branch it has drifted.
+			const behind = this.commitsBehind(feature.branch, baseBranch);
+			feature.reusedExistingBranch = { behind };
+			feature.createdFromSha = undefined;
+			worktreeStep.label =
+				behind > 0
+					? `Reusing existing branch ${feature.branch} (${behind} commits behind ${baseBranch})`
+					: `Reusing existing branch ${feature.branch}`;
+			this.saveAndNotify();
+			execSync(
+				`git worktree add "${feature.worktreePath}" "${feature.branch}"`,
+				{ cwd: this.repoRoot },
+			);
+		} else {
+			execSync(
+				`git worktree add "${feature.worktreePath}" -b "${feature.branch}" "${baseBranch}"`,
+				{ cwd: this.repoRoot },
+			);
+		}
 		feature.provisioning.state = "ready";
 		feature.provisioning.currentStepId = undefined;
 		for (const step of feature.provisioning.steps) step.status = "completed";
