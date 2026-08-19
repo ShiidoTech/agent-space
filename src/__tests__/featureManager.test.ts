@@ -709,6 +709,32 @@ describe("FeatureManager", () => {
 			expect(result).toEqual({ deleted: true, reasons: [] });
 			expect(fs.existsSync(residue)).toBe(false);
 		});
+
+		it.runIf(
+			typeof process.getuid === "function" && process.getuid() !== 0,
+		)("suggests a sudo command when removal is permission-blocked", () => {
+			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			const residue = path.join(tmpDir, "blocked");
+			const sub = path.join(residue, "sub");
+			fs.mkdirSync(sub, { recursive: true });
+			fs.writeFileSync(path.join(sub, "blocked.txt"), "x");
+			fs.chmodSync(sub, 0o300);
+			mockExecSync.mockReturnValue(`worktree ${path.join(tmpDir, "other")}\n`);
+
+			try {
+				const result = localManager.removeWorktreeResidue(residue);
+
+				expect(result.deleted).toBe(false);
+				expect(result.reasons.join("\n")).toContain("EACCES");
+				expect(result.reasons.join("\n")).toContain("another user");
+				expect(result.suggestedCommand).toBe(`sudo rm -rf '${residue}'`);
+				expect(fs.existsSync(residue)).toBe(true);
+			} finally {
+				fs.chmodSync(sub, 0o700);
+			}
+		});
 	});
 
 	describe("getFeatures / getFeature", () => {
