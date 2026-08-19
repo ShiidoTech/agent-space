@@ -62,19 +62,25 @@ export interface FeatureFinishDeps {
 	readonly removeWorktreeResidue?: (worktreePath: string) => {
 		readonly removed: boolean;
 		readonly reason?: string;
+		readonly suggestedCommand?: string;
 	};
+	readonly openTerminalWithCommand?: (command: string) => void;
 }
 
 export interface FeatureFinishUi {
 	readonly showInformationMessage: (
 		message: string,
 	) => Thenable<string | undefined>;
-	readonly showErrorMessage: (message: string) => Thenable<string | undefined>;
+	readonly showErrorMessage: (
+		message: string,
+		...items: string[]
+	) => Thenable<string | undefined>;
 	readonly showWarningMessage: (
 		message: string,
 		options: vscode.MessageOptions,
 		...items: string[]
 	) => Thenable<string | undefined>;
+	readonly copyToClipboard?: (text: string) => Thenable<void>;
 	readonly withProgress: (
 		options: {
 			location: number;
@@ -178,11 +184,27 @@ export async function runFeatureFinish(
 									status: "blocked",
 									message: `Removed worktree residue at ${residue.worktreePath}. Run Finish Feature again to remove the Agent Space record.`,
 								};
-							} else {
-								void ui.showErrorMessage(
-									`Could not remove worktree residue: ${removal?.reason ?? "unknown error"}`,
-								);
+} else {
+							const reason = removal?.reason ?? "unknown error";
+							const suggestedCommand = removal?.suggestedCommand;
+							const message = suggestedCommand
+								? `Could not remove worktree residue: ${reason}\n\nRemove it with:\n${suggestedCommand}`
+								: `Could not remove worktree residue: ${reason}`;
+							const actions = [
+								...(suggestedCommand && deps.openTerminalWithCommand
+									? ["Run command in terminal"]
+									: []),
+								...(suggestedCommand && ui.copyToClipboard
+									? ["Copy command"]
+									: []),
+							];
+							const action = await ui.showErrorMessage(message, ...actions);
+							if (action === "Run command in terminal" && suggestedCommand) {
+								deps.openTerminalWithCommand?.(suggestedCommand);
+							} else if (action === "Copy command" && suggestedCommand) {
+								void ui.copyToClipboard?.(suggestedCommand);
 							}
+						}
 						}
 					}
 					const message = `Cannot finish "${feature.name}" because safety is unknown:\n\n${assessment.reasons.join("\n\n")}\n\nNo worktree, session or metadata was removed.`;

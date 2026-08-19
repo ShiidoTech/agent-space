@@ -1281,24 +1281,33 @@ export async function activate(
 								{ forceNewWindow: true },
 							);
 						},
-						removeWorktreeResidue: (worktreePath) => {
-							const result = ctx.featureManager.removeWorktreeResidue(worktreePath);
-							return {
-								removed: result.deleted,
-								reason: result.reasons.join(" ") || undefined,
-							};
-						},
+removeWorktreeResidue: (worktreePath) => {
+						const result = ctx.featureManager.removeWorktreeResidue(worktreePath);
+						return {
+							removed: result.deleted,
+							reason: result.reasons.join(" ") || undefined,
+							suggestedCommand: result.suggestedCommand,
+						};
+					},
+					openTerminalWithCommand: (command) => {
+						const terminal = vscode.window.createTerminal({
+							name: "Agent Space: remove worktree residue",
+						});
+						terminal.show();
+						terminal.sendText(command);
+					},
 					},
 					{
 						showInformationMessage: (message) =>
 							vscode.window.showInformationMessage(message),
-						showErrorMessage: (message) =>
-							vscode.window.showErrorMessage(message),
+						showErrorMessage: (message, ...items) =>
+							vscode.window.showErrorMessage(message, ...items),
 						showWarningMessage: (message, options, ...items) =>
 							vscode.window.showWarningMessage(message, options, ...items),
 						withProgress: (options, task) =>
 							vscode.window.withProgress(options, task),
 						progressLocationNotification: vscode.ProgressLocation.Notification,
+						copyToClipboard: (text) => vscode.env.clipboard.writeText(text),
 					},
 				);
 			},

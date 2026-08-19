@@ -21,6 +21,7 @@ const execFileAsync = promisify(execFile);
 export interface FeatureDeleteResult {
 	deleted: boolean;
 	reasons: string[];
+	suggestedCommand?: string;
 }
 
 export type FeatureLifecycleStatus =
@@ -1096,10 +1097,21 @@ export class FeatureManager {
 		try {
 			fs.rmSync(worktreePath, { recursive: true, force: false });
 		} catch (error) {
-			return {
-				deleted: false,
-				reasons: [error instanceof Error ? error.message : String(error)],
-			};
+			const message = error instanceof Error ? error.message : String(error);
+			const code = (error as NodeJS.ErrnoException)?.code;
+			if (code === "EACCES" || code === "EPERM") {
+				const foreign = hasForeignOwnedEntries(worktreePath);
+				return {
+					deleted: false,
+					reasons: [
+						foreign
+							? `${message}. The residue contains files owned by another user (e.g. written by a containerized tool); the current user cannot delete them.`
+							: `${message}. The residue cannot be removed with the current permissions.`,
+					],
+					suggestedCommand: `sudo rm -rf '${worktreePath.replace(/'/gu, `'\\''`)}'`,
+				};
+			}
+			return { deleted: false, reasons: [message] };
 		}
 		return fs.existsSync(worktreePath)
 			? { deleted: false, reasons: ["The residue still exists on disk."] }
@@ -1135,6 +1147,26 @@ export class FeatureManager {
 		}
 		return TERMINAL_COLOR_KEYS[Math.abs(hash) % TERMINAL_COLOR_KEYS.length];
 	}
+}
+
+function hasForeignOwnedEntries(target: string): boolean {
+	const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+	try {
+		const stack = [target];
+		while (stack.length > 0) {
+			const current = stack.pop() as string;
+			const stat = fs.lstatSync(current);
+			if (stat.uid !== uid) return true;
+			if (stat.isDirectory()) {
+				for (const entry of fs.readdirSync(current)) {
+					stack.push(path.join(current, entry));
+				}
+			}
+		}
+	} catch {
+		return true;
+	}
+	return false;
 }
 
 function isCommitSha(value: string): boolean {
