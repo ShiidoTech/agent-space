@@ -32,6 +32,11 @@ import { HomePanel } from "./home/homePanel";
 import { PrerequisiteChecker } from "./prerequisites";
 import { discoverProjectKnowledge } from "./projects/projectKnowledge";
 import { ProjectManager } from "./projects/projectManager";
+import {
+	assessWorktreeBranchDeletion,
+	deleteWorktreeBranch,
+	updateBaseBranch,
+} from "./projects/projectGitOps";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
 import { GlobalStore } from "./storage/globalStore";
 import { execAsync, execAsyncSilent } from "./utils/platform";
@@ -1777,6 +1782,142 @@ removeWorktreeResidue: async (worktreePath) => {
 						`Base branch for ${context.project.name}: ${effective}`,
 					);
 				}
+			},
+		),
+	);
+
+	// Command: Update base branch (pull latest remote state into the main
+	// working branch of a project).
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.updateBaseBranch",
+			async (projectId?: string) => {
+				if (!projectId) return;
+				const ctx = projectManager.getContext(projectId);
+				if (!ctx) return;
+				const health =
+					featureStateCoordinator.getProjectReferenceHealth(projectId);
+				if (!health) {
+					vscode.window.showWarningMessage(
+						"The reference branch state has not been observed yet. Refresh the project first.",
+					);
+					return;
+				}
+
+				const outcome = await vscode.window.withProgress(
+					{
+						location: vscode.ProgressLocation.Notification,
+						title: `Updating ${health.branch} from ${health.remoteName}…`,
+					},
+					() =>
+						updateBaseBranch(ctx.gitClient, ctx.project.repoPath, health, {
+							confirmMerge: async () => {
+								const choice = await vscode.window.showWarningMessage(
+									`Local branch ${health.branch} has commits not present in ${health.remoteName}/${health.branch}. Merge the remote into it (creates a merge commit)?`,
+									{ modal: true },
+									"Merge",
+									"Cancel",
+								);
+								return choice === "Merge";
+							},
+						}),
+				);
+
+				switch (outcome.status) {
+					case "updated":
+						vscode.window.showInformationMessage(
+							`${health.branch} updated from ${health.remoteName}/${health.branch} (${outcome.method === "fast_forward" ? "fast-forward" : "merge"}).`,
+						);
+						break;
+					case "already_current":
+						vscode.window.showInformationMessage(
+							`${health.branch} is already up to date with ${health.remoteName}/${health.branch}.`,
+						);
+						break;
+					case "error":
+						vscode.window.showErrorMessage(outcome.message);
+						return;
+				}
+
+				featureStateCoordinator.invalidateProject(projectId);
+				featureStateCoordinator.refreshProjectReferenceHealth(projectId);
+				void featureStateCoordinator
+					.reconcileProject(projectId)
+					.then(() => projectManager.notifyChange({ projectId }));
+			},
+		),
+	);
+
+	// Command: Delete a finished worktree branch from the project page.
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.deleteWorktreeBranch",
+			async (args?: {
+				projectId?: string;
+				branchRef?: string;
+				worktreePath?: string;
+			}) => {
+				const projectId = args?.projectId;
+				const branchRef = args?.branchRef;
+				const worktreePath = args?.worktreePath;
+				if (!projectId || !branchRef || !worktreePath) return;
+				const ctx = projectManager.getContext(projectId);
+				if (!ctx) return;
+
+				const health =
+					featureStateCoordinator.getProjectReferenceHealth(projectId);
+				const baseBranch =
+					health?.branch ??
+					featureStateCoordinator
+						.getProjectSnapshots(projectId)
+						.find((snapshot) => snapshot.feature.id.startsWith("base:"))
+						?.feature.branch;
+
+				const assessment = await assessWorktreeBranchDeletion({
+					repoRoot: ctx.project.repoPath,
+					worktreeBase: ctx.featureManager.getWorktreeBase(),
+					worktreePath,
+					branchRef,
+					baseBranch,
+				});
+				if (!assessment.deletable) {
+					vscode.window.showWarningMessage(
+						`Branch "${branchRef}" cannot be deleted yet:\n\n${assessment.reasons.join("\n")}`,
+					);
+					return;
+				}
+
+				const choice = await vscode.window.showWarningMessage(
+					`Delete branch "${branchRef}" and its worktree?\n\nIt is fully integrated into ${baseBranch} with a clean working tree.`,
+					{ modal: true },
+					"Delete",
+					"Cancel",
+				);
+				if (choice !== "Delete") return;
+
+				const outcome = await deleteWorktreeBranch(ctx.gitClient, {
+					repoRoot: ctx.project.repoPath,
+					worktreeBase: ctx.featureManager.getWorktreeBase(),
+					worktreePath,
+					branchRef,
+					baseBranch,
+				});
+				if (outcome.status !== "deleted") {
+					vscode.window.showErrorMessage(
+						outcome.status === "not_deletable"
+							? `Branch "${branchRef}" cannot be deleted:\n\n${outcome.reasons.join("\n")}`
+							: outcome.message,
+					);
+					return;
+				}
+
+				vscode.window.showInformationMessage(
+					`Branch "${branchRef}" and its worktree were deleted.`,
+				);
+				featureStateCoordinator.invalidateProject(projectId);
+				void featureStateCoordinator
+					.reconcileProject(projectId)
+					.then(() => projectManager.notifyChange({ projectId }));
 			},
 		),
 	);

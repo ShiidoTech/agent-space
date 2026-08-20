@@ -28,6 +28,20 @@ function editProjectBaseBranch(projectId) {
 	send("editProjectBaseBranch", { projectId });
 }
 
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function updateBaseBranch(projectId) {
+	send("updateBaseBranch", { projectId });
+}
+
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function deleteWorktreeBranch(projectId, branchRef, worktreePath) {
+	send("deleteWorktreeBranch", {
+		projectId,
+		branchRef,
+		worktreePath: decodeURIComponent(worktreePath),
+	});
+}
+
 /** @param {string} projectId */
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function showProject(projectId) {
