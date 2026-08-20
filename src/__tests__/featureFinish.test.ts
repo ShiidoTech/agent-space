@@ -264,6 +264,79 @@ describe("Feature Finish", () => {
 		);
 	});
 
+	it("proves the declared branch when branch commands return empty results", async () => {
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockResolvedValue({
+				worktreePath: "/worktrees/f1",
+				safe: true,
+				forceable: true,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: true,
+				integrationObserved: true,
+				localCommitsObserved: true,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				workingTreeStatus: "",
+				localCommitCount: 0,
+				featureSha: "1".repeat(40),
+				baseSha: "2".repeat(40),
+				reasons: [],
+			});
+		const headSha = "3".repeat(40);
+		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
+		ctx.gitClient.read = async (args: readonly string[], options?: { readonly cwd?: string }) => {
+			if (args[0] === "symbolic-ref" || args[0] === "branch") return gitResult("");
+			if (args[0] === "rev-parse") {
+				return gitResult(options?.cwd === "/worktrees/f1" ? `${headSha}\n` : `${headSha}\n`);
+			}
+			return gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
+		};
+
+		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
+
+		expect(assessment.safe).toBe(true);
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: "feat/f1" }),
+		);
+	});
+
+	it("keeps the branch unknown when the declared ref SHA differs from HEAD", async () => {
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockResolvedValue({
+				worktreePath: "/worktrees/f1",
+				safe: false,
+				forceable: false,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: false,
+				integrationObserved: false,
+				localCommitsObserved: false,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				reasons: ["branch unknown"],
+			});
+		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
+		ctx.gitClient.read = async (args: readonly string[], options?: { readonly cwd?: string }) => {
+			if (args[0] === "symbolic-ref" || args[0] === "branch") return gitResult("");
+			if (args[0] === "rev-parse") {
+				return gitResult(options?.cwd === "/worktrees/f1" ? `${"3".repeat(40)}\n` : `${"4".repeat(40)}\n`);
+			}
+			return gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
+		};
+
+		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
+
+		expect(assessment.safe).toBe(false);
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: undefined }),
+		);
+	});
+
 	it("uses the declared branch when symbolic-ref has a non-detached read failure", async () => {
 		const deletion = vi
 			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")

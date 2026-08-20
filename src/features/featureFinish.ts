@@ -244,8 +244,13 @@ async function observeRegisteredBranch(
 		["symbolic-ref", "--quiet", "--short", "HEAD"],
 		{ cwd: worktreePath },
 	);
-	if (symbolic.exitCode === 0 && !symbolic.error) {
-		return symbolic.stdout.trim() || undefined;
+	const symbolicBranch = symbolic.stdout.trim();
+	if (
+		symbolic.exitCode === 0 &&
+		!symbolic.error &&
+		isSafeBranchName(symbolicBranch)
+	) {
+		return symbolicBranch;
 	}
 	const current = await ctx.gitClient.read(["branch", "--show-current"], {
 		cwd: worktreePath,
@@ -261,7 +266,12 @@ async function observeRegisteredBranch(
 		return currentBranch;
 	}
 	if (inventoryBranch) return inventoryBranch;
-	if (symbolic.exitCode === 1 || current.exitCode === 1) {
+	// Some Git wrappers report an empty successful result (or a transport
+	// failure with no numeric exit code) for a detached/unreadable checkout.
+	// The exit code alone must not decide whether the SHA proof is attempted.
+	// If both refs resolve to the same commit, the declared branch is observed
+	// without guessing; otherwise the result remains unknown.
+	if (declaredBranch) {
 		const head = await ctx.gitClient.read(["rev-parse", "--verify", "HEAD^{commit}"], {
 			cwd: worktreePath,
 		});
@@ -440,6 +450,13 @@ export function parseRegisteredWorktreeBranches(
 		}
 	}
 	return branches;
+}
+
+function isSafeBranchName(value: string): boolean {
+	return (
+		/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value) &&
+		!value.includes("..")
+	);
 }
 
 export type SessionStopVerification =
