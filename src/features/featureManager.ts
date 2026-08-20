@@ -496,16 +496,20 @@ export class FeatureManager {
 	}
 
 	/** Commits present in the base branch but missing from the given branch. */
-	private commitsBehind(branch: string, baseBranch: string): number {
+	private reusedBranchRelation(
+		branch: string,
+		baseBranch: string,
+	): import("../types").ReusedBranchRelation {
 		try {
-			const output = this.git(
-				`git rev-list --count "${branch}..${baseBranch}"`,
+			return parseReusedBranchRelation(this.git(
+				`git rev-list --left-right --count "${branch}...${baseBranch}"`,
 				this.repoRoot,
-			);
-			const count = Number.parseInt(output.trim(), 10);
-			return Number.isFinite(count) && count >= 0 ? count : 0;
-		} catch {
-			return 0;
+			));
+		} catch (error) {
+			return {
+				status: "unknown",
+				reason: error instanceof Error ? error.message : String(error),
+			};
 		}
 	}
 
@@ -757,7 +761,7 @@ export class FeatureManager {
 			encoding: "utf8",
 		});
 		let branchExists = false;
-		let behind = 0;
+		let relation: import("../types").ReusedBranchRelation | undefined;
 		try {
 			const branchResult = await execFileAsync(
 				"git",
@@ -769,13 +773,12 @@ export class FeatureManager {
 			// Ref not found: a new branch will be created.
 		}
 		if (branchExists) {
-			const behindResult = await execFileAsync(
+			const relationResult = await execFileAsync(
 				"git",
-				["rev-list", "--count", `${expectedBranch}..${baseBranch}`],
+				["rev-list", "--left-right", "--count", `${expectedBranch}...${baseBranch}`],
 				{ cwd: this.repoRoot, encoding: "utf8" },
 			);
-			const parsed = Number.parseInt(String(behindResult.stdout).trim(), 10);
-			behind = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+			relation = parseReusedBranchRelation(String(relationResult.stdout));
 		}
 		const afterBase = this.getProvisioningFeature(
 			id,
@@ -787,10 +790,7 @@ export class FeatureManager {
 			// previously finished feature). Reuse it instead of failing, and
 			// surface how far behind the base branch it has drifted.
 			const worktreeStep = afterBase.provisioning.steps[1];
-			worktreeStep.label =
-				behind > 0
-					? `Reusing existing branch ${expectedBranch} (${behind} commits behind ${baseBranch})`
-					: `Reusing existing branch ${expectedBranch}`;
+			worktreeStep.label = reusedBranchLabel(expectedBranch, baseBranch, relation);
 		} else {
 			afterBase.createdFromSha = String(baseResult.stdout).trim();
 		}
@@ -817,7 +817,9 @@ export class FeatureManager {
 			expectedWorktreePath,
 		);
 		if (branchExists) {
-			completed.reusedExistingBranch = { behind };
+			completed.reusedExistingBranch = {
+				relation: relation ?? { status: "unknown", reason: "relation_not_observed" },
+			};
 		}
 		completed.provisioning.state = "ready";
 		completed.provisioning.currentStepId = undefined;
@@ -925,13 +927,10 @@ export class FeatureManager {
 			// The branch already exists in git (e.g. created manually or by a
 			// previously finished feature). Reuse it instead of failing, and
 			// surface how far behind the base branch it has drifted.
-			const behind = this.commitsBehind(feature.branch, baseBranch);
-			feature.reusedExistingBranch = { behind };
+			const relation = this.reusedBranchRelation(feature.branch, baseBranch);
+			feature.reusedExistingBranch = { relation };
 			feature.createdFromSha = undefined;
-			worktreeStep.label =
-				behind > 0
-					? `Reusing existing branch ${feature.branch} (${behind} commits behind ${baseBranch})`
-					: `Reusing existing branch ${feature.branch}`;
+			worktreeStep.label = reusedBranchLabel(feature.branch, baseBranch, relation);
 			this.saveAndNotify();
 			execSync(
 				`git worktree add "${feature.worktreePath}" "${feature.branch}"`,
@@ -1198,6 +1197,45 @@ async function hasForeignOwnedEntries(target: string): Promise<boolean> {
 		return true;
 	}
 	return false;
+}
+
+function parseReusedBranchRelation(
+	stdout: string,
+): import("../types").ReusedBranchRelation {
+	const [aheadText, behindText] = stdout.trim().split(/\s+/u);
+	const ahead = Number(aheadText);
+	const behind = behindText === undefined ? ahead : Number(behindText);
+	const normalizedAhead = behindText === undefined ? 0 : ahead;
+	if (
+		!Number.isSafeInteger(normalizedAhead) ||
+		normalizedAhead < 0 ||
+		!Number.isSafeInteger(behind) ||
+		behind < 0
+	) {
+		return { status: "unknown", reason: "invalid_relation_counts" };
+	}
+	if (normalizedAhead === 0 && behind === 0) return { status: "current", ahead: 0, behind: 0 };
+	if (normalizedAhead === 0) return { status: "behind", ahead: 0, behind };
+	if (behind === 0) return { status: "ahead", ahead: normalizedAhead, behind: 0 };
+	return { status: "diverged", ahead: normalizedAhead, behind };
+}
+
+function reusedBranchLabel(
+	branch: string,
+	base: string,
+	relation: import("../types").ReusedBranchRelation | undefined,
+): string {
+	if (!relation || relation.status === "unknown") {
+		return `Reusing existing branch ${branch} (Git relation unknown)`;
+	}
+	if (relation.status === "current") return `Reusing existing branch ${branch}`;
+	return `Reusing existing branch ${branch} (${formatRelation(relation)} ${base})`;
+}
+
+function formatRelation(relation: Exclude<import("../types").ReusedBranchRelation, { status: "current" } | { status: "unknown" }>): string {
+	if (relation.status === "behind") return `${relation.behind} commits behind`;
+	if (relation.status === "ahead") return `${relation.ahead} commits ahead`;
+	return `${relation.ahead} commits ahead, ${relation.behind} behind`;
 }
 
 function isCommitSha(value: string): boolean {

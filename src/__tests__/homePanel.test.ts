@@ -258,18 +258,18 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
 		const html = (buildPanel() as any).renderReusedBranchChip({
 			...feature,
-			reusedExistingBranch: { behind: 3 },
+			reusedExistingBranch: { relation: { status: "behind", ahead: 0, behind: 3 } },
 		});
 		expect(html).toContain("project-base-chip--warning");
 		expect(html).toContain("reused &middot; 3 behind");
-		expect(html).toContain("3 commits behind the base branch");
+		expect(html).toContain("3 behind");
 	});
 
 	it("renders a plain reused-branch chip when the branch is up to date", () => {
 		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
 		const html = (buildPanel() as any).renderReusedBranchChip({
 			...feature,
-			reusedExistingBranch: { behind: 0 },
+			reusedExistingBranch: { relation: { status: "current", ahead: 0, behind: 0 } },
 		});
 		expect(html).toContain("reused branch");
 		expect(html).not.toContain("behind");

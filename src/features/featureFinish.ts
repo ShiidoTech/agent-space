@@ -330,8 +330,8 @@ function finishDecision(
 			// A human may explicitly accept the unknown GitHub state when local
 			// worktree deletion is independently forceable. Branches are retained;
 			// this only removes the worktree and Agent Space records.
-			forceable: safety.forceable,
-			requiresForce: safety.forceable,
+			forceable: safety.forceable && !("dirty" in safety && safety.dirty),
+			requiresForce: safety.forceable && !("dirty" in safety && safety.dirty),
 			reasons: [integrationReason, ...safety.reasons],
 		};
 	}

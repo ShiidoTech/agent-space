@@ -133,7 +133,9 @@ describe("Feature lifecycle: create renders locally, finish reassesses with cach
 		const ready = await manager.provisionFeature(feature.id);
 
 		expect(ready?.provisioning?.state).toBe("ready");
-		expect(ready?.reusedExistingBranch).toEqual({ behind: 1 });
+		expect(ready?.reusedExistingBranch).toEqual({
+			relation: { status: "behind", ahead: 0, behind: 1 },
+		});
 		expect(ready?.createdFromSha).toBeUndefined();
 		expect(require("node:fs").existsSync(feature.worktreePath)).toBe(true);
 		expect(git(feature.worktreePath, "rev-parse", "--abbrev-ref", "HEAD")).toBe(

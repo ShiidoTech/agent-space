@@ -778,11 +778,14 @@ export async function activate(
 							if (reused) {
 								const baseName =
 									ctx.featureManager.getBaseBranchName();
+								const relation = reused.relation;
 								const detail =
-									reused.behind > 0
-										? `Branch ${provisioned.branch} already existed and was reused; it is ${reused.behind} commit${reused.behind > 1 ? "s" : ""} behind ${baseName}.`
-										: `Branch ${provisioned.branch} already existed and was reused.`;
-								if (reused.behind > 0) {
+									relation.status === "unknown"
+										? `Branch ${provisioned.branch} already existed and was reused; its relation to ${baseName} is unknown.`
+										: relation.status === "current"
+											? `Branch ${provisioned.branch} already existed and was reused; it matches ${baseName}.`
+											: `Branch ${provisioned.branch} already existed and was reused; ${relation.status === "diverged" ? `${relation.ahead} ahead and ${relation.behind} behind` : relation.status === "ahead" ? `${relation.ahead} ahead` : `${relation.behind} behind`} ${baseName}.`;
+								if (relation.status === "ahead" || relation.status === "diverged") {
 									vscode.window.showWarningMessage(detail);
 								} else {
 									vscode.window.showInformationMessage(detail);
