@@ -21,6 +21,14 @@ project.
   `npm test -- --run`, `npm run compile`.
 - **Canonical packaging command is `npm run package`** (wraps `vsce package`).
   Do not invoke `vsce` directly in the default path.
+- **Local delivery is mandatory for implementation work:** after the mandatory
+  checks, run `npm run package`, install the generated VSIX with
+  `code-insiders`, and verify both `shiidotech.agent-space@<version>` and the
+  installed `dist/extension.js` hash. If the environment blocks installation,
+  report `FAIL_ENV` with the exact blocker; do not call the change deployed.
+- **A local-only fix is incomplete:** commit and push the authorized changes to
+  the active feature branch/PR before handoff. If that PR is already merged,
+  create a new branch from `main` and a new PR instead of updating the old one.
 - **Commit on a feature branch after the mandatory checks pass; never push directly to `main` or
   `develop`. Submit a pull request to `ShiidoTech/agent-space`.
 
