@@ -16,6 +16,13 @@ import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
+import {
+	type ProjectConfig,
+	hasSharedProjectConfig,
+	loadSharedProjectConfig,
+	projectConfigTemplate,
+	pruneEmptyConfig,
+} from "../projects/projectConfig";
 import type { GlobalStore } from "../storage/globalStore";
 import type { Agent, Feature, Service } from "../types";
 
@@ -1648,11 +1655,24 @@ export class HomePanel {
 				</div>
 				<button class="quick-action-btn" onclick="editProjectBaseBranch('${projectId}')">Edit base branch</button>
 				<div class="section-label project-config-label">.agentspace/config.json</div>
-				<textarea class="project-config-editor" id="project-config-${projectId}">${this.escapeHtml(JSON.stringify(context.config, null, 2))}</textarea>
+				<textarea class="project-config-editor" id="project-config-${projectId}">${this.escapeHtml(this.projectConfigEditorContent(context.project.repoPath))}</textarea>
 				<div class="project-config-actions">
 					<button class="quick-action-btn primary" onclick="saveProjectConfig('${projectId}')">Save configuration</button>
 					<span class="project-config-help">Shared project settings only; machine-local overlays stay separate.</span>
 				</div>
+				<details class="project-config-reference">
+					<summary>Available settings</summary>
+					<pre>{
+  "baseBranch": "main",              // shared base branch for worktrees
+  "branchKinds": ["feature", "fix"], // kinds offered at feature creation
+  "defaultBranchKind": "feature",
+  "worktreesDir": "~/.worktrees",    // default: &lt;repo&gt;/.worktrees
+  "bootstrapCommands": ["npm install"],
+  "agents": { "enabled": ["claude"], "default": "claude" },
+  "knowledge": { "instructions": ["AGENTS.md"], "runbooks": ["docs/runbooks.md"] }
+}</pre>
+					<p class="project-config-help">Reference only &mdash; examples above are never saved. Fill the editor with the values you want.</p>
+				</details>
 			</div>`;
 		const projectPageContent = settings
 			? `<div class="project-page-nav">
@@ -1707,6 +1727,9 @@ export class HomePanel {
 .project-config-editor:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .project-config-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
 .project-config-help { font-size: 11px; color: var(--vscode-descriptionForeground); }
+.project-config-reference { margin-top: 12px; font-size: 12px; }
+.project-config-reference summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+.project-config-reference pre { margin: 8px 0 4px; padding: 8px; overflow-x: auto; font-family: var(--vscode-editor-font-family, monospace); font-size: 11px; line-height: 1.5; background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); border-radius: 4px; white-space: pre; }
 .project-delete-btn { margin-left: auto; padding: 5px 9px; border: 1px solid var(--vscode-testing-iconFailed); border-radius: 3px; color: var(--vscode-button-foreground); background: var(--vscode-testing-iconFailed); cursor: pointer; }
 .project-delete-btn:hover { background: var(--vscode-errorForeground); }
 </style>
@@ -1743,16 +1766,29 @@ export class HomePanel {
 			${snapshot.runtime.services.status === "known" ? this.renderServicesSection(services, feature) : '<div class="activity-empty">Service runtime unavailable</div>'}`;
 	}
 
+	/**
+	 * Content of the settings JSON editor, always derived from the *shared*
+	 * `.agentspace/config.json` — never the effective config that merges the
+	 * machine-local overlay. A project with no shared file (even when a
+	 * `config.local.json` exists) shows the discovery template, and editing it
+	 * can never materialise machine-local values into the committed file.
+	 */
+	private projectConfigEditorContent(repoPath: string): string {
+		const shared = loadSharedProjectConfig(repoPath);
+		if (hasSharedProjectConfig(repoPath) && Object.keys(shared).length > 0) {
+			return JSON.stringify(shared, null, 2);
+		}
+		return JSON.stringify(projectConfigTemplate(), null, 2);
+	}
+
 	private saveProjectConfig(projectId: string, content: string): void {
 		try {
 			const parsed: unknown = JSON.parse(content);
 			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 				throw new Error("Configuration must be a JSON object.");
 			}
-			this.projectManager.replaceProjectConfig(
-				projectId,
-				parsed as Parameters<ProjectManager["replaceProjectConfig"]>[1],
-			);
+			const cleaned = pruneEmptyConfig(parsed as ProjectConfig);
+			this.projectManager.replaceProjectConfig(projectId, cleaned);
 			void vscode.window.showInformationMessage("Project configuration saved.");
 		} catch (error) {
 			void vscode.window.showErrorMessage(

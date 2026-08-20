@@ -4,10 +4,14 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	hasLocalProjectConfig,
+	hasSharedProjectConfig,
 	loadProjectConfig,
 	loadSharedProjectConfig,
 	mergeProjectConfig,
 	type ProjectConfig,
+	projectConfigTemplate,
+	pruneEmptyConfig,
+	replaceProjectConfig,
 	saveProjectConfig,
 } from "../projects/projectConfig";
 
@@ -155,5 +159,80 @@ describe("saveProjectConfig", () => {
 
 		expect(effective.baseBranch).toBe("develop");
 		expect(effective.agents?.default).toBe("claude-perso");
+	});
+});
+
+describe("pruneEmptyConfig", () => {
+	it("drops the untouched discovery template so nothing but chosen values persists", () => {
+		const cleaned = pruneEmptyConfig({
+			baseBranch: "develop",
+			branchKinds: null,
+			defaultBranchKind: null,
+			worktreesDir: null,
+			bootstrapCommands: null,
+			agents: { enabled: null, default: null },
+			knowledge: { instructions: null, runbooks: null },
+		});
+
+		expect(cleaned).toEqual({ baseBranch: "develop" });
+	});
+
+	it("keeps nested objects that carry at least one real value", () => {
+		const cleaned = pruneEmptyConfig({
+			baseBranch: null,
+			agents: { enabled: ["codex"], default: null },
+			knowledge: { instructions: ["AGENTS.md"], runbooks: [] },
+		});
+
+		expect(cleaned).toEqual({
+			agents: { enabled: ["codex"] },
+			knowledge: { instructions: ["AGENTS.md"], runbooks: [] },
+		});
+	});
+
+	it("preserves an explicitly empty agents.enabled (zero tools) instead of pruning it", () => {
+		// `agents.enabled: []` disables every agent; omitting the key exposes all
+		// of them. Collapsing the two would turn a locked-down project into an
+		// open one on the next save.
+		const cleaned = pruneEmptyConfig({ agents: { enabled: [] } });
+
+		expect(cleaned).toEqual({ agents: { enabled: [] } });
+	});
+
+	it("collapses an untouched template to an empty config", () => {
+		expect(pruneEmptyConfig(projectConfigTemplate())).toEqual({});
+	});
+});
+
+describe("project settings editor — shared-based, non-destructive", () => {
+	it("(a) a single-field edit on a project with no shared config persists only that field", () => {
+		// The editor shows the discovery template (empty placeholders). Editing
+		// only baseBranch then saving must not write the untouched placeholder
+		// keys into .agentspace/config.json.
+		const root = repo();
+		expect(hasSharedProjectConfig(root)).toBe(false);
+
+		const edited = pruneEmptyConfig({
+			...projectConfigTemplate(),
+			baseBranch: "develop",
+		});
+		replaceProjectConfig(root, edited);
+
+		expect(loadSharedProjectConfig(root)).toEqual({ baseBranch: "develop" });
+	});
+
+	it("(b) a local overlay does not leak into the shared file, nor block the template", () => {
+		// With only .agentspace/config.local.json and no config.json, the editor
+		// must not display (nor later write) the machine-local values. Saving the
+		// shared file must leave the overlay untouched.
+		const root = repo(undefined, { agents: { default: "claude-perso" } });
+
+		expect(hasSharedProjectConfig(root)).toBe(false);
+		expect(loadSharedProjectConfig(root)).toEqual({});
+
+		replaceProjectConfig(root, { baseBranch: "main" });
+
+		expect(loadSharedProjectConfig(root)).toEqual({ baseBranch: "main" });
+		expect(loadProjectConfig(root).agents?.default).toBe("claude-perso");
 	});
 });
