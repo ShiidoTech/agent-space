@@ -954,12 +954,38 @@ export class FeatureManager {
 		this.onChangeCallback?.();
 	}
 
+	private async runGit(
+		argv: readonly string[],
+		cwd: string,
+	): Promise<{ stdout: string; stderr: string; exitCode: number | null; error?: Error }> {
+		try {
+			const { stdout, stderr } = await execFileAsync("git", [...argv], {
+				cwd,
+				encoding: "utf8",
+				maxBuffer: 4 * 1024 * 1024,
+			});
+			return { stdout, stderr, exitCode: 0 };
+		} catch (cause) {
+			const error = cause as Error & {
+				code?: number | string;
+				stdout?: string;
+				stderr?: string;
+			};
+			return {
+				stdout: error.stdout ?? "",
+				stderr: error.stderr ?? "",
+				exitCode: typeof error.code === "number" ? error.code : null,
+				error,
+			};
+		}
+	}
+
 	/**
 	 * Evaluate whether a feature can be removed without losing work. Returns
 	 * the combined reasons across the feature worktree. Safe to call before
 	 * any destructive step.
 	 */
-	getDeletionSafety(feature: Feature) {
+	async getDeletionSafety(feature: Feature) {
 		const branches = this.reconcileFeatureBranches(feature);
 		const checkedOutBranch =
 			branches.checkout.status === "known"
@@ -979,26 +1005,26 @@ export class FeatureManager {
 	 * forced. A forced path is only ever chosen by a human after the checklist
 	 * has been shown; the nominal path never uses `--force`.
 	 */
-	deleteFeature(
+	async deleteFeature(
 		id: string,
 		options?: { force?: boolean },
-	): FeatureDeleteResult {
-		const result = this.removeFeatureWorktreeForFinish(id, options);
+	): Promise<FeatureDeleteResult> {
+		const result = await this.removeFeatureWorktreeForFinish(id, options);
 		if (!result.deleted) return result;
 		this.forgetFinishedFeature(id);
 		return result;
 	}
 
 	/** Remove the Feature worktree while preserving every Agent Space record. */
-	removeFeatureWorktreeForFinish(
+	async removeFeatureWorktreeForFinish(
 		id: string,
 		options?: { force?: boolean; acceptedPullRequestHeadSha?: string },
-	): FeatureDeleteResult {
+	): Promise<FeatureDeleteResult> {
 		const feature = this.features.find((f) => f.id === id);
 		if (!feature) return { deleted: false, reasons: [] };
 
 		const force = options?.force === true;
-		const safety = this.getDeletionSafety(feature);
+		const safety = await this.getDeletionSafety(feature);
 		const acceptedPullRequestIntegration =
 			typeof options?.acceptedPullRequestHeadSha === "string" &&
 			safety.forceable &&
@@ -1029,14 +1055,18 @@ export class FeatureManager {
 
 		if (isWorktreePathSafe(feature.worktreePath, this.worktreeBase)) {
 			try {
-				execSync(
-					`git worktree remove "${feature.worktreePath}"${force ? " --force" : ""}`,
-					{
-						cwd: this.repoRoot,
-						encoding: "utf-8",
-						stdio: ["ignore", "pipe", "pipe"],
-					},
+				const removal = await this.runGit(
+					[
+						"worktree",
+						"remove",
+						feature.worktreePath,
+						...(force ? ["--force"] : []),
+					],
+					this.repoRoot,
 				);
+				if (removal.exitCode !== 0 || removal.error) {
+					throw new Error(removal.stderr.trim() || "git worktree remove failed");
+				}
 			} catch {
 				// Worktree may already be gone — but if it is still on disk,
 				// the removal actually failed. Do NOT drop the feature record:
@@ -1068,7 +1098,7 @@ export class FeatureManager {
 	}
 
 	/** Remove an explicitly reviewed directory that Git no longer registers. */
-	removeWorktreeResidue(worktreePath: string): FeatureDeleteResult {
+	async removeWorktreeResidue(worktreePath: string): Promise<FeatureDeleteResult> {
 		if (!isWorktreePathSafe(worktreePath, this.worktreeBase)) {
 			return {
 				deleted: false,
@@ -1077,13 +1107,14 @@ export class FeatureManager {
 		}
 		let inventory: string;
 		try {
-			inventory = String(
-				execSync("git worktree list --porcelain", {
-					cwd: this.repoRoot,
-					encoding: "utf-8",
-					stdio: ["ignore", "pipe", "pipe"],
-				}),
+			const observed = await this.runGit(
+				["worktree", "list", "--porcelain"],
+				this.repoRoot,
 			);
+			if (observed.exitCode !== 0 || observed.error) {
+				throw new Error(observed.stderr.trim() || "git worktree list failed");
+			}
+			inventory = observed.stdout;
 		} catch {
 			return { deleted: false, reasons: ["Git worktree inventory is unavailable."] };
 		}
@@ -1095,12 +1126,12 @@ export class FeatureManager {
 			return { deleted: false, reasons: ["The path is registered by Git again."] };
 		}
 		try {
-			fs.rmSync(worktreePath, { recursive: true, force: false });
+			await fs.promises.rm(worktreePath, { recursive: true, force: false });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const code = (error as NodeJS.ErrnoException)?.code;
 			if (code === "EACCES" || code === "EPERM") {
-				const foreign = hasForeignOwnedEntries(worktreePath);
+				const foreign = await hasForeignOwnedEntries(worktreePath);
 				return {
 					deleted: false,
 					reasons: [
@@ -1149,16 +1180,16 @@ export class FeatureManager {
 	}
 }
 
-function hasForeignOwnedEntries(target: string): boolean {
+async function hasForeignOwnedEntries(target: string): Promise<boolean> {
 	const uid = typeof process.getuid === "function" ? process.getuid() : -1;
 	try {
 		const stack = [target];
 		while (stack.length > 0) {
 			const current = stack.pop() as string;
-			const stat = fs.lstatSync(current);
+			const stat = await fs.promises.lstat(current);
 			if (stat.uid !== uid) return true;
 			if (stat.isDirectory()) {
-				for (const entry of fs.readdirSync(current)) {
+				for (const entry of await fs.promises.readdir(current)) {
 					stack.push(path.join(current, entry));
 				}
 			}

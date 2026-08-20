@@ -57,13 +57,19 @@ export interface FeatureFinishDeps {
 		ctx: ProjectContext,
 		feature: Feature,
 		evidence: { readonly integration: FeatureSnapshot["integration"] },
-	) => FeatureFinishAssessment;
+	) => FeatureFinishAssessment | Promise<FeatureFinishAssessment>;
 	readonly openWorktree?: (worktreePath: string) => void;
-	readonly removeWorktreeResidue?: (worktreePath: string) => {
-		readonly removed: boolean;
-		readonly reason?: string;
-		readonly suggestedCommand?: string;
-	};
+	readonly removeWorktreeResidue?: (worktreePath: string) =>
+		| {
+				readonly removed: boolean;
+				readonly reason?: string;
+				readonly suggestedCommand?: string;
+		  }
+		| Promise<{
+				readonly removed: boolean;
+				readonly reason?: string;
+				readonly suggestedCommand?: string;
+		  }>;
 	readonly openTerminalWithCommand?: (command: string) => void;
 }
 
@@ -152,9 +158,11 @@ export async function runFeatureFinish(
 
 				let assessment: FeatureFinishAssessment;
 				try {
-					assessment = (deps.assess ?? assessFeatureFinish)(ctx, feature, {
-						integration: snapshot.integration,
-					});
+					assessment = await (deps.assess ?? assessFeatureFinish)(
+						ctx,
+						feature,
+						{ integration: snapshot.integration },
+					);
 				} catch (error) {
 					const message = `Cannot assess "${feature.name}" safely: ${messageOf(error)}`;
 					void ui.showErrorMessage(message);
@@ -175,7 +183,9 @@ export async function runFeatureFinish(
 						if (action === "Inspect residue") {
 							deps.openWorktree?.(residue.worktreePath);
 						} else if (action === "Remove residue") {
-							const removal = deps.removeWorktreeResidue?.(residue.worktreePath);
+							const removal = await deps.removeWorktreeResidue?.(
+								residue.worktreePath,
+							);
 							if (removal?.removed) {
 								void ui.showInformationMessage(
 									`Removed worktree residue at ${residue.worktreePath}. Run Finish Feature again to remove the Agent Space record.`,
@@ -260,9 +270,11 @@ export async function runFeatureFinish(
 				progress.report({ message: "Checking worktree safety…" });
 				let current: FeatureFinishAssessment;
 				try {
-					current = (deps.assess ?? assessFeatureFinish)(ctx, feature, {
-						integration: snapshot.integration,
-					});
+					current = await (deps.assess ?? assessFeatureFinish)(
+						ctx,
+						feature,
+						{ integration: snapshot.integration },
+					);
 				} catch (error) {
 					const message = `Feature "${feature.name}" could not be reassessed after stopping sessions: ${messageOf(error)}. No worktree or metadata was removed.`;
 					void ui.showErrorMessage(message);
@@ -285,7 +297,7 @@ export async function runFeatureFinish(
 					progress.report({ message: "Removing worktrees…" });
 					try {
 						const featureRemoval =
-							ctx.featureManager.removeFeatureWorktreeForFinish(feature.id, {
+							await ctx.featureManager.removeFeatureWorktreeForFinish(feature.id, {
 								force: featureRemovalPlan.force,
 								...(featureRemovalPlan.acceptedPullRequestHeadSha
 									? {
@@ -307,7 +319,7 @@ export async function runFeatureFinish(
 				}
 				for (const entry of removalPlan) {
 					if (entry.kind !== "agent" || !entry.agentId) continue;
-					const removal = ctx.agentManager.removeAgentWorktreeForFinish(
+					const removal = await ctx.agentManager.removeAgentWorktreeForFinish(
 						entry.agentId,
 						feature.id,
 						entry.force,

@@ -379,14 +379,14 @@ export class ProjectManager {
 		}
 	}
 
-	deleteProjectFeatureData(projectId: string): void {
+	async deleteProjectFeatureData(projectId: string): Promise<void> {
 		const ctx = this.getContext(projectId);
 		if (!ctx) return;
 
 		for (const feature of [...ctx.featureManager.getFeatures()]) {
 			ctx.serviceManager.deleteAllServices(feature.id);
 			ctx.agentManager.deleteAllAgents(feature.id);
-			ctx.featureManager.deleteFeature(feature.id);
+			await ctx.featureManager.deleteFeature(feature.id);
 		}
 	}
 }

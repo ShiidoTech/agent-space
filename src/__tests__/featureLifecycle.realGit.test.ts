@@ -67,7 +67,7 @@ describe("Feature lifecycle: create renders locally, finish reassesses with cach
 			featureManager: manager,
 			agentManager: { getAgents: () => [] as never[] },
 		} as never;
-		const assessment = assessFeatureFinish(ctx as never, feature, {
+		const assessment = await assessFeatureFinish(ctx as never, feature, {
 			integration: {
 				status: "unknown",
 				reason: "integration_unknown",
@@ -105,7 +105,7 @@ describe("Feature lifecycle: create renders locally, finish reassesses with cach
 			"uncommitted",
 		);
 
-		const assessment = assessFeatureFinish(ctx as never, feature, {
+		const assessment = await assessFeatureFinish(ctx as never, feature, {
 			integration: {
 				status: "unknown",
 				reason: "integration_unknown",

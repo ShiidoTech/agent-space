@@ -1082,7 +1082,7 @@ export async function activate(
 
 				// Fail-closed: refuse when the agent's worktree would lose work.
 				if (agent.worktreePath) {
-					const safety = checkWorktreeDeletionSafety({
+					const safety = await checkWorktreeDeletionSafety({
 						repoRoot: ctx.project.repoPath,
 						worktreeBase: ctx.featureManager.getWorktreeBase(),
 						worktreePath: agent.worktreePath,
@@ -1281,8 +1281,10 @@ export async function activate(
 								{ forceNewWindow: true },
 							);
 						},
-removeWorktreeResidue: (worktreePath) => {
-						const result = ctx.featureManager.removeWorktreeResidue(worktreePath);
+removeWorktreeResidue: async (worktreePath) => {
+						const result = await ctx.featureManager.removeWorktreeResidue(
+							worktreePath,
+						);
 						return {
 							removed: result.deleted,
 							reason: result.reasons.join(" ") || undefined,

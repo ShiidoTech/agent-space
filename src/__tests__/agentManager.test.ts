@@ -4,12 +4,14 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentManager } from "../agents/agentManager";
 import { CodingToolRegistry } from "../agents/codingToolRegistry";
+import { OpenCodeSessionProvider } from "../agents/sessionProviders/openCodeSessionProvider";
 import { Store } from "../storage/store";
 import type { Feature } from "../types";
 
 vi.mock("node:child_process", () => ({
 	execSync: vi.fn(),
 	execFileSync: vi.fn(() => ""),
+	execFile: vi.fn(),
 }));
 
 vi.mock("vscode", () => ({
@@ -18,10 +20,11 @@ vi.mock("vscode", () => ({
 	},
 }));
 
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import * as vscode from "vscode";
 
 const mockExecSync = vi.mocked(execSync);
+const mockExecFile = vi.mocked(execFile);
 
 function mockConfig(values: Record<string, unknown> = {}) {
 	(
@@ -78,6 +81,7 @@ describe("AgentManager", () => {
 			new CodingToolRegistry(),
 		);
 		mockExecSync.mockReset();
+		mockExecFile.mockReset();
 		mockConfig();
 	});
 
@@ -289,21 +293,32 @@ describe("AgentManager", () => {
 	});
 
 	describe("removeAgentWorktreeForFinish", () => {
-		it("keeps the agent record while removing its worktree", () => {
+		it("keeps the agent record while removing its worktree", async () => {
 			const perAgentFeature: Feature = {
 				...feature,
 				isolation: "per-agent",
 			};
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const agent = manager.createAgent(perAgentFeature);
+			mockExecFile.mockImplementation(((
+				_callbackFile: string,
+				_callbackArgs: readonly string[],
+				_callbackOptions: unknown,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
+			) => {
+				callback(null, { stdout: "", stderr: "" });
+			}) as never);
 
 			expect(
-				manager.removeAgentWorktreeForFinish(agent.id, "f1"),
+				await manager.removeAgentWorktreeForFinish(agent.id, "f1"),
 			).toMatchObject({ removed: true, worktreePath: agent.worktreePath });
 			expect(manager.getAgents("f1")).toHaveLength(1);
 		});
 
-		it("keeps Git protection for a clean assessment when the agent worktree becomes dirty", () => {
+		it("keeps Git protection for a clean assessment when the agent worktree becomes dirty", async () => {
 			const perAgentFeature: Feature = {
 				...feature,
 				isolation: "per-agent",
@@ -315,11 +330,26 @@ describe("AgentManager", () => {
 			mockExecSync.mockImplementation(() => {
 				throw new Error("contains modified files");
 			});
+			mockExecFile.mockImplementation(((
+				_callbackFile: string,
+				_callbackArgs: readonly string[],
+				_callbackOptions: unknown,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
+			) => {
+				callback(new Error("contains modified files"));
+			}) as never);
 
 			expect(
-				manager.removeAgentWorktreeForFinish(agent.id, "f1", false),
+				await manager.removeAgentWorktreeForFinish(agent.id, "f1", false),
 			).toMatchObject({ removed: false });
-			expect(String(mockExecSync.mock.calls[0]?.[0])).not.toContain("--force");
+			expect(
+				mockExecFile.mock.calls.some(([file, args]) =>
+					file === "git" && Array.isArray(args) && args.includes("--force"),
+				),
+			).toBe(false);
 			expect(manager.getAgents("f1")).toHaveLength(1);
 		});
 	});
@@ -465,25 +495,21 @@ describe("AgentManager", () => {
 			// AgentManager.getAgents() for the same feature within the same
 			// window. None of them know about each other. Each call implicitly
 			// resolves attention (getAgents -> withAttentionStatus), and for a
-			// provider like OpenCode that means a subprocess spawn per call
-			// unless it is deduplicated below the AgentManager layer.
+			// provider like OpenCode that means a raw read per call (a SQLite
+			// query, or an `opencode db` subprocess as a fallback) unless it is
+			// deduplicated below the AgentManager layer.
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const agent = manager.createAgent(feature, "opencode");
 			manager.markAgentStarted(agent.id, feature.id);
 			manager.updateAgentSessionId(agent.id, feature.id, "ses_abc123");
 			mockExecSync.mockReset();
 
-			mockExecSync.mockReturnValue(
-				JSON.stringify([
-					{
-						message_data: JSON.stringify({
-							role: "assistant",
-							time: {},
-						}),
-						gate_data: null,
-					},
-				]),
-			);
+			const attentionRead = vi
+				.spyOn(OpenCodeSessionProvider.prototype, "readAttention")
+				.mockReturnValue({
+					status: "working",
+					evidence: "opencode.assistant.working",
+				});
 
 			// Simulate the 3 independent consumers reading this agent within the
 			// same logical tick.
@@ -491,7 +517,7 @@ describe("AgentManager", () => {
 			const fromSidebarRender = manager.getAgents(feature.id);
 			const fromSessionBinderLikeRead = manager.getAgents(feature.id);
 
-			expect(mockExecSync).toHaveBeenCalledTimes(1);
+			expect(attentionRead).toHaveBeenCalledTimes(1);
 			for (const agents of [
 				fromReconcilePresence,
 				fromSidebarRender,
@@ -499,6 +525,7 @@ describe("AgentManager", () => {
 			]) {
 				expect(agents[0]?.attentionStatus).toBe("working");
 			}
+			attentionRead.mockRestore();
 		});
 	});
 });

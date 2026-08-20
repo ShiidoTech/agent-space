@@ -62,7 +62,7 @@ function context(
 	return {
 		project: { id: "p1", name: "Project", repoPath: "/repo" },
 		gitClient: {
-			readSync: (args: readonly string[]) =>
+			read: (args: readonly string[]) =>
 				args[0] === "symbolic-ref"
 					? gitResult("feat/f1\n")
 					: gitResult(worktreeOutput),
@@ -80,7 +80,7 @@ function context(
 }
 
 describe("Feature Finish", () => {
-	it("assesses deletion against the positively linked active checkout", () => {
+	it("assesses deletion against the positively linked active checkout", async () => {
 		const continued: Feature = {
 			...feature(),
 			branch: "feat/feature_cockpit",
@@ -102,7 +102,7 @@ describe("Feature Finish", () => {
 		};
 		const deletion = vi
 			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
-			.mockReturnValue({
+			.mockResolvedValue({
 				worktreePath: "/worktrees/f1",
 				safe: true,
 				forceable: true,
@@ -121,12 +121,12 @@ describe("Feature Finish", () => {
 				reasons: [],
 			});
 		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
-		ctx.gitClient.readSync = (args: readonly string[]) =>
+		ctx.gitClient.read = async (args: readonly string[]) =>
 			args[0] === "symbolic-ref"
 				? gitResult("feat/feature_cockpit\n")
 				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
 
-		const assessment = assessFeatureFinish(ctx, continued, finishEvidence());
+		const assessment = await assessFeatureFinish(ctx, continued, finishEvidence());
 
 		expect(assessment.checks[0]).toMatchObject({
 			kind: "feature",
@@ -137,7 +137,7 @@ describe("Feature Finish", () => {
 		);
 	});
 
-	it("keeps the declared branch when legacy links do not list it", () => {
+	it("keeps the declared branch when legacy links do not list it", async () => {
 		const legacyLinks: Feature = {
 			...feature(),
 			branchLinks: [
@@ -151,7 +151,7 @@ describe("Feature Finish", () => {
 		};
 		const deletion = vi
 			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
-			.mockReturnValue({
+			.mockResolvedValue({
 				worktreePath: "/worktrees/f1",
 				safe: true,
 				forceable: true,
@@ -171,14 +171,14 @@ describe("Feature Finish", () => {
 			});
 		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
 
-		assessFeatureFinish(ctx, legacyLinks, finishEvidence());
+		await assessFeatureFinish(ctx, legacyLinks, finishEvidence());
 
 		expect(deletion).toHaveBeenCalledWith(
 			expect.objectContaining({ branch: "feat/f1" }),
 		);
 	});
 
-	it("uses an active registered checkout even when persisted links are stale", () => {
+	it("uses an active registered checkout even when persisted links are stale", async () => {
 		const stale: Feature = {
 			...feature(),
 			branch: "feat/old-player",
@@ -193,7 +193,7 @@ describe("Feature Finish", () => {
 		};
 		const deletion = vi
 			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
-			.mockReturnValue({
+			.mockResolvedValue({
 				worktreePath: "/worktrees/f1",
 				safe: true,
 				forceable: true,
@@ -212,12 +212,12 @@ describe("Feature Finish", () => {
 				reasons: [],
 			});
 		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
-		ctx.gitClient.readSync = (args: readonly string[]) =>
+		ctx.gitClient.read = async (args: readonly string[]) =>
 			args[0] === "symbolic-ref"
 				? gitResult("feat/current-player\n")
 				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
 
-		const assessment = assessFeatureFinish(ctx, stale, finishEvidence());
+		const assessment = await assessFeatureFinish(ctx, stale, finishEvidence());
 
 		expect(assessment.safe).toBe(true);
 		expect(deletion).toHaveBeenCalledWith(
@@ -225,10 +225,10 @@ describe("Feature Finish", () => {
 		);
 	});
 
-	it("uses the branch recorded in the Git worktree inventory when symbolic-ref fails", () => {
+	it("uses the branch recorded in the Git worktree inventory when symbolic-ref fails", async () => {
 		const deletion = vi
 			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
-			.mockReturnValue({
+			.mockResolvedValue({
 				worktreePath: "/worktrees/f1",
 				safe: true,
 				forceable: true,
@@ -249,14 +249,14 @@ describe("Feature Finish", () => {
 		const ctx = context(
 			"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
 		);
-		ctx.gitClient.readSync = (args: readonly string[]) =>
+		ctx.gitClient.read = async (args: readonly string[]) =>
 			args[0] === "symbolic-ref"
 				? { ...gitResult(""), exitCode: 1 }
 				: gitResult(
 						"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
 					);
 
-		const assessment = assessFeatureFinish(ctx, feature(), finishEvidence());
+		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
 
 		expect(assessment.safe).toBe(true);
 		expect(deletion).toHaveBeenCalledWith(
@@ -264,10 +264,10 @@ describe("Feature Finish", () => {
 		);
 	});
 
-	it("uses the declared branch when symbolic-ref has a non-detached read failure", () => {
+	it("uses the declared branch when symbolic-ref has a non-detached read failure", async () => {
 		const deletion = vi
 			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
-			.mockReturnValue({
+			.mockResolvedValue({
 				worktreePath: "/worktrees/f1",
 				safe: true,
 				forceable: true,
@@ -286,12 +286,12 @@ describe("Feature Finish", () => {
 				reasons: [],
 			});
 		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
-		ctx.gitClient.readSync = (args: readonly string[]) =>
+		ctx.gitClient.read = async (args: readonly string[]) =>
 			args[0] === "symbolic-ref"
 				? { ...gitResult(""), exitCode: null, error: new Error("timeout") }
 				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
 
-		const assessment = assessFeatureFinish(ctx, feature(), finishEvidence());
+		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
 
 		expect(assessment.safe).toBe(true);
 		expect(deletion).toHaveBeenCalledWith(
@@ -299,7 +299,7 @@ describe("Feature Finish", () => {
 		);
 	});
 
-	it("resumes after earlier worktrees were removed while records were preserved", () => {
+	it("resumes after earlier worktrees were removed while records were preserved", async () => {
 		const agents = [agent("a1"), agent("a2")];
 		const readSync = vi.fn(
 			(args: readonly string[], options?: { readonly cwd?: string }) => {
@@ -311,7 +311,7 @@ describe("Feature Finish", () => {
 				);
 			},
 		);
-		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue({
 			worktreePath: "/worktrees/a2",
 			safe: true,
 			forceable: true,
@@ -329,7 +329,7 @@ describe("Feature Finish", () => {
 			baseSha: "2".repeat(40),
 			reasons: [],
 		});
-		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockResolvedValue({
 			branch: "feat/f1",
 			baseBranch: "main",
 			refsObserved: true,
@@ -346,7 +346,7 @@ describe("Feature Finish", () => {
 		});
 		const ctx = {
 			project: { id: "p1", name: "Project", repoPath: "/repo" },
-			gitClient: { readSync },
+			gitClient: { read: readSync },
 			featureManager: {
 				getBaseBranchName: () => "main",
 				getWorktreeBase: () => "/worktrees",
@@ -358,7 +358,7 @@ describe("Feature Finish", () => {
 			},
 		} as unknown as ProjectContext;
 
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			ctx,
 			feature(),
 			finishEvidence(),
@@ -373,9 +373,9 @@ describe("Feature Finish", () => {
 		]);
 	});
 
-	it("uses local branch retention proof when the Feature worktree is absent", () => {
+	it("uses local branch retention proof when the Feature worktree is absent", async () => {
 		const ctx = context("worktree /repo\n");
-		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockResolvedValue({
 			branch: "feature/player",
 			baseBranch: "v2_ia_first",
 			refsObserved: true,
@@ -391,7 +391,7 @@ describe("Feature Finish", () => {
 			reasons: [],
 		});
 
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			ctx,
 			feature(),
 			{
@@ -408,19 +408,22 @@ describe("Feature Finish", () => {
 		expect(assessment.checks[0].disposition).toBe("already_removed");
 	});
 
-	it("maps a worktree-style Feature name to its real feature branch ref", () => {
+	it("maps a worktree-style Feature name to its real feature branch ref", async () => {
 		const ctx = context("worktree /repo\n");
-		const readSync = vi.fn((args: readonly string[]) => {
-			if (args[0] === "for-each-ref") return gitResult("feature/player\n");
-			return gitResult("worktree /repo\n");
-		});
-		ctx.gitClient.readSync = readSync;
+		const readSync = vi.fn(
+			(args: readonly string[], _options?: { readonly cwd?: string }) => {
+				if (args[0] === "for-each-ref") return gitResult("feature/player\n");
+				return gitResult("worktree /repo\n");
+			},
+		);
+		ctx.gitClient.read = async (args: readonly string[], options?: { readonly cwd?: string }) =>
+			readSync(args, options);
 		const named = {
 			...feature(),
 			name: "feature-player",
 			branch: "feature-player",
 		};
-		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockResolvedValue({
 			branch: "feature/player",
 			baseBranch: "v2_ia_first",
 			refsObserved: true,
@@ -436,7 +439,7 @@ describe("Feature Finish", () => {
 			reasons: [],
 		});
 
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			ctx,
 			named,
 			{
@@ -456,8 +459,8 @@ describe("Feature Finish", () => {
 		);
 	});
 
-	it("surfaces unique commits on an already absent worktree", () => {
-		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+	it("surfaces unique commits on an already absent worktree", async () => {
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockResolvedValue({
 			branch: "feat/f1",
 			baseBranch: "main",
 			refsObserved: true,
@@ -474,7 +477,7 @@ describe("Feature Finish", () => {
 		});
 		const ctx = {
 			project: { id: "p1", name: "Project", repoPath: "/repo" },
-			gitClient: { readSync: () => gitResult("worktree /repo\n") },
+			gitClient: { read: () => gitResult("worktree /repo\n") },
 			featureManager: {
 				getBaseBranchName: () => "main",
 				getWorktreeBase: () => "/worktrees",
@@ -482,7 +485,7 @@ describe("Feature Finish", () => {
 			agentManager: { getAgents: () => [] },
 		} as unknown as ProjectContext;
 
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			ctx,
 			feature(),
 			finishEvidence(),
@@ -494,8 +497,8 @@ describe("Feature Finish", () => {
 		expect(assessment.reasons.join("\n")).toContain("2 commits");
 	});
 
-	it("blocks an absent worktree when its branch cannot be proven", () => {
-		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockReturnValue({
+	it("blocks an absent worktree when its branch cannot be proven", async () => {
+		vi.spyOn(worktreeSafety, "checkBranchRetentionSafety").mockResolvedValue({
 			branch: "feat/f1",
 			baseBranch: "main",
 			refsObserved: false,
@@ -509,7 +512,7 @@ describe("Feature Finish", () => {
 		});
 		const ctx = {
 			project: { id: "p1", name: "Project", repoPath: "/repo" },
-			gitClient: { readSync: () => gitResult("worktree /repo\n") },
+			gitClient: { read: () => gitResult("worktree /repo\n") },
 			featureManager: {
 				getBaseBranchName: () => "main",
 				getWorktreeBase: () => "/worktrees",
@@ -517,7 +520,7 @@ describe("Feature Finish", () => {
 			agentManager: { getAgents: () => [] },
 		} as unknown as ProjectContext;
 
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			ctx,
 			feature(),
 			finishEvidence(),
@@ -529,10 +532,10 @@ describe("Feature Finish", () => {
 		expect(assessment.reasons.join("\n")).toContain("Could not resolve");
 	});
 
-	it("blocks an unregistered path that still has files instead of hiding residue", () => {
+	it("blocks an unregistered path that still has files instead of hiding residue", async () => {
 		const ctx = {
 			project: { id: "p1", name: "Project", repoPath: "/repo" },
-			gitClient: { readSync: () => gitResult("worktree /repo\n") },
+			gitClient: { read: () => gitResult("worktree /repo\n") },
 			featureManager: {
 				getBaseBranchName: () => "main",
 				getWorktreeBase: () => "/worktrees",
@@ -540,7 +543,7 @@ describe("Feature Finish", () => {
 			agentManager: { getAgents: () => [] },
 		} as unknown as ProjectContext;
 
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			ctx,
 			feature(),
 			finishEvidence(),
@@ -553,9 +556,9 @@ describe("Feature Finish", () => {
 		expect(assessment.reasons.join("\n")).toContain("files remain on disk");
 	});
 
-	it("accepts an exact merged PR as integration proof for a clean squash-merged Feature", () => {
+	it("accepts an exact merged PR as integration proof for a clean squash-merged Feature", async () => {
 		const headSha = "1".repeat(40);
-		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue({
 			worktreePath: "/worktrees/f1",
 			safe: false,
 			forceable: true,
@@ -595,7 +598,7 @@ describe("Feature Finish", () => {
 			},
 		};
 
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			context("worktree /repo\n\nworktree /worktrees/f1\n"),
 			feature(),
 			finishEvidence(integration),
@@ -616,8 +619,8 @@ describe("Feature Finish", () => {
 		]);
 	});
 
-	it("keeps post-integration work explicit and forceable", () => {
-		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+	it("keeps post-integration work explicit and forceable", async () => {
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue({
 			worktreePath: "/worktrees/f1",
 			safe: false,
 			forceable: true,
@@ -635,7 +638,7 @@ describe("Feature Finish", () => {
 			baseSha: "3".repeat(40),
 			reasons: ["Branch feat/f1 has 2 commits not in main."],
 		});
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			context("worktree /repo\n\nworktree /worktrees/f1\n"),
 			feature(),
 			finishEvidence({
@@ -652,8 +655,8 @@ describe("Feature Finish", () => {
 		expect(assessment.reasons.join("\n")).toContain("2 commits");
 	});
 
-	it("keeps unknown GitHub evidence forceable when the worktree deletion is forceable", () => {
-		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+	it("keeps unknown GitHub evidence forceable when the worktree deletion is forceable", async () => {
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue({
 			worktreePath: "/worktrees/f1",
 			safe: false,
 			forceable: true,
@@ -671,7 +674,7 @@ describe("Feature Finish", () => {
 			baseSha: "2".repeat(40),
 			reasons: ["Branch feat/f1 is not an ancestor of main."],
 		});
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			context("worktree /repo\n\nworktree /worktrees/f1\n"),
 			feature(),
 			finishEvidence({
@@ -687,8 +690,8 @@ describe("Feature Finish", () => {
 		expect(assessment.reasons.join("\n")).toContain("GitHub unavailable");
 	});
 
-	it("fails closed when GitHub evidence is unknown and deletion is not forceable", () => {
-		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockReturnValue({
+	it("fails closed when GitHub evidence is unknown and deletion is not forceable", async () => {
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue({
 			worktreePath: "/worktrees/f1",
 			safe: false,
 			forceable: false,
@@ -706,7 +709,7 @@ describe("Feature Finish", () => {
 			baseSha: "2".repeat(40),
 			reasons: ["Branch feat/f1 is not an ancestor of main."],
 		});
-		const assessment = assessFeatureFinish(
+		const assessment = await assessFeatureFinish(
 			context("worktree /repo\n\nworktree /worktrees/f1\n"),
 			feature(),
 			finishEvidence({
@@ -729,7 +732,7 @@ describe("Feature Finish", () => {
 		});
 	});
 
-	it("plans force independently for a risky Feature and a clean agent", () => {
+	it("plans force independently for a risky Feature and a clean agent", async () => {
 		const risky = {
 			worktreePath: "/worktrees/f1",
 			safe: false,
@@ -757,9 +760,9 @@ describe("Feature Finish", () => {
 			reasons: [],
 		};
 		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
-			.mockReturnValueOnce(risky)
-			.mockReturnValueOnce(clean);
-		const assessment = assessFeatureFinish(
+			.mockResolvedValueOnce(risky)
+			.mockResolvedValueOnce(clean);
+		const assessment = await assessFeatureFinish(
 			context(
 				"worktree /repo\n\nworktree /worktrees/f1\n\nworktree /worktrees/a1\n",
 				[agent("a1")],
@@ -783,7 +786,7 @@ describe("Feature Finish", () => {
 		]);
 	});
 
-	it("requires positive proof that every tracked session stopped", () => {
+	it("requires positive proof that every tracked session stopped", async () => {
 		const sessions = new Set(["agent-space-f1-a1"]);
 		expect(
 			verifySessionsStopped(sessions, {
