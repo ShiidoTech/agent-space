@@ -53,6 +53,30 @@ export interface ProjectConfig {
 	};
 }
 
+/**
+ * Detailed settings template shown in the project Settings page so every
+ * editable key is discoverable and changeable straight from JSON, even when no
+ * `.agentspace/config.json` exists yet. Values are examples: nothing is written
+ * unless the user edits and saves the JSON.
+ */
+export function projectConfigTemplate(): ProjectConfig {
+	return {
+		baseBranch: "main",
+		branchKinds: ["feature", "fix"],
+		defaultBranchKind: "feature",
+		worktreesDir: "~/.worktrees",
+		bootstrapCommands: ["npm install", "npm run dev"],
+		agents: {
+			enabled: ["claude", "codex"],
+			default: "claude",
+		},
+		knowledge: {
+			instructions: ["AGENTS.md"],
+			runbooks: ["docs/runbooks.md"],
+		},
+	};
+}
+
 export interface ProjectAgentPolicy {
 	enabledIds?: string[];
 	defaultId?: string;

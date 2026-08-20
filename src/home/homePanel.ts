@@ -16,6 +16,7 @@ import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
+import { projectConfigTemplate } from "../projects/projectConfig";
 import type { GlobalStore } from "../storage/globalStore";
 import type { Agent, Feature, Service } from "../types";
 
@@ -1648,10 +1649,10 @@ export class HomePanel {
 				</div>
 				<button class="quick-action-btn" onclick="editProjectBaseBranch('${projectId}')">Edit base branch</button>
 				<div class="section-label project-config-label">.agentspace/config.json</div>
-				<textarea class="project-config-editor" id="project-config-${projectId}">${this.escapeHtml(JSON.stringify(context.config, null, 2))}</textarea>
+				<textarea class="project-config-editor" id="project-config-${projectId}">${this.escapeHtml(this.projectConfigEditorContent(context.config))}</textarea>
 				<div class="project-config-actions">
 					<button class="quick-action-btn primary" onclick="saveProjectConfig('${projectId}')">Save configuration</button>
-					<span class="project-config-help">Shared project settings only; machine-local overlays stay separate.</span>
+					<span class="project-config-help">Edit the JSON to change settings such as the base branch. Shared project settings only; machine-local overlays stay separate.</span>
 				</div>
 			</div>`;
 		const projectPageContent = settings
@@ -1741,6 +1742,19 @@ export class HomePanel {
 		return `
 			${snapshot.runtime.agents.status === "known" ? this.renderAgentsSection(activeAgents, erroredAgents, doneAgents, stoppedAgents, agents, feature) : '<div class="activity-empty">Agent runtime unavailable</div>'}
 			${snapshot.runtime.services.status === "known" ? this.renderServicesSection(services, feature) : '<div class="activity-empty">Service runtime unavailable</div>'}`;
+	}
+
+	/**
+	 * Content of the settings JSON editor: the effective config when anything
+	 * is configured, otherwise a detailed template listing every editable key so
+	 * settings such as the base branch are discoverable and changeable even
+	 * before any `.agentspace/config.json` exists.
+	 */
+	private projectConfigEditorContent(config: ProjectContext["config"]): string {
+		if (Object.keys(config).length > 0) {
+			return JSON.stringify(config, null, 2);
+		}
+		return JSON.stringify(projectConfigTemplate(), null, 2);
 	}
 
 	private saveProjectConfig(projectId: string, content: string): void {
