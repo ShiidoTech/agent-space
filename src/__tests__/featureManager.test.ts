@@ -165,7 +165,9 @@ describe("FeatureManager", () => {
 			const ready = await asyncManager.provisionFeature(feature.id);
 
 			expect(ready?.provisioning?.state).toBe("ready");
-			expect(ready?.reusedExistingBranch).toEqual({ behind: 3 });
+			expect(ready?.reusedExistingBranch).toEqual({
+				relation: { status: "behind", ahead: 0, behind: 3 },
+			});
 			expect(ready?.createdFromSha).toBeUndefined();
 			expect(ready?.provisioning?.steps[1].label).toBe(
 				"Reusing existing branch feat/reuse-branch (3 commits behind main)",
@@ -209,7 +211,9 @@ describe("FeatureManager", () => {
 			const feature = asyncManager.createFeatureRecord("reuse-fresh", "shared");
 			const ready = await asyncManager.provisionFeature(feature.id);
 
-			expect(ready?.reusedExistingBranch).toEqual({ behind: 0 });
+			expect(ready?.reusedExistingBranch).toEqual({
+				relation: { status: "current", ahead: 0, behind: 0 },
+			});
 			expect(ready?.provisioning?.steps[1].label).toBe(
 				"Reusing existing branch feat/reuse-fresh",
 			);
@@ -221,16 +225,51 @@ describe("FeatureManager", () => {
 			);
 		});
 
+		it.each([
+			["ahead-only", "2 0", { status: "ahead", ahead: 2, behind: 0 }, "2 commits ahead"],
+			["diverged", "2 3", { status: "diverged", ahead: 2, behind: 3 }, "2 commits ahead, 3 behind"],
+		] as const)("exposes the complete %s relation", async (_name, counts, relation, label) => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				args: readonly string[],
+				_options: unknown,
+				callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+			) => {
+				if (args[0] === "rev-parse" && args[1] === "--verify") {
+					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
+					return;
+				}
+				if (args[0] === "rev-list") {
+					callback(null, { stdout: `${counts}\n`, stderr: "" });
+					return;
+				}
+				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord(`reuse-${_name}`, "shared");
+			const ready = await asyncManager.provisionFeature(feature.id);
+			expect(ready?.reusedExistingBranch).toEqual({ relation });
+			expect(ready?.provisioning?.steps[1].label).toContain(label);
+		});
+
 		it("reuses an existing branch synchronously with a behind warning label", () => {
 			mockExecSync.mockImplementation((command: string) => {
 				const value = String(command);
 				if (value.includes("rev-parse --verify")) return `${featureSha}\n`;
-				if (value.includes("rev-list --count")) return "2\n";
+				if (value.includes("rev-list") && value.includes("--count")) return "2\n";
 				return "";
 			});
 			const feature = manager.createFeature("reuse-sync", "shared");
 
-			expect(feature.reusedExistingBranch).toEqual({ behind: 2 });
+			expect(feature.reusedExistingBranch).toEqual({
+			relation: { status: "behind", ahead: 0, behind: 2 },
+		});
 			expect(feature.createdFromSha).toBeUndefined();
 			expect(feature.provisioning?.steps[1].label).toBe(
 				"Reusing existing branch feat/reuse-sync (2 commits behind main)",

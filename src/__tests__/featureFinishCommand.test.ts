@@ -360,6 +360,7 @@ describe("runFeatureFinish command flow", () => {
 		);
 		expect(openTerminal).toHaveBeenCalledWith("sudo rm -rf '/repo/.worktrees/f1'");
 		expect(copy).not.toHaveBeenCalled();
+		expect(errorMessage).toHaveBeenCalledTimes(1);
 		expect(forget).not.toHaveBeenCalled();
 	});
 
@@ -421,6 +422,7 @@ describe("runFeatureFinish command flow", () => {
 		expect(outcome.status).toBe("blocked");
 		expect(copy).toHaveBeenCalledWith("sudo rm -rf '/repo/.worktrees/f1'");
 		expect(openTerminal).not.toHaveBeenCalled();
+		expect(errorMessage).toHaveBeenCalledTimes(1);
 	});
 
 	it("cancels cleanly when the user does not confirm and does not touch metadata", async () => {

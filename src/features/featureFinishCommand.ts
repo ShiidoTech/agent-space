@@ -201,10 +201,11 @@ export async function runFeatureFinish(
 							const action = await ui.showErrorMessage(message, ...actions);
 							if (action === "Run command in terminal" && suggestedCommand) {
 								deps.openTerminalWithCommand?.(suggestedCommand);
-							} else if (action === "Copy command" && suggestedCommand) {
-								void ui.copyToClipboard?.(suggestedCommand);
-							}
-						}
+												} else if (action === "Copy command" && suggestedCommand) {
+													void ui.copyToClipboard?.(suggestedCommand);
+												}
+												return { status: "blocked", message };
+										}
 						}
 					}
 					const message = `Cannot finish "${feature.name}" because safety is unknown:\n\n${assessment.reasons.join("\n\n")}\n\nNo worktree, session or metadata was removed.`;
