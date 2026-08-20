@@ -303,6 +303,40 @@ describe("Feature Finish", () => {
 		);
 	});
 
+	it("keeps the branch unknown when the declared ref SHA differs from HEAD", async () => {
+		const deletion = vi
+			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")
+			.mockResolvedValue({
+				worktreePath: "/worktrees/f1",
+				safe: false,
+				forceable: false,
+				insideBase: true,
+				statusObserved: true,
+				refsObserved: false,
+				integrationObserved: false,
+				localCommitsObserved: false,
+				dirty: false,
+				hasLocalCommits: false,
+				unmerged: false,
+				reasons: ["branch unknown"],
+			});
+		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
+		ctx.gitClient.read = async (args: readonly string[], options?: { readonly cwd?: string }) => {
+			if (args[0] === "symbolic-ref" || args[0] === "branch") return gitResult("");
+			if (args[0] === "rev-parse") {
+				return gitResult(options?.cwd === "/worktrees/f1" ? `${"3".repeat(40)}\n` : `${"4".repeat(40)}\n`);
+			}
+			return gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
+		};
+
+		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
+
+		expect(assessment.safe).toBe(false);
+		expect(deletion).toHaveBeenCalledWith(
+			expect.objectContaining({ branch: undefined }),
+		);
+	});
+
 	it("uses the declared branch when symbolic-ref has a non-detached read failure", async () => {
 		const deletion = vi
 			.spyOn(worktreeSafety, "checkWorktreeDeletionSafety")

@@ -244,8 +244,13 @@ async function observeRegisteredBranch(
 		["symbolic-ref", "--quiet", "--short", "HEAD"],
 		{ cwd: worktreePath },
 	);
-	if (symbolic.exitCode === 0 && !symbolic.error) {
-		return symbolic.stdout.trim() || undefined;
+	const symbolicBranch = symbolic.stdout.trim();
+	if (
+		symbolic.exitCode === 0 &&
+		!symbolic.error &&
+		isSafeBranchName(symbolicBranch)
+	) {
+		return symbolicBranch;
 	}
 	const current = await ctx.gitClient.read(["branch", "--show-current"], {
 		cwd: worktreePath,
@@ -445,6 +450,13 @@ export function parseRegisteredWorktreeBranches(
 		}
 	}
 	return branches;
+}
+
+function isSafeBranchName(value: string): boolean {
+	return (
+		/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value) &&
+		!value.includes("..")
+	);
 }
 
 export type SessionStopVerification =
