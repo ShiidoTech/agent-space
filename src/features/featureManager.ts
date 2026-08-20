@@ -773,12 +773,19 @@ export class FeatureManager {
 			// Ref not found: a new branch will be created.
 		}
 		if (branchExists) {
-			const relationResult = await execFileAsync(
-				"git",
-				["rev-list", "--left-right", "--count", `${expectedBranch}...${baseBranch}`],
-				{ cwd: this.repoRoot, encoding: "utf8" },
-			);
-			relation = parseReusedBranchRelation(String(relationResult.stdout));
+			try {
+				const relationResult = await execFileAsync(
+					"git",
+					["rev-list", "--left-right", "--count", `${expectedBranch}...${baseBranch}`],
+					{ cwd: this.repoRoot, encoding: "utf8" },
+				);
+				relation = parseReusedBranchRelation(String(relationResult.stdout));
+			} catch (error) {
+				relation = {
+					status: "unknown",
+					reason: error instanceof Error ? error.message : String(error),
+				};
+			}
 		}
 		const afterBase = this.getProvisioningFeature(
 			id,
@@ -985,11 +992,8 @@ export class FeatureManager {
 	 * any destructive step.
 	 */
 	async getDeletionSafety(feature: Feature) {
-		const branches = this.reconcileFeatureBranches(feature);
-		const checkedOutBranch =
-			branches.checkout.status === "known"
-				? branches.checkout.ref
-				: undefined;
+		const branches = await this.reconcileFeatureBranchesAsync(feature);
+		const checkedOutBranch = await this.resolveDeletionBranch(feature, branches);
 		return checkWorktreeDeletionSafety({
 			repoRoot: this.repoRoot,
 			worktreeBase: this.worktreeBase,
@@ -997,6 +1001,228 @@ export class FeatureManager {
 			branch: checkedOutBranch,
 			baseBranch: this.getBaseBranch(),
 		});
+	}
+
+	/** Async-only branch reconciliation for the finish/delete critical path. */
+	private async reconcileFeatureBranchesAsync(
+		feature: Feature,
+	): Promise<FeatureBranchState> {
+		const checkout = await this.observeFeatureCheckoutAsync(feature);
+		let changed = false;
+		const hadLinks = Array.isArray(feature.branchLinks);
+
+		if (!hadLinks) {
+			const recovered = await this.recoverLegacyPrimaryAsync(feature, checkout);
+			if (recovered) {
+				feature.primaryBranchRef = recovered.primary;
+				feature.branchLinks = [
+					this.branchLink(recovered.primary, "primary", "reflog_checkout"),
+					this.branchLink(
+						recovered.continuation,
+						"continuation",
+						"reflog_checkout",
+						recovered.primary,
+					),
+				];
+				changed = true;
+			} else {
+				feature.primaryBranchRef = feature.branch;
+				feature.branchLinks = [
+					this.branchLink(feature.branch, "primary", "legacy_record"),
+				];
+				changed = true;
+			}
+		}
+
+		const links = feature.branchLinks ?? [];
+		const linkedPrimary = links.find((link) => link.role === "primary")?.ref;
+		if (!feature.primaryBranchRef) {
+			feature.primaryBranchRef = linkedPrimary ?? feature.branch;
+			changed = true;
+		}
+		if (!links.some((link) => link.role === "primary")) {
+			links.unshift(
+				this.branchLink(feature.primaryBranchRef, "primary", "legacy_record"),
+			);
+			changed = true;
+		}
+		let primary = feature.primaryBranchRef;
+		if (linkedPrimary && linkedPrimary !== primary) {
+			feature.primaryBranchRef = linkedPrimary;
+			primary = linkedPrimary;
+			changed = true;
+		}
+
+		if (
+			checkout.status === "known" &&
+			!links.some((link) => link.ref === checkout.ref) &&
+			(await this.isProvedContinuationAsync(feature, checkout.ref, links))
+		) {
+			links.push(
+				this.branchLink(
+					checkout.ref,
+					"continuation",
+					"reflog_checkout",
+					primary,
+				),
+			);
+			changed = true;
+		}
+		if (
+			checkout.status === "known" &&
+			links.some((link) => link.ref === checkout.ref) &&
+			feature.branch !== checkout.ref
+		) {
+			feature.branch = checkout.ref;
+			changed = true;
+		}
+
+		if (changed) this.store.saveFeatures(this.features);
+		return this.branchState(feature, checkout);
+	}
+
+	private async observeFeatureCheckoutAsync(
+		feature: Feature,
+	): Promise<FeatureBranchCheckoutObservation> {
+		const symbolic = await this.runGit(
+			["symbolic-ref", "--quiet", "--short", "HEAD"],
+			feature.worktreePath,
+		);
+		const branch = symbolic.stdout.trim();
+		if (symbolic.exitCode === 0 && !symbolic.error && branch) {
+			const link = feature.branchLinks?.find((candidate) => candidate.ref === branch);
+			return { status: "known", ref: branch, linked: Boolean(link), ...(link ? { role: link.role } : {}) };
+		}
+		const head = await this.runGit(
+			["rev-parse", "--verify", "HEAD^{commit}"],
+			feature.worktreePath,
+		);
+		const headSha = head.stdout.trim();
+		if (head.exitCode === 0 && isCommitSha(headSha)) {
+			return { status: "detached", headSha };
+		}
+		return {
+			status: "unknown",
+			reason: symbolic.error?.message ?? "The worktree branch could not be observed.",
+		};
+	}
+
+	private async recoverLegacyPrimaryAsync(
+		feature: Feature,
+		checkout: FeatureBranchCheckoutObservation,
+	): Promise<{ primary: string; continuation: string } | undefined> {
+		if (checkout.status !== "known" || checkout.ref !== feature.branch) return undefined;
+		const transition = await this.recentCheckoutIntoAsync(feature, checkout.ref);
+		if (!transition || !branchMatchesFeatureName(transition.from, feature.name) || branchMatchesFeatureName(checkout.ref, feature.name)) return undefined;
+		const previousSha = await this.resolveBranchAsync(transition.from);
+		const currentSha = await this.resolveBranchAsync(checkout.ref);
+		const previousUpstreamSha = await this.resolveUpstreamAsync(transition.from);
+		if (!previousSha || !currentSha || previousUpstreamSha !== previousSha || !(await this.isAncestorAsync(previousSha, currentSha))) return undefined;
+		return { primary: transition.from, continuation: checkout.ref };
+	}
+
+	private async isProvedContinuationAsync(
+		feature: Feature,
+		checkoutRef: string,
+		links: readonly FeatureBranchLink[],
+	): Promise<boolean> {
+		const transition = await this.recentCheckoutIntoAsync(feature, checkoutRef);
+		if (!transition || !links.some((link) => link.ref === transition.from)) return false;
+		const primary = feature.primaryBranchRef ?? links.find((link) => link.role === "primary")?.ref;
+		if (!primary) return false;
+		const primarySha = await this.resolveBranchAsync(primary);
+		const checkoutSha = await this.resolveBranchAsync(checkoutRef);
+		return Boolean(primarySha && checkoutSha && (await this.isAncestorAsync(primarySha, checkoutSha)));
+	}
+
+	private async recentCheckoutIntoAsync(
+		feature: Feature,
+		toRef: string,
+	): Promise<{ from: string; to: string } | undefined> {
+		const observed = await this.runGit(
+			["reflog", "--format=%gs", "-n", "25", "HEAD"],
+			feature.worktreePath,
+		);
+		if (observed.exitCode !== 0 || observed.error) return undefined;
+		for (const message of observed.stdout.split(/\r?\n/u)) {
+			const match = /^checkout: moving from (.+) to (.+)$/u.exec(message.trim());
+			if (!match || match[2] !== toRef || !isSafeBranchName(match[1]) || !isSafeBranchName(match[2])) continue;
+			return { from: match[1], to: match[2] };
+		}
+		return undefined;
+	}
+
+	private async resolveBranchAsync(branch: string): Promise<string | undefined> {
+		if (!isSafeBranchName(branch)) return undefined;
+		const observed = await this.runGit(
+			["rev-parse", "--verify", `refs/heads/${branch}^{commit}`],
+			this.repoRoot,
+		);
+		const sha = observed.stdout.trim();
+		return observed.exitCode === 0 && isCommitSha(sha) ? sha.toLowerCase() : undefined;
+	}
+
+	private async resolveUpstreamAsync(branch: string): Promise<string | undefined> {
+		if (!isSafeBranchName(branch)) return undefined;
+		const observed = await this.runGit(
+			["rev-parse", "--verify", `${branch}@{upstream}^{commit}`],
+			this.repoRoot,
+		);
+		const sha = observed.stdout.trim();
+		return observed.exitCode === 0 && isCommitSha(sha) ? sha.toLowerCase() : undefined;
+	}
+
+	private async isAncestorAsync(ancestorSha: string, descendantSha: string): Promise<boolean> {
+		const observed = await this.runGit(
+			["merge-base", "--is-ancestor", ancestorSha, descendantSha],
+			this.repoRoot,
+		);
+		return observed.exitCode === 0 && !observed.error;
+	}
+
+	/**
+	 * Resolve the branch used for deletion safety without trusting stale
+	 * metadata. A detached or temporarily unobservable checkout may still be
+	 * safe to assess when its HEAD exactly matches one persisted Feature ref.
+	 */
+	private async resolveDeletionBranch(
+		feature: Feature,
+		branches: FeatureBranchState,
+	): Promise<string | undefined> {
+		if (branches.checkout.status === "known") return branches.checkout.ref;
+
+		let headSha: string | undefined;
+		if (branches.checkout.status === "detached") {
+			headSha = branches.checkout.headSha;
+		} else {
+			const observed = await this.runGit(
+				["rev-parse", "--verify", "HEAD^{commit}"],
+				feature.worktreePath,
+			);
+			if (observed.exitCode === 0) headSha = observed.stdout.trim();
+		}
+		if (!headSha || !/^[0-9a-f]{40,64}$/iu.test(headSha)) return undefined;
+
+		const candidates = new Set<string>([
+			feature.branch,
+			branches.primary,
+			...(feature.branchLinks ?? []).map((link) => link.ref),
+		]);
+		const matches: string[] = [];
+		for (const candidate of candidates) {
+			const resolved = await this.runGit(
+				["rev-parse", "--verify", `${candidate}^{commit}`],
+				this.repoRoot,
+			);
+			if (
+				resolved.exitCode === 0 &&
+				resolved.stdout.trim().toLowerCase() === headSha.toLowerCase()
+			) {
+				matches.push(candidate);
+			}
+		}
+		if (matches.includes(feature.branch)) return feature.branch;
+		return matches.length === 1 ? matches[0] : undefined;
 	}
 
 	/**
@@ -1202,10 +1428,14 @@ async function hasForeignOwnedEntries(target: string): Promise<boolean> {
 function parseReusedBranchRelation(
 	stdout: string,
 ): import("../types").ReusedBranchRelation {
-	const [aheadText, behindText] = stdout.trim().split(/\s+/u);
+	const counts = stdout.trim().split(/\s+/u);
+	if (counts.length !== 2) {
+		return { status: "unknown", reason: "invalid_relation_counts" };
+	}
+	const [aheadText, behindText] = counts;
 	const ahead = Number(aheadText);
-	const behind = behindText === undefined ? ahead : Number(behindText);
-	const normalizedAhead = behindText === undefined ? 0 : ahead;
+	const behind = Number(behindText);
+	const normalizedAhead = ahead;
 	if (
 		!Number.isSafeInteger(normalizedAhead) ||
 		normalizedAhead < 0 ||

@@ -56,8 +56,8 @@ describe("Feature lifecycle: create renders locally, finish reassesses with cach
 		expect(ready?.provisioning?.state).toBe("ready");
 		expect(require("node:fs").existsSync(feature.worktreePath)).toBe(true);
 
-		// The re-assessment used by Finish after my change is local-only: it
-		// re-reads worktree safety synchronously and never requires a network
+		// The re-assessment used by Finish after the change is local-only: it
+		// re-reads worktree safety asynchronously and never requires a network
 		// reconcile. A clean just-created worktree must be `safe`.
 		const { assessFeatureFinish } = await import("../features/featureFinish");
 		const { GitClient } = await import("../git/gitClient");
@@ -141,5 +141,40 @@ describe("Feature lifecycle: create renders locally, finish reassesses with cach
 		expect(git(feature.worktreePath, "rev-parse", "--abbrev-ref", "HEAD")).toBe(
 			"feat/pre-existing",
 		);
+	});
+
+	it.each([
+		["ahead", { ahead: 1, behind: 0 }],
+		["diverged", { ahead: 1, behind: 1 }],
+	] as const)("reports a real-git %s reused-branch relation", async (kind, relation) => {
+		const { repo, worktrees } = repository();
+		const branch = `feat/${kind}-branch`;
+		git(repo, "branch", branch);
+		if (kind === "diverged") {
+			git(repo, "commit", "--allow-empty", "-m", "advance main");
+			git(repo, "switch", branch);
+			git(repo, "commit", "--allow-empty", "-m", "advance feature");
+			git(repo, "switch", "main");
+		} else {
+			git(repo, "switch", branch);
+			git(repo, "commit", "--allow-empty", "-m", "advance feature");
+			git(repo, "switch", "main");
+		}
+
+		const { FeatureManager } = await import("../features/featureManager");
+		const { Store } = await import("../storage/store");
+		const manager = new FeatureManager(
+			new Store(path.join(path.dirname(repo), `store-${kind}`)),
+			repo,
+			worktrees,
+			{},
+		);
+		const feature = manager.createFeatureRecord(`${kind}-branch`, "shared");
+		const ready = await manager.provisionFeature(feature.id);
+
+		expect(ready?.reusedExistingBranch?.relation).toEqual({
+			status: kind,
+			...relation,
+		});
 	});
 });

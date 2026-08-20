@@ -63,6 +63,7 @@ describe("FeatureManager", () => {
 			if (argv[0] === "status") return { stdout: "" };
 			if (argv[0] === "rev-parse") {
 				const ref = argv[2] ?? "";
+				if (ref.includes("HEAD^{commit}")) return { stdout: featureSha };
 				if (ref.includes(`${activeBranch}^{commit}`)) return { stdout: featureSha };
 				if (ref.includes("^{commit}")) return { stdout: baseSha };
 				return {};
@@ -87,6 +88,7 @@ describe("FeatureManager", () => {
 			if (argv[0] === "status") return { stdout: "" };
 			if (argv[0] === "rev-parse") {
 				const ref = argv[2] ?? "";
+				if (ref.includes("HEAD^{commit}")) return { stdout: featureSha };
 				if (ref.includes(`${activeBranch}^{commit}`)) return { stdout: featureSha };
 				if (ref.includes("^{commit}")) return { stdout: baseSha };
 				return {};
@@ -196,7 +198,7 @@ describe("FeatureManager", () => {
 					return;
 				}
 				if (args[0] === "rev-list") {
-					callback(null, { stdout: "3\n", stderr: "" });
+					callback(null, { stdout: "0 3\n", stderr: "" });
 					return;
 				}
 				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
@@ -246,7 +248,7 @@ describe("FeatureManager", () => {
 					return;
 				}
 				if (args[0] === "rev-list") {
-					callback(null, { stdout: "0\n", stderr: "" });
+					callback(null, { stdout: "0 0\n", stderr: "" });
 					return;
 				}
 				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
@@ -267,6 +269,39 @@ describe("FeatureManager", () => {
 				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
 				expect.any(Function),
 			);
+		});
+
+		it("records an unknown relation when the two-count Git output is malformed", async () => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				args: readonly string[],
+				_options: unknown,
+				callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+			) => {
+				if (args[0] === "rev-parse" && args[1] === "--verify") {
+					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
+					return;
+				}
+				if (args[0] === "rev-list") {
+					callback(null, { stdout: "3\n", stderr: "" });
+					return;
+				}
+				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord("malformed-relation", "shared");
+			const ready = await asyncManager.provisionFeature(feature.id);
+
+			expect(ready?.reusedExistingBranch?.relation).toEqual({
+				status: "unknown",
+				reason: "invalid_relation_counts",
+			});
 		});
 
 		it.each([
@@ -306,7 +341,7 @@ describe("FeatureManager", () => {
 			mockExecSync.mockImplementation((command: string) => {
 				const value = String(command);
 				if (value.includes("rev-parse --verify")) return `${featureSha}\n`;
-				if (value.includes("rev-list") && value.includes("--count")) return "2\n";
+				if (value.includes("rev-list") && value.includes("--count")) return "0 2\n";
 				return "";
 			});
 			const feature = manager.createFeature("reuse-sync", "shared");
