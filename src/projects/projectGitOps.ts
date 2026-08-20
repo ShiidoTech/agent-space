@@ -337,15 +337,16 @@ export async function assessWorktreeBranchDeletion(
 			reasons: ["The main working tree cannot be removed as a worktree."],
 		};
 	}
-	if (!isWorktreePathSafe(worktreePath, worktreeBase)) {
-		return {
-			deletable: false,
-			reasons: [`Refusing to remove worktree outside base: ${worktreePath}`],
-		};
-	}
+	const insideBase = isWorktreePathSafe(worktreePath, worktreeBase);
 
 	const presence = await checkPathPresence(worktreePath);
 	if (!presence.present) {
+		if (!insideBase) {
+			return {
+				deletable: false,
+				reasons: [`Refusing to remove worktree outside base: ${worktreePath}`],
+			};
+		}
 		if (presence.confirmedAbsent) {
 			if (baseBranch) {
 				// The worktree is already gone (pruned residue): only the branch
@@ -389,6 +390,12 @@ export async function assessWorktreeBranchDeletion(
 		};
 	}
 	if (pairing.status === "mismatch") {
+		if (!insideBase) {
+			return {
+				deletable: false,
+				reasons: [`Refusing to remove worktree outside base: ${worktreePath}`],
+			};
+		}
 		return {
 			deletable: false,
 			reasons: [
@@ -403,6 +410,7 @@ export async function assessWorktreeBranchDeletion(
 		worktreePath,
 		branch: branchRef,
 		baseBranch,
+		...(insideBase ? {} : { allowRegisteredOutsideBase: true }),
 	});
 	return { deletable: safety.safe, reasons: safety.reasons };
 }

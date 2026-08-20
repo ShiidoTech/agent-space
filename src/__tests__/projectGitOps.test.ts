@@ -397,6 +397,29 @@ describe("deleteWorktreeBranch", () => {
 		).toContain("outside base");
 	});
 
+	it("removes a registered legacy worktree outside the configured base", async () => {
+		const legacyPath = "/repo/.claude/worktrees/agent-aa48af65c1b8c79fd";
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence("", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		const git = readerOk(legacyPath, "fix/69-instant-agent-switching");
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: legacyPath,
+			branchRef: "fix/69-instant-agent-switching",
+			baseBranch: "main",
+		});
+		expect(outcome).toEqual({
+			status: "deleted",
+			branch: "fix/69-instant-agent-switching",
+		});
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "list", "--porcelain"],
+			["worktree", "remove", legacyPath],
+			["branch", "-d", "fix/69-instant-agent-switching"],
+		]);
+	});
+
 	it("removes the worktree and deletes the branch when safe", async () => {
 		statMock.mockResolvedValue({} as never);
 		mockGitSequence("", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
