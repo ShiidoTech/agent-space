@@ -166,12 +166,12 @@ describe("pruneEmptyConfig", () => {
 	it("drops the untouched discovery template so nothing but chosen values persists", () => {
 		const cleaned = pruneEmptyConfig({
 			baseBranch: "develop",
-			branchKinds: [],
-			defaultBranchKind: "",
-			worktreesDir: "",
-			bootstrapCommands: [],
-			agents: { enabled: [], default: "" },
-			knowledge: { instructions: [], runbooks: [] },
+			branchKinds: null,
+			defaultBranchKind: null,
+			worktreesDir: null,
+			bootstrapCommands: null,
+			agents: { enabled: null, default: null },
+			knowledge: { instructions: null, runbooks: null },
 		});
 
 		expect(cleaned).toEqual({ baseBranch: "develop" });
@@ -179,15 +179,28 @@ describe("pruneEmptyConfig", () => {
 
 	it("keeps nested objects that carry at least one real value", () => {
 		const cleaned = pruneEmptyConfig({
-			baseBranch: "",
-			agents: { enabled: ["codex"], default: "" },
+			baseBranch: null,
+			agents: { enabled: ["codex"], default: null },
 			knowledge: { instructions: ["AGENTS.md"], runbooks: [] },
 		});
 
 		expect(cleaned).toEqual({
 			agents: { enabled: ["codex"] },
-			knowledge: { instructions: ["AGENTS.md"] },
+			knowledge: { instructions: ["AGENTS.md"], runbooks: [] },
 		});
+	});
+
+	it("preserves an explicitly empty agents.enabled (zero tools) instead of pruning it", () => {
+		// `agents.enabled: []` disables every agent; omitting the key exposes all
+		// of them. Collapsing the two would turn a locked-down project into an
+		// open one on the next save.
+		const cleaned = pruneEmptyConfig({ agents: { enabled: [] } });
+
+		expect(cleaned).toEqual({ agents: { enabled: [] } });
+	});
+
+	it("collapses an untouched template to an empty config", () => {
+		expect(pruneEmptyConfig(projectConfigTemplate())).toEqual({});
 	});
 });
 
