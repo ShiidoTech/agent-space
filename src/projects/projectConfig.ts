@@ -54,27 +54,59 @@ export interface ProjectConfig {
 }
 
 /**
- * Detailed settings template shown in the project Settings page so every
- * editable key is discoverable and changeable straight from JSON, even when no
- * `.agentspace/config.json` exists yet. Values are examples: nothing is written
- * unless the user edits and saves the JSON.
+ * Settings template shown in the project Settings page when no
+ * `.agentspace/config.json` exists yet, so every editable key is discoverable
+ * and changeable straight from JSON. The values are empty placeholders, never
+ * example settings: `pruneEmptyConfig` drops the untouched ones on save, so
+ * merely opening Settings and changing a single field cannot bake unrelated
+ * defaults (e.g. a `~/.worktrees` location) into the shared file.
  */
 export function projectConfigTemplate(): ProjectConfig {
 	return {
-		baseBranch: "main",
-		branchKinds: ["feature", "fix"],
-		defaultBranchKind: "feature",
-		worktreesDir: "~/.worktrees",
-		bootstrapCommands: ["npm install", "npm run dev"],
+		baseBranch: "",
+		branchKinds: [],
+		defaultBranchKind: "",
+		worktreesDir: "",
+		bootstrapCommands: [],
 		agents: {
-			enabled: ["claude", "codex"],
-			default: "claude",
+			enabled: [],
+			default: "",
 		},
 		knowledge: {
-			instructions: ["AGENTS.md"],
-			runbooks: ["docs/runbooks.md"],
+			instructions: [],
+			runbooks: [],
 		},
 	};
+}
+
+/**
+ * Drop values the editor template left untouched, so a discovery-driven edit
+ * persists only what the user actually chose. An empty string, empty array or
+ * empty object carries no setting (the consumers fall back to their defaults),
+ * so removing it is behaviour-neutral.
+ */
+export function pruneEmptyConfig(config: ProjectConfig): ProjectConfig {
+	const out: ProjectConfig = {};
+	for (const [key, value] of Object.entries(config) as Array<
+		[keyof ProjectConfig, unknown]
+	>) {
+		if (value === undefined) continue;
+		if (typeof value === "string" && !value.trim()) continue;
+		if (Array.isArray(value)) {
+			if (value.length === 0) continue;
+			out[key] = value as never;
+			continue;
+		}
+		if (typeof value === "object") {
+			const nested = pruneEmptyConfig(value as ProjectConfig);
+			if (Object.keys(nested).length > 0) {
+				out[key] = nested as never;
+			}
+			continue;
+		}
+		out[key] = value as never;
+	}
+	return out;
 }
 
 export interface ProjectAgentPolicy {
@@ -219,6 +251,13 @@ export function hasLocalProjectConfig(repoRoot: string): boolean {
 	return (
 		mtimeOf(path.join(repoRoot, CONFIG_DIR_NAME, LOCAL_CONFIG_FILE_NAME)) !==
 		undefined
+	);
+}
+
+/** True when `.agentspace/config.json` actually exists (a real shared file). */
+export function hasSharedProjectConfig(repoRoot: string): boolean {
+	return (
+		mtimeOf(path.join(repoRoot, CONFIG_DIR_NAME, CONFIG_FILE_NAME)) !== undefined
 	);
 }
 
