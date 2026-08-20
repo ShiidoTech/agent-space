@@ -16,7 +16,10 @@ import { configureAgentSpaceDiagnostics } from "./diagnostics/agentSpaceDiagnost
 import { runFeatureFinish } from "./features/featureFinishCommand";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
-import { FeatureStateCoordinator } from "./features/featureStateCoordinator";
+import {
+	FeatureStateCoordinator,
+	featureBranchRefs,
+} from "./features/featureStateCoordinator";
 import {
 	buildGitHubCompareUrl,
 	buildGitHubPullRequestBaseMetadata,
@@ -30,13 +33,13 @@ import { checkWorktreeDeletionSafety } from "./git/worktreeSafety";
 import { HomePanel } from "./home/homePanel";
 
 import { PrerequisiteChecker } from "./prerequisites";
-import { discoverProjectKnowledge } from "./projects/projectKnowledge";
-import { ProjectManager } from "./projects/projectManager";
 import {
 	assessWorktreeBranchDeletion,
 	deleteWorktreeBranch,
 	updateBaseBranch,
 } from "./projects/projectGitOps";
+import { discoverProjectKnowledge } from "./projects/projectKnowledge";
+import { ProjectManager } from "./projects/projectManager";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
 import { GlobalStore } from "./storage/globalStore";
 import { execAsync, execAsyncSilent } from "./utils/platform";
@@ -1873,13 +1876,24 @@ removeWorktreeResidue: async (worktreePath) => {
 						.find((snapshot) => snapshot.feature.id.startsWith("base:"))
 						?.feature.branch;
 
-				const assessment = await assessWorktreeBranchDeletion({
-					repoRoot: ctx.project.repoPath,
-					worktreeBase: ctx.featureManager.getWorktreeBase(),
-					worktreePath,
-					branchRef,
-					baseBranch,
-				});
+				// Revalidate the Feature link on the backend: the delete button
+				// is hidden for Feature-owned branches, but the command must not
+				// trust the webview's rendering.
+				const ownedByFeatureId = featureBranchRefs(
+					ctx.featureManager.getFeatures(),
+				).get(branchRef);
+
+				const assessment = await assessWorktreeBranchDeletion(
+					{
+						repoRoot: ctx.project.repoPath,
+						worktreeBase: ctx.featureManager.getWorktreeBase(),
+						worktreePath,
+						branchRef,
+						baseBranch,
+						...(ownedByFeatureId ? { ownedByFeatureId } : {}),
+					},
+					ctx.gitClient,
+				);
 				if (!assessment.deletable) {
 					vscode.window.showWarningMessage(
 						`Branch "${branchRef}" cannot be deleted yet:\n\n${assessment.reasons.join("\n")}`,
@@ -1901,6 +1915,7 @@ removeWorktreeResidue: async (worktreePath) => {
 					worktreePath,
 					branchRef,
 					baseBranch,
+					...(ownedByFeatureId ? { ownedByFeatureId } : {}),
 				});
 				if (outcome.status !== "deleted") {
 					vscode.window.showErrorMessage(

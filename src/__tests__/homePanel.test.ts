@@ -667,7 +667,10 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		const html = render("p1");
 
 		expect(html).toContain("Update main");
-		expect(html).toContain("updateBaseBranch('p1')");
+		expect(html).toContain(
+			'class="quick-action-btn project-base-update-btn" data-project-id="p1"',
+		);
+		expect(html).not.toContain("updateBaseBranch(");
 
 		getProjectReferenceHealth.mockReturnValue({
 			...behindHealth,
@@ -760,6 +763,69 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(html).not.toContain("deleteWorktreeBranch('p1', 'main'");
 		expect(html).toContain("feat/owned");
 		expect(html.match(/worktree-branch-delete/g)).toHaveLength(1);
+		expect(html).toContain(
+			'data-branch-ref="feat/done" data-worktree-path="/repo/.worktrees/done"',
+		);
+		expect(html).not.toContain("onclick=");
+	});
+
+	it("escapes hostile branch refs in delete button data attributes", () => {
+		const panel = buildPanel();
+		getProjectReferenceHealth.mockReturnValue({
+			branch: "main",
+			remoteName: "origin",
+			verifiedRemote: {
+				status: "known",
+				sha: "b".repeat(40),
+				observedAt: "2026-08-12T10:00:00.000Z",
+				provenance: {
+					source: "remote_head",
+					ref: "refs/heads/main",
+					backend: "git ls-remote",
+				},
+			},
+			verifiedRemoteRelation: {
+				state: "current",
+				localOnly: 0,
+				comparedOnly: 0,
+			},
+			state: "current",
+		});
+		getProjectWorktreeBranches.mockReturnValue({
+			repoPath: "/repo",
+			baseRef: "main",
+			status: "known",
+			observedAt: "2026-08-12T10:00:00.000Z",
+			branches: [
+				{
+					ref: "feat/it's(done)",
+					worktreePath: "/repo/.worktrees/odd",
+					headSha: "c".repeat(40),
+					detached: false,
+					prunable: false,
+					baseRelation: { status: "merged" },
+					workingTree: { status: "clean" },
+				},
+			],
+		});
+		(
+			panel as unknown as {
+				projectManager: { getContext: ReturnType<typeof vi.fn> };
+			}
+		).projectManager.getContext = vi.fn(() => ({
+			project: { id: "p1", name: "Proj", repoPath: "/repo" },
+		}));
+		const render = (
+			panel as unknown as {
+				renderWorktreeBranches: (projectId: string) => string;
+			}
+		).renderWorktreeBranches.bind(panel);
+
+		const html = render("p1");
+
+		expect(html).toContain('data-branch-ref="feat/it&#039;s(done)"');
+		expect(html).not.toContain("feat/it's(done)'");
+		expect(html).not.toContain("onclick=");
 	});
 
 	it("routes updateBaseBranch and deleteWorktreeBranch messages to their commands", () => {

@@ -902,7 +902,7 @@ export class HomePanel {
 					repoPath !== undefined &&
 					branch.worktreePath !== repoPath;
 				const deleteAction = deletable
-					? `<button class="worktree-branch-delete" title="Delete this branch and its worktree" onclick="event.stopPropagation(); deleteWorktreeBranch('${this.escapeHtml(projectId)}', '${this.escapeHtml(branch.ref)}', '${encodeURIComponent(branch.worktreePath)}')">&times;</button>`
+					? `<button class="worktree-branch-delete" data-project-id="${this.escapeHtml(projectId)}" data-branch-ref="${this.escapeHtml(branch.ref)}" data-worktree-path="${this.escapeHtml(branch.worktreePath)}" title="Delete this branch and its worktree">&times;</button>`
 					: "";
 				return `
 				<div class="worktree-branch-row">
@@ -1573,7 +1573,7 @@ export class HomePanel {
 			referenceHealth.verifiedRemote.status === "known" &&
 			(referenceHealth.verifiedRemoteRelation.state === "behind" ||
 				referenceHealth.verifiedRemoteRelation.state === "diverged")
-				? `<button class="quick-action-btn project-base-update-btn" onclick="updateBaseBranch('${projectId}')" title="Fetch ${this.escapeHtml(referenceHealth.remoteName)}/${this.escapeHtml(referenceHealth.branch)} and fast-forward the local branch">${ICON_REFRESH} Update ${this.escapeHtml(referenceHealth.branch)}</button>`
+				? `<button class="quick-action-btn project-base-update-btn" data-project-id="${this.escapeHtml(projectId)}" title="Fetch ${this.escapeHtml(referenceHealth.remoteName)}/${this.escapeHtml(referenceHealth.branch)} and fast-forward the local branch">${ICON_REFRESH} Update ${this.escapeHtml(referenceHealth.branch)}</button>`
 				: "";
 
 		// ── Rich feature cards (sidebar-equivalent density) ────────────

@@ -35,6 +35,121 @@ function gitError(
 }
 
 /**
+ * Fail-closed filesystem presence check: only ENOENT/ENOTDIR prove that a
+ * path is absent. Any other error (EACCES, EPERM, EIO, …) leaves the
+ * existence unverifiable instead of assuming the worktree is already gone.
+ */
+type PathPresence =
+	| { readonly present: true }
+	| { readonly present: false; readonly confirmedAbsent: true }
+	| {
+			readonly present: false;
+			readonly confirmedAbsent: false;
+			readonly reason: string;
+	  };
+
+async function checkPathPresence(worktreePath: string): Promise<PathPresence> {
+	try {
+		await stat(worktreePath);
+		return { present: true };
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException)?.code;
+		if (code === "ENOENT" || code === "ENOTDIR") {
+			return { present: false, confirmedAbsent: true };
+		}
+		return {
+			present: false,
+			confirmedAbsent: false,
+			reason: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
+interface WorktreeListEntry {
+	path: string;
+	/** Full ref (`refs/heads/<name>`); absent when the worktree is detached. */
+	branch?: string;
+}
+
+/** Parse `git worktree list --porcelain` output. */
+function parseWorktreeList(porcelain: string): WorktreeListEntry[] {
+	const entries: WorktreeListEntry[] = [];
+	let current: WorktreeListEntry | undefined;
+	for (const rawLine of porcelain.split("\n")) {
+		const line = rawLine.replace(/\r$/, "");
+		if (line.startsWith("worktree ")) {
+			current = { path: line.slice("worktree ".length) };
+			entries.push(current);
+		} else if (line.startsWith("branch ") && current) {
+			current.branch = line.slice("branch ".length);
+		}
+	}
+	return entries;
+}
+
+type WorktreeBranchPairing =
+	| { readonly status: "matched" }
+	| { readonly status: "mismatch"; readonly actual?: string }
+	| { readonly status: "unverifiable" };
+
+/**
+ * Prove with authoritative Git evidence that `worktreePath` really has
+ * `branchRef` checked out, so a request can never pair worktree A with
+ * branch B just because both pass their checks independently.
+ */
+async function verifyWorktreeBranchPairing(
+	git: GitReader,
+	repoRoot: string,
+	worktreePath: string,
+	branchRef: string,
+): Promise<WorktreeBranchPairing> {
+	const list = await git.read(["worktree", "list", "--porcelain"], {
+		cwd: repoRoot,
+	});
+	if (list.exitCode !== 0 || list.error) return { status: "unverifiable" };
+	const expected = `refs/heads/${branchRef}`;
+	const wanted = path.resolve(worktreePath);
+	for (const entry of parseWorktreeList(list.stdout)) {
+		if (path.resolve(entry.path) !== wanted) continue;
+		if (entry.branch === expected) return { status: "matched" };
+		return {
+			status: "mismatch",
+			actual: entry.branch?.replace(/^refs\/heads\//, ""),
+		};
+	}
+	return { status: "mismatch" };
+}
+
+type BranchCheckoutProbe =
+	| { readonly status: "ok"; readonly worktreePath?: string }
+	| { readonly status: "unverifiable" };
+
+/**
+ * Find a worktree other than `repoPath` that has `branch` checked out.
+ * Moving a checked-out branch under another worktree's feet corrupts it,
+ * so callers must refuse while such a checkout exists.
+ */
+async function probeBranchCheckedOutElsewhere(
+	git: GitReader,
+	repoPath: string,
+	branch: string,
+): Promise<BranchCheckoutProbe> {
+	const list = await git.read(["worktree", "list", "--porcelain"], {
+		cwd: repoPath,
+	});
+	if (list.exitCode !== 0 || list.error) return { status: "unverifiable" };
+	const branchRef = `refs/heads/${branch}`;
+	const repoResolved = path.resolve(repoPath);
+	for (const entry of parseWorktreeList(list.stdout)) {
+		if (entry.branch !== branchRef) continue;
+		if (path.resolve(entry.path) !== repoResolved) {
+			return { status: "ok", worktreePath: entry.path };
+		}
+	}
+	return { status: "ok" };
+}
+
+/**
  * Update the project's reference ("main working") branch from its verified
  * remote: `git fetch`, then fast-forward the local branch when possible.
  * A diverged local branch is only merged after explicit human confirmation.
@@ -138,8 +253,28 @@ export async function updateBaseBranch(
 			message: `Local branch ${branch} has commits absent from ${remoteName}/${branch}; check it out and merge manually.`,
 		};
 	}
+
+	// Moving a branch that another worktree has checked out corrupts that
+	// worktree; refuse while such a checkout exists.
+	const checkout = await probeBranchCheckedOutElsewhere(git, repoPath, branch);
+	if (checkout.status === "unverifiable") {
+		return {
+			status: "error",
+			message: `Cannot verify that ${branch} is not checked out in another worktree; git worktree list failed.`,
+		};
+	}
+	if (checkout.worktreePath) {
+		return {
+			status: "error",
+			message: `Branch ${branch} is checked out in worktree ${checkout.worktreePath}; update it from there or switch that worktree to another branch first.`,
+		};
+	}
+
+	// Atomic ref move: the old SHA is part of the update-ref arguments, so a
+	// concurrent move of the branch since `local` was resolved fails the call
+	// instead of silently writing under another writer's feet.
 	const updated = await git.read(
-		["update-ref", `refs/heads/${branch}`, "FETCH_HEAD"],
+		["update-ref", `refs/heads/${branch}`, "FETCH_HEAD", local.stdout.trim()],
 		{ cwd: repoPath },
 	);
 	if (updated.exitCode !== 0 || updated.error) {
@@ -157,6 +292,12 @@ export interface DeleteWorktreeBranchInput {
 	readonly worktreePath: string;
 	readonly branchRef: string;
 	readonly baseBranch?: string;
+	/**
+	 * Feature owning this ref (primary branch, active branch or branch link).
+	 * Feature-owned branches are never deletable from the worktree list even
+	 * when the button was hidden: the command revalidates the link itself.
+	 */
+	readonly ownedByFeatureId?: string;
 }
 
 export interface WorktreeBranchDeletionAssessment {
@@ -170,9 +311,18 @@ export interface WorktreeBranchDeletionAssessment {
  */
 export async function assessWorktreeBranchDeletion(
 	input: DeleteWorktreeBranchInput,
+	git: GitReader,
 ): Promise<WorktreeBranchDeletionAssessment> {
 	const { repoRoot, worktreeBase, worktreePath, branchRef, baseBranch } = input;
 
+	if (input.ownedByFeatureId) {
+		return {
+			deletable: false,
+			reasons: [
+				`Branch ${branchRef} belongs to Feature ${input.ownedByFeatureId} and cannot be deleted while the Feature record exists.`,
+			],
+		};
+	}
 	if (baseBranch && branchRef === baseBranch) {
 		return {
 			deletable: false,
@@ -194,31 +344,67 @@ export async function assessWorktreeBranchDeletion(
 		};
 	}
 
-	const worktreeExists = await pathExists(worktreePath);
-	if (worktreeExists) {
-		const safety = await checkWorktreeDeletionSafety({
-			repoRoot,
-			worktreeBase,
-			worktreePath,
-			branch: branchRef,
-			baseBranch,
-		});
-		return { deletable: safety.safe, reasons: safety.reasons };
+	const presence = await checkPathPresence(worktreePath);
+	if (!presence.present) {
+		if (presence.confirmedAbsent) {
+			if (baseBranch) {
+				// The worktree is already gone (pruned residue): only the branch
+				// ref remains, and it must still be fully integrated.
+				const retention = await checkBranchRetentionSafety({
+					repoRoot,
+					branch: branchRef,
+					baseBranch,
+				});
+				return { deletable: retention.safe, reasons: retention.reasons };
+			}
+			return {
+				deletable: false,
+				reasons: [
+					"The base branch is unknown; integration cannot be verified.",
+				],
+			};
+		}
+		return {
+			deletable: false,
+			reasons: [
+				`Cannot verify whether ${worktreePath} still exists (${presence.reason}). Refusing to delete a possibly-live worktree.`,
+			],
+		};
 	}
-	if (baseBranch) {
-		// The worktree is already gone (pruned residue): only the branch ref
-		// remains, and it must still be fully integrated before deletion.
-		const retention = await checkBranchRetentionSafety({
-			repoRoot,
-			branch: branchRef,
-			baseBranch,
-		});
-		return { deletable: retention.safe, reasons: retention.reasons };
+
+	// Authoritative pairing: the worktree at worktreePath must actually have
+	// branchRef checked out. Guards against pairing worktree A + branch B.
+	const pairing = await verifyWorktreeBranchPairing(
+		git,
+		repoRoot,
+		worktreePath,
+		branchRef,
+	);
+	if (pairing.status === "unverifiable") {
+		return {
+			deletable: false,
+			reasons: [
+				`Cannot verify the branch checked out in ${worktreePath}; git worktree list failed.`,
+			],
+		};
 	}
-	return {
-		deletable: false,
-		reasons: ["The base branch is unknown; integration cannot be verified."],
-	};
+	if (pairing.status === "mismatch") {
+		return {
+			deletable: false,
+			reasons: [
+				`Worktree ${worktreePath} does not have branch ${branchRef} checked out (observed: ${pairing.actual ?? "detached"}). Refusing to delete an unrelated branch.`,
+			],
+		};
+	}
+
+	const safety = await checkWorktreeDeletionSafety({
+		repoRoot,
+		worktreeBase,
+		worktreePath,
+		branch: branchRef,
+		baseBranch,
+	});
+	return { deletable: safety.safe, reasons: safety.reasons };
 }
 
 /**
@@ -230,14 +416,14 @@ export async function deleteWorktreeBranch(
 	git: GitReader,
 	input: DeleteWorktreeBranchInput,
 ): Promise<WorktreeBranchDeleteResult> {
-	const assessment = await assessWorktreeBranchDeletion(input);
+	const assessment = await assessWorktreeBranchDeletion(input, git);
 	if (!assessment.deletable) {
 		return { status: "not_deletable", reasons: assessment.reasons };
 	}
 
 	const { repoRoot, worktreePath, branchRef } = input;
-	const worktreeExists = await pathExists(worktreePath);
-	if (worktreeExists) {
+	const presence = await checkPathPresence(worktreePath);
+	if (presence.present) {
 		const removal = await git.read(["worktree", "remove", worktreePath], {
 			cwd: repoRoot,
 		});
@@ -247,6 +433,11 @@ export async function deleteWorktreeBranch(
 				message: `git worktree remove failed: ${gitError(removal, "git worktree remove failed.")}`,
 			};
 		}
+	} else if (!presence.confirmedAbsent) {
+		return {
+			status: "error",
+			message: `Cannot verify whether ${worktreePath} still exists (${presence.reason}).`,
+		};
 	}
 
 	const deletion = await git.read(["branch", "-d", branchRef], {
@@ -259,13 +450,4 @@ export async function deleteWorktreeBranch(
 		};
 	}
 	return { status: "deleted", branch: branchRef };
-}
-
-async function pathExists(worktreePath: string): Promise<boolean> {
-	try {
-		await stat(worktreePath);
-		return true;
-	} catch {
-		return false;
-	}
 }

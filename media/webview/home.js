@@ -7,6 +7,31 @@ function send(command, data) {
 	vscode.postMessage({ command, ...data });
 }
 
+// -- Project page delegated actions --------------------------
+// Branch names and paths are carried in data-* attributes and read through
+// dataset, never interpolated into inline JS: an apostrophe or parenthesis
+// in a valid Git branch name cannot break or inject the handler.
+document.addEventListener("click", (event) => {
+	const target = /** @type {HTMLElement} */ (event.target);
+	if (!target || typeof target.closest !== "function") return;
+
+	const deleteButton = target.closest(".worktree-branch-delete");
+	if (deleteButton) {
+		event.stopPropagation();
+		send("deleteWorktreeBranch", {
+			projectId: deleteButton.dataset.projectId,
+			branchRef: deleteButton.dataset.branchRef,
+			worktreePath: deleteButton.dataset.worktreePath,
+		});
+		return;
+	}
+
+	const updateButton = target.closest(".project-base-update-btn");
+	if (updateButton) {
+		send("updateBaseBranch", { projectId: updateButton.dataset.projectId });
+	}
+});
+
 // -- Welcome View Actions ------------------------------------
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function openFeature(featureId) {
@@ -26,20 +51,6 @@ function addProject() {
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function editProjectBaseBranch(projectId) {
 	send("editProjectBaseBranch", { projectId });
-}
-
-// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
-function updateBaseBranch(projectId) {
-	send("updateBaseBranch", { projectId });
-}
-
-// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
-function deleteWorktreeBranch(projectId, branchRef, worktreePath) {
-	send("deleteWorktreeBranch", {
-		projectId,
-		branchRef,
-		worktreePath: decodeURIComponent(worktreePath),
-	});
 }
 
 /** @param {string} projectId */

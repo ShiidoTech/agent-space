@@ -230,15 +230,72 @@ describe("updateBaseBranch", () => {
 			if (argv[0] === "symbolic-ref") return result({ stdout: "feat/other" });
 			if (argv[0] === "rev-parse") return result({ stdout: "c".repeat(40) });
 			if (argv[0] === "merge-base") return result();
+			if (argv[0] === "worktree") return result();
 			if (argv[0] === "update-ref") return result();
 			return result();
 		});
 		const outcome = await updateBaseBranch(git, "/repo", health());
 		expect(outcome).toEqual({ status: "updated", method: "fast_forward" });
 		expect(vi.mocked(git.read).mock.calls).toContainEqual([
-			["update-ref", "refs/heads/main", "FETCH_HEAD"],
+			["worktree", "list", "--porcelain"],
 			expect.anything(),
 		]);
+		expect(vi.mocked(git.read).mock.calls).toContainEqual([
+			["update-ref", "refs/heads/main", "FETCH_HEAD", "c".repeat(40)],
+			expect.anything(),
+		]);
+	});
+
+	it("refuses to move a branch checked out in another worktree", async () => {
+		const porcelainOutput = [
+			"worktree /repo",
+			`HEAD ${"c".repeat(40)}`,
+			"branch refs/heads/main",
+			"",
+			"worktree /repo/.worktrees/elsewhere",
+			`HEAD ${"d".repeat(40)}`,
+			"branch refs/heads/main",
+			"",
+		].join("\n");
+		const git = reader((argv) => {
+			if (argv[0] === "fetch") return result();
+			if (argv[0] === "status") return result();
+			if (argv[0] === "symbolic-ref") return result({ stdout: "feat/other" });
+			if (argv[0] === "rev-parse") return result({ stdout: "c".repeat(40) });
+			if (argv[0] === "merge-base") return result();
+			if (argv[0] === "worktree") {
+				return result({ stdout: porcelainOutput });
+			}
+			return result();
+		});
+		const outcome = await updateBaseBranch(git, "/repo", health());
+		expect(outcome.status).toBe("error");
+		expect((outcome as { message: string }).message).toContain(
+			"checked out in worktree",
+		);
+		expect(
+			vi.mocked(git.read).mock.calls.some(([argv]) => argv[0] === "update-ref"),
+		).toBe(false);
+	});
+
+	it("fails closed when the worktree list cannot be read", async () => {
+		const git = reader((argv) => {
+			if (argv[0] === "fetch") return result();
+			if (argv[0] === "status") return result();
+			if (argv[0] === "symbolic-ref") return result({ stdout: "feat/other" });
+			if (argv[0] === "rev-parse") return result({ stdout: "c".repeat(40) });
+			if (argv[0] === "merge-base") return result();
+			if (argv[0] === "worktree") {
+				return result({ exitCode: 128, stderr: "fatal: not a git repository" });
+			}
+			return result();
+		});
+		const outcome = await updateBaseBranch(git, "/repo", health());
+		expect(outcome.status).toBe("error");
+		expect((outcome as { message: string }).message).toContain("Cannot verify");
+		expect(
+			vi.mocked(git.read).mock.calls.some(([argv]) => argv[0] === "update-ref"),
+		).toBe(false);
 	});
 
 	it("refuses to move the local ref when the remote is not a descendant", async () => {
@@ -269,10 +326,31 @@ describe("deleteWorktreeBranch", () => {
 		statMock.mockReset();
 	});
 
-	function readerOk(): GitReader {
+	/** `git worktree list --porcelain` proving worktreePath ↔ branchRef. */
+	function porcelain(worktreePath: string, branchRef: string): string {
+		return [
+			`worktree ${repoRoot}`,
+			`HEAD ${"b".repeat(40)}`,
+			"branch refs/heads/main",
+			"",
+			`worktree ${worktreePath}`,
+			`HEAD ${"a".repeat(40)}`,
+			`branch refs/heads/${branchRef}`,
+			"",
+		].join("\n");
+	}
+
+	function readerOk(
+		worktreePath = `${worktreeBase}/feat/x`,
+		branchRef = "feat/x",
+	): GitReader {
 		return {
 			readSync: vi.fn(),
-			read: vi.fn(async () => result()) as GitReader["read"],
+			read: vi.fn(async (argv) =>
+				argv[0] === "worktree" && argv[1] === "list"
+					? result({ stdout: porcelain(worktreePath, branchRef) })
+					: result(),
+			) as GitReader["read"],
 		};
 	}
 
@@ -332,6 +410,7 @@ describe("deleteWorktreeBranch", () => {
 		});
 		expect(outcome).toEqual({ status: "deleted", branch: "feat/x" });
 		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "list", "--porcelain"],
 			["worktree", "remove", `${worktreeBase}/feat/x`],
 			["branch", "-d", "feat/x"],
 		]);
@@ -360,7 +439,9 @@ describe("deleteWorktreeBranch", () => {
 	});
 
 	it("deletes an already-gone worktree branch when fully merged", async () => {
-		statMock.mockRejectedValue(new Error("ENOENT"));
+		statMock.mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+		);
 		mockGitSequence(`${featureSha}\n`, `${baseSha}\n`, "", "0\n");
 		const git = readerOk();
 		const outcome = await deleteWorktreeBranch(git, {
@@ -377,7 +458,9 @@ describe("deleteWorktreeBranch", () => {
 	});
 
 	it("fails closed when an already-gone branch is unmerged", async () => {
-		statMock.mockRejectedValue(new Error("ENOENT"));
+		statMock.mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+		);
 		mockGitSequence(`${featureSha}\n`, `${baseSha}\n`, gitError(1), "3\n");
 		const git = readerOk();
 		const outcome = await deleteWorktreeBranch(git, {
@@ -389,5 +472,66 @@ describe("deleteWorktreeBranch", () => {
 		});
 		expect(outcome.status).toBe("not_deletable");
 		expect(git.read).not.toHaveBeenCalled();
+	});
+
+	it("refuses when the worktree path is paired with a different branch", async () => {
+		statMock.mockResolvedValue({} as never);
+		const git = readerOk(`${worktreeBase}/feat/x`, "feat/other");
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+		});
+		expect(outcome.status).toBe("not_deletable");
+		expect(
+			(outcome as { reasons: readonly string[] }).reasons.join(),
+		).toContain("does not have branch feat/x checked out");
+		expect(
+			vi
+				.mocked(git.read)
+				.mock.calls.some(
+					([argv]) => argv[0] === "worktree" && argv[1] === "remove",
+				),
+		).toBe(false);
+	});
+
+	it("fails closed when the worktree directory is unreadable", async () => {
+		statMock.mockRejectedValue(
+			Object.assign(new Error("EACCES: permission denied, stat"), {
+				code: "EACCES",
+			}),
+		);
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+		});
+		expect(outcome.status).toBe("not_deletable");
+		expect(
+			(outcome as { reasons: readonly string[] }).reasons.join(),
+		).toContain("Cannot verify whether");
+		expect(vi.mocked(git.read).mock.calls.length).toBe(0);
+	});
+
+	it("refuses to delete a branch owned by a feature", async () => {
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+			ownedByFeatureId: "f2",
+		});
+		expect(outcome.status).toBe("not_deletable");
+		expect(
+			(outcome as { reasons: readonly string[] }).reasons.join(),
+		).toContain("belongs to Feature f2");
+		expect(vi.mocked(git.read).mock.calls.length).toBe(0);
 	});
 });
