@@ -1703,7 +1703,7 @@ function equivalentInventory(
 }
 
 /** Maps every ref a Feature owns (primary, links, active branch) to its id. */
-function featureBranchRefs(
+export function featureBranchRefs(
 	features: readonly Feature[],
 ): ReadonlyMap<string, string> {
 	const map = new Map<string, string>();

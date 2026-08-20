@@ -431,6 +431,16 @@ export class HomePanel {
 			case "editProjectBaseBranch":
 				run("agentSpace.editProjectBaseBranch", message.projectId);
 				break;
+			case "updateBaseBranch":
+				run("agentSpace.updateBaseBranch", message.projectId);
+				break;
+			case "deleteWorktreeBranch":
+				run("agentSpace.deleteWorktreeBranch", {
+					projectId: message.projectId,
+					branchRef: message.branchRef,
+					worktreePath: message.worktreePath,
+				});
+				break;
 			// Activity
 			case "requestActivity":
 				this.sendActivityForAgent(message.agentId as string);
@@ -857,6 +867,8 @@ export class HomePanel {
 	private renderWorktreeBranches(projectId: string): string {
 		const inventory =
 			this.featureStateCoordinator.getProjectWorktreeBranches(projectId);
+		const repoPath =
+			this.projectManager.getContext(projectId)?.project.repoPath;
 		if (!inventory || inventory.status !== "known") {
 			return `
 				<div class="worktree-branches-card">
@@ -884,15 +896,23 @@ export class HomePanel {
 				const link = branch.linkedFeatureId
 					? `<span class="worktree-branch-linked">feature</span>`
 					: "";
+				const deletable =
+					!branch.linkedFeatureId &&
+					branch.ref !== inventory.baseRef &&
+					repoPath !== undefined &&
+					branch.worktreePath !== repoPath;
+				const deleteAction = deletable
+					? `<button class="worktree-branch-delete" data-project-id="${this.escapeHtml(projectId)}" data-branch-ref="${this.escapeHtml(branch.ref)}" data-worktree-path="${this.escapeHtml(branch.worktreePath)}" title="Delete this branch and its worktree">&times;</button>`
+					: "";
 				return `
-					<div class="worktree-branch-row">
-						<span class="worktree-branch-ref" title="${this.escapeHtml(branch.worktreePath)}">${this.escapeHtml(branch.ref)}</span>
-						<span class="worktree-branch-meta">
-							<span title="${this.escapeHtml(branch.headSha)}">@${this.escapeHtml(branch.headSha.slice(0, 8))}</span>
-							${branch.prunable ? '<span class="worktree-branch-prunable">prunable</span>' : ""}
-						</span>
-						<span class="worktree-branch-chips">${relation}${worktreeChip}${link}</span>
-					</div>`;
+				<div class="worktree-branch-row">
+					<span class="worktree-branch-ref" title="${this.escapeHtml(branch.worktreePath)}">${this.escapeHtml(branch.ref)}</span>
+					<span class="worktree-branch-meta">
+						<span title="${this.escapeHtml(branch.headSha)}">@${this.escapeHtml(branch.headSha.slice(0, 8))}</span>
+						${branch.prunable ? '<span class="worktree-branch-prunable">prunable</span>' : ""}
+					</span>
+					<span class="worktree-branch-chips">${relation}${worktreeChip}${link}${deleteAction}</span>
+				</div>`;
 			})
 			.join("");
 		return `
@@ -1546,6 +1566,15 @@ export class HomePanel {
 		const baseStateChips = this.renderBaseStateChips(baseSnapshot);
 		const referenceHealthChip = this.renderReferenceHealthChip(projectId);
 		const worktreeBranches = this.renderWorktreeBranches(projectId);
+		const referenceHealth =
+			this.featureStateCoordinator.getProjectReferenceHealth(projectId);
+		const baseUpdateAction =
+			referenceHealth &&
+			referenceHealth.verifiedRemote.status === "known" &&
+			(referenceHealth.verifiedRemoteRelation.state === "behind" ||
+				referenceHealth.verifiedRemoteRelation.state === "diverged")
+				? `<button class="quick-action-btn project-base-update-btn" data-project-id="${this.escapeHtml(projectId)}" title="Fetch ${this.escapeHtml(referenceHealth.remoteName)}/${this.escapeHtml(referenceHealth.branch)} and fast-forward the local branch">${ICON_REFRESH} Update ${this.escapeHtml(referenceHealth.branch)}</button>`
+				: "";
 
 		// ── Rich feature cards (sidebar-equivalent density) ────────────
 		const featureRows = projectSnapshots.length
@@ -1643,7 +1672,7 @@ export class HomePanel {
 					<div><strong>${projectServiceCount ?? "?"}</strong><span>Scripts</span></div>
 				</div>
 				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong> ${baseCommitLabel ? `&middot; <span title="Observed base SHA">${this.escapeHtml(baseCommitLabel)}</span>` : ""}</p>
-				<div class="project-base-chips">${referenceHealthChip}${baseStateChips}</div>
+				<div class="project-base-chips">${referenceHealthChip}${baseStateChips}${baseUpdateAction}</div>
 			</div>
 			${worktreeBranches}
 			<div>

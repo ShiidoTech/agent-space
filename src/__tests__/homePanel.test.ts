@@ -70,6 +70,9 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 	let getTerminal: ReturnType<typeof vi.fn>;
 	let focusOrCreateTerminalAsync: ReturnType<typeof vi.fn>;
 	let getSnapshot: ReturnType<typeof vi.fn>;
+	let getProjectSnapshots: ReturnType<typeof vi.fn>;
+	let getProjectReferenceHealth: ReturnType<typeof vi.fn>;
+	let getProjectWorktreeBranches: ReturnType<typeof vi.fn>;
 	let invalidateFeature: ReturnType<typeof vi.fn>;
 	let invalidateProject: ReturnType<typeof vi.fn>;
 	let invalidateAll: ReturnType<typeof vi.fn>;
@@ -93,6 +96,9 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		};
 		getTerminal = vi.fn();
 		getSnapshot = vi.fn();
+		getProjectSnapshots = vi.fn(() => []);
+		getProjectReferenceHealth = vi.fn(() => undefined);
+		getProjectWorktreeBranches = vi.fn(() => undefined);
 		invalidateFeature = vi.fn();
 		invalidateProject = vi.fn();
 		invalidateAll = vi.fn();
@@ -105,11 +111,12 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		// the panel directly rather than through the navigation lifecycle.
 		const p = new HomePanel(
 			webviewPanel as never,
-			{ resolveFeature } as never,
+			{ resolveFeature, getContext: vi.fn(() => undefined) } as never,
 			{
 				getSnapshot,
-				getProjectReferenceHealth: vi.fn(() => undefined),
-				getProjectWorktreeBranches: vi.fn(() => undefined),
+				getProjectSnapshots,
+				getProjectReferenceHealth,
+				getProjectWorktreeBranches,
 				invalidateFeature,
 				invalidateProject,
 				invalidateAll,
@@ -258,7 +265,9 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
 		const html = (buildPanel() as any).renderReusedBranchChip({
 			...feature,
-			reusedExistingBranch: { relation: { status: "behind", ahead: 0, behind: 3 } },
+			reusedExistingBranch: {
+				relation: { status: "behind", ahead: 0, behind: 3 },
+			},
 		});
 		expect(html).toContain("project-base-chip--warning");
 		expect(html).toContain("reused &middot; 3 behind");
@@ -269,7 +278,9 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
 		const html = (buildPanel() as any).renderReusedBranchChip({
 			...feature,
-			reusedExistingBranch: { relation: { status: "current", ahead: 0, behind: 0 } },
+			reusedExistingBranch: {
+				relation: { status: "current", ahead: 0, behind: 0 },
+			},
 		});
 		expect(html).toContain("reused branch");
 		expect(html).not.toContain("behind");
@@ -600,5 +611,256 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(html).toContain(">Open terminal</button>");
 		expect(html).toContain(">Activity <span");
 		expect(html).not.toContain("&#9243;");
+	});
+
+	it("offers an Update button on the project page only when the base branch is behind or diverged", () => {
+		const panel = buildPanel();
+		const behindHealth = {
+			branch: "main",
+			remoteName: "origin",
+			verifiedRemote: {
+				status: "known",
+				sha: "b".repeat(40),
+				observedAt: "2026-08-12T10:00:00.000Z",
+				provenance: {
+					source: "remote_head",
+					ref: "refs/heads/main",
+					backend: "git ls-remote",
+				},
+			},
+			verifiedRemoteRelation: {
+				state: "behind",
+				localOnly: 0,
+				comparedOnly: 4,
+			},
+			state: "behind",
+			remoteFreshness: {
+				status: "fresh",
+				observedAt: "2026-08-12T10:00:00.000Z",
+				staleAfterMs: 300_000,
+			},
+		};
+		getProjectReferenceHealth.mockReturnValue(behindHealth);
+		const context = {
+			project: { id: "p1", name: "Proj", repoPath: "/repo" },
+			config: { baseBranch: undefined },
+			featureManager: {
+				getBranchKinds: () => [],
+				getDefaultBranchKind: () => undefined,
+				getWorktreeBase: () => "/repo/.worktrees",
+			},
+		};
+		const projectManager = {
+			getContext: vi.fn(() => context),
+		};
+		const render = (
+			panel as unknown as {
+				getProjectHtml: (projectId: string, settings?: boolean) => string;
+			}
+		).getProjectHtml.bind(panel);
+		// bind a panel whose projectManager resolves the context.
+		const bound = panel as unknown as {
+			projectManager: typeof projectManager;
+			getProjectHtml: (projectId: string, settings?: boolean) => string;
+		};
+		bound.projectManager = projectManager as never;
+		const html = render("p1");
+
+		expect(html).toContain("Update main");
+		expect(html).toContain(
+			'class="quick-action-btn project-base-update-btn" data-project-id="p1"',
+		);
+		expect(html).not.toContain("updateBaseBranch(");
+
+		getProjectReferenceHealth.mockReturnValue({
+			...behindHealth,
+			verifiedRemoteRelation: {
+				state: "current",
+				localOnly: 0,
+				comparedOnly: 0,
+			},
+			state: "current",
+		});
+		const currentHtml = render("p1");
+		expect(currentHtml).not.toContain("Update main");
+	});
+
+	it("renders a delete action only for non-base, non-feature worktree branches", () => {
+		const panel = buildPanel();
+		getProjectReferenceHealth.mockReturnValue({
+			branch: "main",
+			remoteName: "origin",
+			verifiedRemote: {
+				status: "known",
+				sha: "b".repeat(40),
+				observedAt: "2026-08-12T10:00:00.000Z",
+				provenance: {
+					source: "remote_head",
+					ref: "refs/heads/main",
+					backend: "git ls-remote",
+				},
+			},
+			verifiedRemoteRelation: {
+				state: "current",
+				localOnly: 0,
+				comparedOnly: 0,
+			},
+			state: "current",
+		});
+		getProjectWorktreeBranches.mockReturnValue({
+			repoPath: "/repo",
+			baseRef: "main",
+			status: "known",
+			observedAt: "2026-08-12T10:00:00.000Z",
+			branches: [
+				{
+					ref: "main",
+					worktreePath: "/repo",
+					headSha: "a".repeat(40),
+					detached: false,
+					prunable: false,
+					baseRelation: { status: "current" },
+					workingTree: { status: "clean" },
+				},
+				{
+					ref: "feat/owned",
+					worktreePath: "/repo/.worktrees/owned",
+					headSha: "b".repeat(40),
+					detached: false,
+					prunable: false,
+					baseRelation: { status: "merged" },
+					workingTree: { status: "clean" },
+					linkedFeatureId: "f2",
+				},
+				{
+					ref: "feat/done",
+					worktreePath: "/repo/.worktrees/done",
+					headSha: "c".repeat(40),
+					detached: false,
+					prunable: false,
+					baseRelation: { status: "merged" },
+					workingTree: { status: "clean" },
+				},
+			],
+		});
+		(
+			panel as unknown as {
+				projectManager: { getContext: ReturnType<typeof vi.fn> };
+			}
+		).projectManager.getContext = vi.fn(() => ({
+			project: { id: "p1", name: "Proj", repoPath: "/repo" },
+		}));
+		const render = (
+			panel as unknown as {
+				renderWorktreeBranches: (projectId: string) => string;
+			}
+		).renderWorktreeBranches.bind(panel);
+
+		const html = render("p1");
+
+		expect(html).toContain(">feat/done</span>");
+		expect(html).toContain("worktree-branch-delete");
+		expect(html).not.toContain("deleteWorktreeBranch('p1', 'main'");
+		expect(html).toContain("feat/owned");
+		expect(html.match(/worktree-branch-delete/g)).toHaveLength(1);
+		expect(html).toContain(
+			'data-branch-ref="feat/done" data-worktree-path="/repo/.worktrees/done"',
+		);
+		expect(html).not.toContain("onclick=");
+	});
+
+	it("escapes hostile branch refs in delete button data attributes", () => {
+		const panel = buildPanel();
+		getProjectReferenceHealth.mockReturnValue({
+			branch: "main",
+			remoteName: "origin",
+			verifiedRemote: {
+				status: "known",
+				sha: "b".repeat(40),
+				observedAt: "2026-08-12T10:00:00.000Z",
+				provenance: {
+					source: "remote_head",
+					ref: "refs/heads/main",
+					backend: "git ls-remote",
+				},
+			},
+			verifiedRemoteRelation: {
+				state: "current",
+				localOnly: 0,
+				comparedOnly: 0,
+			},
+			state: "current",
+		});
+		getProjectWorktreeBranches.mockReturnValue({
+			repoPath: "/repo",
+			baseRef: "main",
+			status: "known",
+			observedAt: "2026-08-12T10:00:00.000Z",
+			branches: [
+				{
+					ref: "feat/it's(done)",
+					worktreePath: "/repo/.worktrees/odd",
+					headSha: "c".repeat(40),
+					detached: false,
+					prunable: false,
+					baseRelation: { status: "merged" },
+					workingTree: { status: "clean" },
+				},
+			],
+		});
+		(
+			panel as unknown as {
+				projectManager: { getContext: ReturnType<typeof vi.fn> };
+			}
+		).projectManager.getContext = vi.fn(() => ({
+			project: { id: "p1", name: "Proj", repoPath: "/repo" },
+		}));
+		const render = (
+			panel as unknown as {
+				renderWorktreeBranches: (projectId: string) => string;
+			}
+		).renderWorktreeBranches.bind(panel);
+
+		const html = render("p1");
+
+		expect(html).toContain('data-branch-ref="feat/it&#039;s(done)"');
+		expect(html).not.toContain("feat/it's(done)'");
+		expect(html).not.toContain("onclick=");
+	});
+
+	it("routes updateBaseBranch and deleteWorktreeBranch messages to their commands", () => {
+		const panel = buildPanel();
+		const executeCommand = vi.mocked(vscode.commands.executeCommand);
+		executeCommand.mockClear();
+
+		const messageHandler = (
+			panel as unknown as {
+				handleMessage: (message: {
+					command: string;
+					[key: string]: unknown;
+				}) => void;
+			}
+		).handleMessage.bind(panel);
+
+		messageHandler({ command: "updateBaseBranch", projectId: "p1" });
+		expect(executeCommand).toHaveBeenCalledWith(
+			"agentSpace.updateBaseBranch",
+			"p1",
+		);
+
+		messageHandler({
+			command: "deleteWorktreeBranch",
+			projectId: "p1",
+			branchRef: "feat/done",
+			worktreePath: "/repo/.worktrees/done",
+		});
+		expect(executeCommand).toHaveBeenCalledWith(
+			"agentSpace.deleteWorktreeBranch",
+			{
+				projectId: "p1",
+				branchRef: "feat/done",
+				worktreePath: "/repo/.worktrees/done",
+			},
+		);
 	});
 });
