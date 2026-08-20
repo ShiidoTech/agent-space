@@ -773,7 +773,24 @@ export async function activate(
 									"Feature created, but no coding tools are available. Add an agent later with 'Add Agent'.",
 								);
 							}
-							await provisioning;
+							const provisioned = await provisioning;
+							const reused = provisioned?.reusedExistingBranch;
+							if (reused) {
+								const baseName =
+									ctx.featureManager.getBaseBranchName();
+								const relation = reused.relation;
+								const detail =
+									relation.status === "unknown"
+										? `Branch ${provisioned.branch} already existed and was reused; its relation to ${baseName} is unknown.`
+										: relation.status === "current"
+											? `Branch ${provisioned.branch} already existed and was reused; it matches ${baseName}.`
+											: `Branch ${provisioned.branch} already existed and was reused; ${relation.status === "diverged" ? `${relation.ahead} ahead and ${relation.behind} behind` : relation.status === "ahead" ? `${relation.ahead} ahead` : `${relation.behind} behind`} ${baseName}.`;
+								if (relation.status === "ahead" || relation.status === "diverged") {
+									vscode.window.showWarningMessage(detail);
+								} else {
+									vscode.window.showInformationMessage(detail);
+								}
+							}
 							progress.report({ message: "Feature worktree ready" });
 							// Refresh only the feature just created; the sidebar must not
 							// trigger a workspace-wide deep observation on startup.
@@ -1068,7 +1085,7 @@ export async function activate(
 
 				// Fail-closed: refuse when the agent's worktree would lose work.
 				if (agent.worktreePath) {
-					const safety = checkWorktreeDeletionSafety({
+					const safety = await checkWorktreeDeletionSafety({
 						repoRoot: ctx.project.repoPath,
 						worktreeBase: ctx.featureManager.getWorktreeBase(),
 						worktreePath: agent.worktreePath,
@@ -1267,24 +1284,35 @@ export async function activate(
 								{ forceNewWindow: true },
 							);
 						},
-						removeWorktreeResidue: (worktreePath) => {
-							const result = ctx.featureManager.removeWorktreeResidue(worktreePath);
-							return {
-								removed: result.deleted,
-								reason: result.reasons.join(" ") || undefined,
-							};
-						},
+removeWorktreeResidue: async (worktreePath) => {
+						const result = await ctx.featureManager.removeWorktreeResidue(
+							worktreePath,
+						);
+						return {
+							removed: result.deleted,
+							reason: result.reasons.join(" ") || undefined,
+							suggestedCommand: result.suggestedCommand,
+						};
+					},
+					openTerminalWithCommand: (command) => {
+						const terminal = vscode.window.createTerminal({
+							name: "Agent Space: remove worktree residue",
+						});
+						terminal.show();
+						terminal.sendText(command);
+					},
 					},
 					{
 						showInformationMessage: (message) =>
 							vscode.window.showInformationMessage(message),
-						showErrorMessage: (message) =>
-							vscode.window.showErrorMessage(message),
+						showErrorMessage: (message, ...items) =>
+							vscode.window.showErrorMessage(message, ...items),
 						showWarningMessage: (message, options, ...items) =>
 							vscode.window.showWarningMessage(message, options, ...items),
 						withProgress: (options, task) =>
 							vscode.window.withProgress(options, task),
 						progressLocationNotification: vscode.ProgressLocation.Notification,
+						copyToClipboard: (text) => vscode.env.clipboard.writeText(text),
 					},
 				);
 			},

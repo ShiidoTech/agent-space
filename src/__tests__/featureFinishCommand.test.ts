@@ -292,6 +292,139 @@ describe("runFeatureFinish command flow", () => {
 		expect(forget).not.toHaveBeenCalled();
 	});
 
+	it("proposes the sudo command with terminal and copy actions when residue removal is permission-blocked", async () => {
+		const openTerminal = vi.fn();
+		const copy = vi.fn(() => Promise.resolve());
+		const removeWorktreeResidue = vi.fn(() => ({
+			removed: false,
+			reason:
+				"EACCES: permission denied, denied. The residue contains files owned by another user.",
+			suggestedCommand: "sudo rm -rf '/repo/.worktrees/f1'",
+		}));
+		const { deps } = buildDeps({
+			removeWorktreeResidue,
+			openTerminalWithCommand: openTerminal,
+		});
+		deps.assess = () => ({
+			checks: [
+				{
+					kind: "feature",
+					worktreePath: "/repo/.worktrees/f1",
+					disposition: "residue",
+					safe: false,
+					forceable: false,
+					requiresForce: false,
+					reasons: ["files remain on disk"],
+				},
+			],
+			reasons: ["files remain on disk"],
+			safe: false,
+			forceable: false,
+			fingerprint: "residue",
+		});
+		const errorMessage = vi.fn(() =>
+			Promise.resolve("Run command in terminal"),
+		);
+		const { ui } = buildUi({
+			confirmed: "Remove residue",
+			overrides: {
+				showErrorMessage: errorMessage,
+				copyToClipboard: copy,
+			},
+		});
+		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
+			typeof vi.fn
+		>;
+		getSnapshot.mockReturnValue({
+			integration: {
+				status: "unknown",
+				reason: "integration_unknown",
+				evidence: {},
+			},
+		});
+		const forget = vi.fn();
+		const ctx = {
+			project: { repoPath: "/repo" },
+			agentManager: { getAgents: () => [] },
+			serviceManager: { getServices: () => [] },
+			featureManager: { forgetFinishedFeature: forget },
+		} as never;
+
+		const outcome = await runFeatureFinish(ctx, feature(), deps, ui);
+
+		expect(outcome.status).toBe("blocked");
+		expect(errorMessage).toHaveBeenCalledWith(
+			expect.stringContaining("sudo rm -rf '/repo/.worktrees/f1'"),
+			"Run command in terminal",
+			"Copy command",
+		);
+		expect(openTerminal).toHaveBeenCalledWith("sudo rm -rf '/repo/.worktrees/f1'");
+		expect(copy).not.toHaveBeenCalled();
+		expect(errorMessage).toHaveBeenCalledTimes(1);
+		expect(forget).not.toHaveBeenCalled();
+	});
+
+	it("copies the suggested command when the user picks Copy command", async () => {
+		const openTerminal = vi.fn();
+		const copy = vi.fn(() => Promise.resolve());
+		const { deps } = buildDeps({
+			removeWorktreeResidue: vi.fn(() => ({
+				removed: false,
+				reason: "EACCES: permission denied.",
+				suggestedCommand: "sudo rm -rf '/repo/.worktrees/f1'",
+			})),
+			openTerminalWithCommand: openTerminal,
+		});
+		deps.assess = () => ({
+			checks: [
+				{
+					kind: "feature",
+					worktreePath: "/repo/.worktrees/f1",
+					disposition: "residue",
+					safe: false,
+					forceable: false,
+					requiresForce: false,
+					reasons: ["files remain on disk"],
+				},
+			],
+			reasons: ["files remain on disk"],
+			safe: false,
+			forceable: false,
+			fingerprint: "residue",
+		});
+		const errorMessage = vi.fn(() => Promise.resolve("Copy command"));
+		const { ui } = buildUi({
+			confirmed: "Remove residue",
+			overrides: {
+				showErrorMessage: errorMessage,
+				copyToClipboard: copy,
+			},
+		});
+		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
+			typeof vi.fn
+		>;
+		getSnapshot.mockReturnValue({
+			integration: {
+				status: "unknown",
+				reason: "integration_unknown",
+				evidence: {},
+			},
+		});
+		const ctx = {
+			project: { repoPath: "/repo" },
+			agentManager: { getAgents: () => [] },
+			serviceManager: { getServices: () => [] },
+			featureManager: { forgetFinishedFeature: vi.fn() },
+		} as never;
+
+		const outcome = await runFeatureFinish(ctx, feature(), deps, ui);
+
+		expect(outcome.status).toBe("blocked");
+		expect(copy).toHaveBeenCalledWith("sudo rm -rf '/repo/.worktrees/f1'");
+		expect(openTerminal).not.toHaveBeenCalled();
+		expect(errorMessage).toHaveBeenCalledTimes(1);
+	});
+
 	it("cancels cleanly when the user does not confirm and does not touch metadata", async () => {
 		const { deps, inProgress } = buildDeps();
 		deps.assess = () => ({

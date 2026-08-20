@@ -25,37 +25,83 @@ describe("FeatureManager", () => {
 	const featureSha = "a".repeat(40);
 	const baseSha = "b".repeat(40);
 
+	function mockExecFileGit(
+		respond: (argv: readonly string[]) => {
+			stdout?: string;
+			stderr?: string;
+			error?: Error & { status?: number };
+		},
+	): void {
+		mockExecFile.mockImplementation(((
+			_file: string,
+			args: readonly string[],
+			_options: unknown,
+			callback: (
+				error: Error | null,
+				result?: { stdout: string; stderr: string },
+			) => void,
+		) => {
+			const response = respond(args);
+			if (response.error) {
+				callback(response.error);
+				return;
+			}
+			callback(null, {
+				stdout: response.stdout ?? "",
+				stderr: response.stderr ?? "",
+			});
+		}) as never);
+	}
+
 	function mockCleanMergedDeletion(remove?: () => string): void {
 		const activeBranch = store.loadFeatures()[0]?.branch ?? "feat/unknown";
 		mockExecSync.mockImplementation((command: string) => {
-			const value = String(command);
-			if (value.includes("symbolic-ref")) return `${activeBranch}\n`;
-			if (value.includes("git status --porcelain")) return "";
-			if (value.includes('rev-parse --verify "feat/')) return featureSha;
-			if (value.includes('rev-parse --verify "feature/')) return featureSha;
-			if (value.includes('rev-parse --verify "main')) return baseSha;
-			if (value.includes("merge-base --is-ancestor")) return "";
-			if (value.includes("rev-list --count")) return "0";
-			if (value.includes("git worktree remove")) return remove?.() ?? "";
+			if (String(command).includes("symbolic-ref")) return `${activeBranch}\n`;
 			return "";
+		});
+		mockExecFileGit((argv) => {
+			if (argv[0] === "status") return { stdout: "" };
+			if (argv[0] === "rev-parse") {
+				const ref = argv[2] ?? "";
+				if (ref.includes("HEAD^{commit}")) return { stdout: featureSha };
+				if (ref.includes(`${activeBranch}^{commit}`)) return { stdout: featureSha };
+				if (ref.includes("^{commit}")) return { stdout: baseSha };
+				return {};
+			}
+			if (argv[0] === "merge-base") return { stdout: "" };
+			if (argv[0] === "rev-list") return { stdout: "0" };
+			if (argv[0] === "worktree" && argv[1] === "remove") {
+				remove?.();
+				return { stdout: "" };
+			}
+			return {};
 		});
 	}
 
 	function mockCleanSquashMergedDeletion(remove?: () => string): void {
 		const activeBranch = store.loadFeatures()[0]?.branch ?? "feat/unknown";
 		mockExecSync.mockImplementation((command: string) => {
-			const value = String(command);
-			if (value.includes("symbolic-ref")) return `${activeBranch}\n`;
-			if (value.includes("git status --porcelain")) return "";
-			if (value.includes('rev-parse --verify "feat/')) return featureSha;
-			if (value.includes('rev-parse --verify "feature/')) return featureSha;
-			if (value.includes('rev-parse --verify "main')) return baseSha;
-			if (value.includes("merge-base --is-ancestor")) {
-				throw Object.assign(new Error("not ancestor"), { status: 1 });
-			}
-			if (value.includes("rev-list --count")) return "1";
-			if (value.includes("git worktree remove")) return remove?.() ?? "";
+			if (String(command).includes("symbolic-ref")) return `${activeBranch}\n`;
 			return "";
+		});
+		mockExecFileGit((argv) => {
+			if (argv[0] === "status") return { stdout: "" };
+			if (argv[0] === "rev-parse") {
+				const ref = argv[2] ?? "";
+				if (ref.includes("HEAD^{commit}")) return { stdout: featureSha };
+				if (ref.includes(`${activeBranch}^{commit}`)) return { stdout: featureSha };
+				if (ref.includes("^{commit}")) return { stdout: baseSha };
+				return {};
+			}
+			if (argv[0] === "merge-base") {
+				return { error: Object.assign(new Error("not ancestor"), { status: 1 }) };
+			}
+			if (argv[0] === "rev-list") return { stdout: "1" };
+			if (argv[0] === "worktree" && argv[1] === "remove") {
+				remove?.();
+				return { stdout: "" };
+			}
+			return {};
 		});
 	}
 
@@ -117,11 +163,206 @@ describe("FeatureManager", () => {
 			expect(mockExecFile).toHaveBeenNthCalledWith(
 				2,
 				"git",
+				["rev-parse", "--verify", "refs/heads/feat/async-feature^{commit}"],
+				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
+				expect.any(Function),
+			);
+			expect(mockExecFile).toHaveBeenNthCalledWith(
+				3,
+				"git",
 				expect.arrayContaining(["worktree", "add", feature.worktreePath]),
 				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
 				expect.any(Function),
 			);
 			expect(feature.provisioning?.state).toBe("ready");
+		});
+
+		it("reuses an existing branch asynchronously and reports how far behind it is", async () => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				args: readonly string[],
+				_options: unknown,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
+			) => {
+				if (args[0] === "rev-parse" && args[1] === "--verify") {
+					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
+					return;
+				}
+				if (args[0] === "rev-list") {
+					callback(null, { stdout: "0 3\n", stderr: "" });
+					return;
+				}
+				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord(
+				"reuse-branch",
+				"shared",
+			);
+			const ready = await asyncManager.provisionFeature(feature.id);
+
+			expect(ready?.provisioning?.state).toBe("ready");
+			expect(ready?.reusedExistingBranch).toEqual({
+				relation: { status: "behind", ahead: 0, behind: 3 },
+			});
+			expect(ready?.createdFromSha).toBeUndefined();
+			expect(ready?.provisioning?.steps[1].label).toBe(
+				"Reusing existing branch feat/reuse-branch (3 commits behind main)",
+			);
+			// Existing branch reused: no `-b` and no base branch in the add.
+			expect(mockExecFile).toHaveBeenCalledWith(
+				"git",
+				["worktree", "add", feature.worktreePath, "feat/reuse-branch"],
+				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
+				expect.any(Function),
+			);
+		});
+
+		it("reuses an existing branch without a behind warning when it is up to date", async () => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				args: readonly string[],
+				_options: unknown,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
+			) => {
+				if (args[0] === "rev-parse" && args[1] === "--verify") {
+					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
+					return;
+				}
+				if (args[0] === "rev-list") {
+					callback(null, { stdout: "0 0\n", stderr: "" });
+					return;
+				}
+				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord("reuse-fresh", "shared");
+			const ready = await asyncManager.provisionFeature(feature.id);
+
+			expect(ready?.reusedExistingBranch).toEqual({
+				relation: { status: "current", ahead: 0, behind: 0 },
+			});
+			expect(ready?.provisioning?.steps[1].label).toBe(
+				"Reusing existing branch feat/reuse-fresh",
+			);
+			expect(mockExecFile).toHaveBeenCalledWith(
+				"git",
+				["worktree", "add", feature.worktreePath, "feat/reuse-fresh"],
+				expect.objectContaining({ cwd: repoRoot, encoding: "utf8" }),
+				expect.any(Function),
+			);
+		});
+
+		it("records an unknown relation when the two-count Git output is malformed", async () => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				args: readonly string[],
+				_options: unknown,
+				callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+			) => {
+				if (args[0] === "rev-parse" && args[1] === "--verify") {
+					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
+					return;
+				}
+				if (args[0] === "rev-list") {
+					callback(null, { stdout: "3\n", stderr: "" });
+					return;
+				}
+				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord("malformed-relation", "shared");
+			const ready = await asyncManager.provisionFeature(feature.id);
+
+			expect(ready?.reusedExistingBranch?.relation).toEqual({
+				status: "unknown",
+				reason: "invalid_relation_counts",
+			});
+		});
+
+		it.each([
+			["ahead-only", "2 0", { status: "ahead", ahead: 2, behind: 0 }, "2 commits ahead"],
+			["diverged", "2 3", { status: "diverged", ahead: 2, behind: 3 }, "2 commits ahead, 3 behind"],
+		] as const)("exposes the complete %s relation", async (_name, counts, relation, label) => {
+			const asyncManager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "main" },
+			);
+			mockExecFile.mockImplementation(((
+				_file: string,
+				args: readonly string[],
+				_options: unknown,
+				callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+			) => {
+				if (args[0] === "rev-parse" && args[1] === "--verify") {
+					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
+					return;
+				}
+				if (args[0] === "rev-list") {
+					callback(null, { stdout: `${counts}\n`, stderr: "" });
+					return;
+				}
+				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
+			}) as never);
+
+			const feature = asyncManager.createFeatureRecord(`reuse-${_name}`, "shared");
+			const ready = await asyncManager.provisionFeature(feature.id);
+			expect(ready?.reusedExistingBranch).toEqual({ relation });
+			expect(ready?.provisioning?.steps[1].label).toContain(label);
+		});
+
+		it("reuses an existing branch synchronously with a behind warning label", () => {
+			mockExecSync.mockImplementation((command: string) => {
+				const value = String(command);
+				if (value.includes("rev-parse --verify")) return `${featureSha}\n`;
+				if (value.includes("rev-list") && value.includes("--count")) return "0 2\n";
+				return "";
+			});
+			const feature = manager.createFeature("reuse-sync", "shared");
+
+			expect(feature.reusedExistingBranch).toEqual({
+			relation: { status: "behind", ahead: 0, behind: 2 },
+		});
+			expect(feature.createdFromSha).toBeUndefined();
+			expect(feature.provisioning?.steps[1].label).toBe(
+				"Reusing existing branch feat/reuse-sync (2 commits behind main)",
+			);
+			expect(mockExecSync).toHaveBeenCalledWith(
+				expect.stringContaining(
+					`git worktree add "${path.join(repoRoot, ".worktrees", "feat-reuse-sync")}" "feat/reuse-sync"`,
+				),
+				expect.any(Object),
+			);
+			expect(mockExecSync).not.toHaveBeenCalledWith(
+				expect.stringContaining("-b \"feat/reuse-sync\""),
+				expect.any(Object),
+			);
 		});
 
 		it("persists completion when the storage watcher reloads between Git steps", async () => {
@@ -442,12 +683,14 @@ describe("FeatureManager", () => {
 	});
 
 	describe("deleteFeature", () => {
-		it("can remove the worktree while preserving records for a resumable finish", () => {
+		it("can remove the worktree while preserving records for a resumable finish", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const feature = manager.createFeature("resumable", "shared");
 			mockCleanMergedDeletion();
 
-			expect(manager.removeFeatureWorktreeForFinish(feature.id)).toMatchObject({
+			expect(
+				await manager.removeFeatureWorktreeForFinish(feature.id),
+			).toMatchObject({
 				deleted: true,
 			});
 			expect(manager.getFeature(feature.id)).toBeDefined();
@@ -457,21 +700,23 @@ describe("FeatureManager", () => {
 			expect(manager.getFeature(feature.id)).toBeUndefined();
 		});
 
-		it("removes feature and worktree", () => {
+		it("removes feature and worktree", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const feature = manager.createFeature("to-delete", "shared");
 
 			mockCleanMergedDeletion();
-			manager.deleteFeature(feature.id);
+			await manager.deleteFeature(feature.id);
 
 			expect(manager.getFeatures()).toHaveLength(0);
-			expect(mockExecSync).toHaveBeenCalledWith(
-				expect.stringContaining("git worktree remove"),
+			expect(mockExecFile).toHaveBeenCalledWith(
+				"git",
+				expect.arrayContaining(["worktree", "remove", feature.worktreePath]),
 				expect.any(Object),
+				expect.any(Function),
 			);
 		});
 
-		it("keeps the feature record when git refuses to remove the worktree", () => {
+		it("keeps the feature record when git refuses to remove the worktree", async () => {
 			// Real worktree base inside the tmp dir so fs.existsSync sees the
 			// worktree still on disk after the (simulated) git failure.
 			const fm = new FeatureManager(store, tmpDir, tmpDir, {
@@ -486,7 +731,7 @@ describe("FeatureManager", () => {
 				throw new Error("git worktree remove failed");
 			});
 
-			const result = fm.deleteFeature(feature.id);
+			const result = await fm.deleteFeature(feature.id);
 
 			expect(result.deleted).toBe(false);
 			expect(result.reasons.join("\n")).toContain("refused to remove worktree");
@@ -495,59 +740,75 @@ describe("FeatureManager", () => {
 			expect(fm.getFeatures()).toHaveLength(1);
 		});
 
-		it("uses exact merged-PR evidence without weakening Git worktree protection", () => {
+		it("uses exact merged-PR evidence without weakening Git worktree protection", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const feature = manager.createFeature("squash-merged", "shared");
 			mockExecSync.mockReset();
 			mockCleanSquashMergedDeletion();
 
 			expect(
-				manager.removeFeatureWorktreeForFinish(feature.id, {
+				await manager.removeFeatureWorktreeForFinish(feature.id, {
 					acceptedPullRequestHeadSha: featureSha,
 				}),
 			).toMatchObject({ deleted: true, reasons: [] });
-			const removeCall = mockExecSync.mock.calls.find(([command]) =>
-				String(command).includes("git worktree remove"),
+			const removeCall = mockExecFile.mock.calls.find(
+				([file, args]) =>
+					file === "git" &&
+					Array.isArray(args) &&
+					args[0] === "worktree" &&
+					args[1] === "remove",
 			);
-			expect(String(removeCall?.[0])).not.toContain("--force");
+			expect(removeCall?.[1]).not.toContain("--force");
 		});
 
-		it("rejects stale merged-PR evidence when the working tree becomes dirty", () => {
+		it("rejects stale merged-PR evidence when the working tree becomes dirty", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const feature = manager.createFeature("dirty-after-review", "shared");
 			mockExecSync.mockReset();
-			mockCleanSquashMergedDeletion();
-			mockExecSync.mockImplementation((command: string) => {
-				const value = String(command);
-				if (value.includes("symbolic-ref")) return `${feature.branch}\n`;
-				if (value.includes("git status --porcelain")) return " M changed.ts";
-				if (value.includes('rev-parse --verify "feat/')) return featureSha;
-				if (value.includes('rev-parse --verify "main')) return baseSha;
-				if (value.includes("merge-base --is-ancestor")) {
-					throw Object.assign(new Error("not ancestor"), { status: 1 });
+			mockExecFileGit((argv) => {
+				if (argv[0] === "status") return { stdout: " M changed.ts" };
+				if (argv[0] === "rev-parse") {
+					const ref = argv[2] ?? "";
+					if (ref.includes(`${feature.branch}^{commit}`))
+						return { stdout: featureSha };
+					if (ref.includes("^{commit}")) return { stdout: baseSha };
+					return {};
 				}
-				if (value.includes("rev-list --count")) return "1";
+				if (argv[0] === "merge-base") {
+					return {
+						error: Object.assign(new Error("not ancestor"), { status: 1 }),
+					};
+				}
+				if (argv[0] === "rev-list") return { stdout: "1" };
+				return {};
+			});
+			mockExecSync.mockImplementation((command: string) => {
+				if (String(command).includes("symbolic-ref"))
+					return `${feature.branch}\n`;
 				return "";
 			});
 
-			expect(() =>
+			await expect(
 				manager.removeFeatureWorktreeForFinish(feature.id, {
 					acceptedPullRequestHeadSha: featureSha,
 				}),
-			).toThrow("no longer matches");
-			expect(
-				mockExecSync.mock.calls.some(([command]) =>
-					String(command).includes("git worktree remove"),
-				),
-			).toBe(false);
+			).rejects.toThrow("no longer matches");
+			const removeCalls = mockExecFile.mock.calls.filter(
+				([file, args]) =>
+					file === "git" &&
+					Array.isArray(args) &&
+					args[0] === "worktree" &&
+					args[1] === "remove",
+			);
+			expect(removeCalls).toHaveLength(0);
 		});
 	});
 
 		describe("removeWorktreeResidue", () => {
-		it("refuses a path outside worktreeBase", () => {
+		it("refuses a path outside worktreeBase", async () => {
 			const outside = fs.mkdtempSync(path.join(os.tmpdir(), "fm-outside-"));
 			try {
-				const result = manager.removeWorktreeResidue(outside);
+				const result = await manager.removeWorktreeResidue(outside);
 
 				expect(result.deleted).toBe(false);
 				expect(result.reasons.join("\n")).toContain("outside base");
@@ -557,34 +818,64 @@ describe("FeatureManager", () => {
 			}
 		});
 
-		it("refuses a path registered by Git", () => {
+		it("refuses a path registered by Git", async () => {
 			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
 				baseBranch: "main",
 			});
 			const registered = path.join(tmpDir, "registered");
 			fs.mkdirSync(registered);
-			mockExecSync.mockReturnValue(`worktree ${registered}\n`);
+			mockExecFileGit(() => ({ stdout: `worktree ${registered}\n` }));
 
-			const result = localManager.removeWorktreeResidue(registered);
+			const result = await localManager.removeWorktreeResidue(registered);
 
 			expect(result.deleted).toBe(false);
 			expect(result.reasons.join("\n")).toContain("registered by Git");
 			expect(fs.existsSync(registered)).toBe(true);
 		});
 
-		it("removes an unregistered residue directory", () => {
+		it("removes an unregistered residue directory", async () => {
 			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
 				baseBranch: "main",
 			});
 			const residue = path.join(tmpDir, "residue");
 			fs.mkdirSync(residue);
 			fs.writeFileSync(path.join(residue, "untracked.txt"), "work");
-			mockExecSync.mockReturnValue(`worktree ${path.join(tmpDir, "other")}\n`);
+			mockExecFileGit(() => ({
+				stdout: `worktree ${path.join(tmpDir, "other")}\n`,
+			}));
 
-			const result = localManager.removeWorktreeResidue(residue);
+			const result = await localManager.removeWorktreeResidue(residue);
 
 			expect(result).toEqual({ deleted: true, reasons: [] });
 			expect(fs.existsSync(residue)).toBe(false);
+		});
+
+		it.runIf(
+			typeof process.getuid === "function" && process.getuid() !== 0,
+		)("suggests a sudo command when removal is permission-blocked", async () => {
+			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			const residue = path.join(tmpDir, "blocked");
+			const sub = path.join(residue, "sub");
+			fs.mkdirSync(sub, { recursive: true });
+			fs.writeFileSync(path.join(sub, "blocked.txt"), "x");
+			fs.chmodSync(sub, 0o300);
+			mockExecFileGit(() => ({
+				stdout: `worktree ${path.join(tmpDir, "other")}\n`,
+			}));
+
+			try {
+				const result = await localManager.removeWorktreeResidue(residue);
+
+				expect(result.deleted).toBe(false);
+				expect(result.reasons.join("\n")).toContain("EACCES");
+				expect(result.reasons.join("\n")).toContain("another user");
+				expect(result.suggestedCommand).toBe(`sudo rm -rf '${residue}'`);
+				expect(fs.existsSync(residue)).toBe(true);
+			} finally {
+				fs.chmodSync(sub, 0o700);
+			}
 		});
 	});
 
@@ -748,7 +1039,7 @@ describe("FeatureManager", () => {
 			expect(feature.branch).toBe("feature/READ-891");
 		});
 
-		it("throws on delete when the worktree has uncommitted changes", () => {
+		it("throws on delete when the worktree has uncommitted changes", async () => {
 			// base branch detection → clean
 			mockExecSync.mockReturnValueOnce("");
 			// createFeature worktree add
@@ -763,11 +1054,26 @@ describe("FeatureManager", () => {
 					? `${feature.branch}\n`
 					: " M x.ts\n",
 			);
+			mockExecFileGit((argv) => {
+				if (argv[0] === "status") return { stdout: " M x.ts\n" };
+				if (argv[0] === "rev-parse") {
+					const ref = argv[2] ?? "";
+					if (ref.includes(`${feature.branch}^{commit}`))
+						return { stdout: featureSha };
+					if (ref.includes("^{commit}")) return { stdout: baseSha };
+					return {};
+				}
+				if (argv[0] === "merge-base") return { stdout: "" };
+				if (argv[0] === "rev-list") return { stdout: "0" };
+				return {};
+			});
 
-			expect(() => fm.deleteFeature(feature.id)).toThrow("Uncommitted changes");
+			await expect(fm.deleteFeature(feature.id)).rejects.toThrow(
+				"Uncommitted changes",
+			);
 		});
 
-		it("deletes clean features without --force", () => {
+		it("deletes clean features without --force", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const fm = configManager({ baseBranch: "main" });
 			const feature = fm.createFeature("clean-one", "shared", "feature");
@@ -775,20 +1081,26 @@ describe("FeatureManager", () => {
 			mockExecSync.mockReset();
 			mockCleanMergedDeletion();
 
-			const result = fm.deleteFeature(feature.id);
+			const result = await fm.deleteFeature(feature.id);
 			expect(result.deleted).toBe(true);
-			expect(mockExecSync).toHaveBeenCalledWith(
-				expect.stringContaining("git worktree remove"),
+			expect(mockExecFile).toHaveBeenCalledWith(
+				"git",
+				expect.arrayContaining(["worktree", "remove", feature.worktreePath]),
 				expect.any(Object),
+				expect.any(Function),
 			);
 			// no --force on the nominal path
-			const removeCall = mockExecSync.mock.calls.find(([c]) =>
-				String(c).includes("git worktree remove"),
+			const removeCall = mockExecFile.mock.calls.find(
+				([file, args]) =>
+					file === "git" &&
+					Array.isArray(args) &&
+					args[0] === "worktree" &&
+					args[1] === "remove",
 			);
-			expect(String(removeCall?.[0])).not.toContain("--force");
+			expect(removeCall?.[1]).not.toContain("--force");
 		});
 
-		it("deletes a clean feature when persisted links lag the active checkout", () => {
+		it("deletes a clean feature when persisted links lag the active checkout", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
 			const fm = configManager({ baseBranch: "main" });
 			const feature = fm.createFeature("stale-links", "shared", "feature");
@@ -803,19 +1115,28 @@ describe("FeatureManager", () => {
 			];
 
 			mockExecSync.mockReset();
-			mockExecSync.mockImplementation((command: string) => {
-				const value = String(command);
-				if (value.includes("symbolic-ref")) return "feature/current-stale-links\n";
-				if (value.includes("git status --porcelain")) return "";
-				if (value.includes('rev-parse --verify "feature/current-stale-links'))
-					return featureSha;
-				if (value.includes('rev-parse --verify "main')) return baseSha;
-				if (value.includes("merge-base --is-ancestor")) return "";
-				if (value.includes("rev-list --count")) return "0";
-				return "";
+			mockExecSync.mockImplementation((command: string) =>
+				String(command).includes("symbolic-ref")
+					? "feature/current-stale-links\n"
+					: "",
+			);
+			mockExecFileGit((argv) => {
+				if (argv[0] === "status") return { stdout: "" };
+				if (argv[0] === "rev-parse") {
+					const ref = argv[2] ?? "";
+					if (ref.includes("feature/current-stale-links^{commit}"))
+						return { stdout: featureSha };
+					if (ref.includes("^{commit}")) return { stdout: baseSha };
+					return {};
+				}
+				if (argv[0] === "merge-base") return { stdout: "" };
+				if (argv[0] === "rev-list") return { stdout: "0" };
+				if (argv[0] === "worktree" && argv[1] === "remove")
+					return { stdout: "" };
+				return {};
 			});
 
-			const result = fm.removeFeatureWorktreeForFinish(feature.id);
+			const result = await fm.removeFeatureWorktreeForFinish(feature.id);
 
 			expect(result.deleted).toBe(true);
 		});

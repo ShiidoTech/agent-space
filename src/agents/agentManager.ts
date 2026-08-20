@@ -1,7 +1,8 @@
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { promisify } from "node:util";
 import { normalizeFeatureName } from "../features/featureName";
 import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
@@ -29,6 +30,7 @@ export class AgentManager {
 	private invalidateTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly attentionResolver: AgentAttentionResolver;
 	private readonly observationResolver: AgentObservationResolver;
+	private readonly execFileAsync = promisify(execFile);
 
 	constructor(
 		private readonly store: Store,
@@ -439,17 +441,17 @@ export class AgentManager {
 	}
 
 	/** Remove only the agent worktree; keep its record until Feature cleanup succeeds. */
-	removeAgentWorktreeForFinish(
+	async removeAgentWorktreeForFinish(
 		agentId: string,
 		featureId: string,
 		force = false,
-	): AgentWorktreeRemovalResult {
+	): Promise<AgentWorktreeRemovalResult> {
 		const agent = this.loadAgents(featureId).find(
 			(candidate) => candidate.id === agentId,
 		);
 		if (!agent) return { removed: false, reason: "Agent record not found" };
 		if (!agent.worktreePath) return { removed: true };
-		return this.removeWorktree(agent.worktreePath, force);
+		return this.removeWorktreeAsync(agent.worktreePath, force);
 	}
 
 	/** Stable Git branch identity for a per-agent worktree, even after removal. */
@@ -542,6 +544,44 @@ export class AgentManager {
 					stdio: ["ignore", "pipe", "pipe"],
 				},
 			);
+			return { removed: true, worktreePath };
+		} catch (err) {
+			if (!fs.existsSync(worktreePath)) {
+				return { removed: true, worktreePath };
+			}
+			return {
+				removed: false,
+				worktreePath,
+				reason: `Git refused to remove agent worktree: ${err instanceof Error ? err.message : String(err)}`,
+			};
+		}
+	}
+
+	private async removeWorktreeAsync(
+		worktreePath: string,
+		force = false,
+	): Promise<AgentWorktreeRemovalResult> {
+		if (!isWorktreePathSafe(worktreePath, this.worktreeBase)) {
+			return {
+				removed: false,
+				worktreePath,
+				reason: `Refusing to remove worktree outside base: ${worktreePath}`,
+			};
+		}
+		try {
+			// Fail-closed by default: git refuses to remove a worktree that
+			// contains modified/untracked files unless --force is passed.
+			// We never force as the nominal path.
+			await this.execFileAsync("git", [
+				"worktree",
+				"remove",
+				worktreePath,
+				...(force ? ["--force"] : []),
+			], {
+				cwd: this.repoRoot,
+				encoding: "utf8",
+				maxBuffer: 4 * 1024 * 1024,
+			});
 			return { removed: true, worktreePath };
 		} catch (err) {
 			if (!fs.existsSync(worktreePath)) {

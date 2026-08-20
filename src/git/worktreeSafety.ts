@@ -1,4 +1,5 @@
-import { execSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 
 export interface WorktreeDeletionSafety {
@@ -54,22 +55,23 @@ export interface BranchRetentionSafety {
 	readonly reasons: readonly string[];
 }
 
-function git(command: string, cwd: string): string {
-	return String(
-		execSync(command, {
-			cwd,
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "pipe"],
-		}),
-	).trim();
+const execFileAsync = promisify(execFile);
+
+async function git(argv: string[], cwd: string): Promise<string> {
+	const { stdout } = await execFileAsync("git", argv, {
+		cwd,
+		encoding: "utf8",
+		maxBuffer: 4 * 1024 * 1024,
+	});
+	return stdout.trim();
 }
 
 function isExpectedNotAncestorError(error: unknown): boolean {
 	return (
 		typeof error === "object" &&
 		error !== null &&
-		"status" in error &&
-		(error as { status?: unknown }).status === 1
+		((error as { status?: unknown }).status === 1 ||
+			(error as { code?: unknown }).code === 1)
 	);
 }
 
@@ -82,11 +84,11 @@ function isFullCommitSha(value: string): boolean {
  * Agent Space preserves branches, but it must still surface unique commits
  * before forgetting the human-facing Feature/Agent record.
  */
-export function checkBranchRetentionSafety(input: {
+export async function checkBranchRetentionSafety(input: {
 	repoRoot: string;
 	branch?: string;
 	baseBranch?: string;
-}): BranchRetentionSafety {
+}): Promise<BranchRetentionSafety> {
 	const { repoRoot, branch, baseBranch } = input;
 	let refsObserved = false;
 	let integrationObserved = false;
@@ -99,9 +101,12 @@ export function checkBranchRetentionSafety(input: {
 
 	if (branch && baseBranch) {
 		try {
-			featureSha = git(`git rev-parse --verify "${branch}^{commit}"`, repoRoot);
-			baseSha = git(
-				`git rev-parse --verify "${baseBranch}^{commit}"`,
+			featureSha = await git(
+				["rev-parse", "--verify", `${branch}^{commit}`],
+				repoRoot,
+			);
+			baseSha = await git(
+				["rev-parse", "--verify", `${baseBranch}^{commit}`],
 				repoRoot,
 			);
 			refsObserved = isFullCommitSha(featureSha) && isFullCommitSha(baseSha);
@@ -112,8 +117,8 @@ export function checkBranchRetentionSafety(input: {
 
 	if (refsObserved && featureSha && baseSha) {
 		try {
-			git(
-				`git merge-base --is-ancestor "${featureSha}" "${baseSha}"`,
+			await git(
+				["merge-base", "--is-ancestor", featureSha, baseSha],
 				repoRoot,
 			);
 			integrationObserved = true;
@@ -126,7 +131,10 @@ export function checkBranchRetentionSafety(input: {
 		}
 		try {
 			const count = Number.parseInt(
-				git(`git rev-list --count "${baseSha}..${featureSha}"`, repoRoot),
+				await git(
+					["rev-list", "--count", `${baseSha}..${featureSha}`],
+					repoRoot,
+				),
 				10,
 			);
 			if (Number.isSafeInteger(count) && count >= 0) {
@@ -180,9 +188,9 @@ export function checkBranchRetentionSafety(input: {
  * work. Nothing here deletes anything: callers decide based on `safe` and on
  * explicit human confirmation before a forced path is ever taken.
  */
-export function checkWorktreeDeletionSafety(
+export async function checkWorktreeDeletionSafety(
 	input: WorktreeDeletionInput,
-): WorktreeDeletionSafety {
+): Promise<WorktreeDeletionSafety> {
 	const { repoRoot, worktreeBase, worktreePath, branch, baseBranch } = input;
 
 	const insideBase = isWorktreePathSafe(worktreePath, worktreeBase);
@@ -191,7 +199,7 @@ export function checkWorktreeDeletionSafety(
 	let dirty = false;
 	let workingTreeStatus: string | undefined;
 	try {
-		const status = git("git status --porcelain", worktreePath);
+		const status = await git(["status", "--porcelain"], worktreePath);
 		statusObserved = true;
 		workingTreeStatus = status;
 		dirty = status.length > 0;
@@ -209,9 +217,12 @@ export function checkWorktreeDeletionSafety(
 	let baseSha: string | undefined;
 	if (branch && baseBranch) {
 		try {
-			featureSha = git(`git rev-parse --verify "${branch}^{commit}"`, repoRoot);
-			baseSha = git(
-				`git rev-parse --verify "${baseBranch}^{commit}"`,
+			featureSha = await git(
+				["rev-parse", "--verify", `${branch}^{commit}`],
+				repoRoot,
+			);
+			baseSha = await git(
+				["rev-parse", "--verify", `${baseBranch}^{commit}`],
 				repoRoot,
 			);
 			refsObserved = isFullCommitSha(featureSha) && isFullCommitSha(baseSha);
@@ -221,8 +232,8 @@ export function checkWorktreeDeletionSafety(
 
 		if (refsObserved) {
 			try {
-				git(
-					`git merge-base --is-ancestor "${featureSha}" "${baseSha}"`,
+				await git(
+					["merge-base", "--is-ancestor", featureSha!, baseSha!],
 					repoRoot,
 				);
 				integrationObserved = true;
@@ -236,8 +247,8 @@ export function checkWorktreeDeletionSafety(
 
 		if (refsObserved) {
 			try {
-				const count = git(
-					`git rev-list --count "${baseSha}..${featureSha}"`,
+				const count = await git(
+					["rev-list", "--count", `${baseSha}..${featureSha}`],
 					repoRoot,
 				);
 				if (/^\d+$/.test(count)) {

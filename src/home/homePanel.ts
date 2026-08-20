@@ -532,7 +532,10 @@ export class HomePanel {
 		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
 		if (!resolved) return;
 		const { ctx, feature } = resolved;
-		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
+		const agents =
+			typeof ctx.agentManager.getAgentsReadModel === "function"
+				? ctx.agentManager.getAgentsReadModel(this.currentFeatureId)
+				: ctx.agentManager.getAgents(feature.id);
 		const agent = agents.find((a) => a.id === agentId);
 		if (!agent) return;
 		const agentIndex = agents.indexOf(agent);
@@ -914,6 +917,25 @@ export class HomePanel {
 			case "unknown":
 				return '<span class="project-base-chip project-base-chip--warning" title="Relation could not be observed">unknown</span>';
 		}
+	}
+
+	private renderReusedBranchChip(feature: Feature): string {
+		const reused = feature.reusedExistingBranch;
+		if (!reused) return "";
+		const relation = reused.relation;
+		if (relation.status === "unknown") {
+			return `<span class="project-base-chip project-base-chip--warning" title="Branch ${this.escapeHtml(feature.branch)} already existed; its relation to the base branch could not be observed">reused &middot; relation unknown</span>`;
+		}
+		if (relation.status === "current") {
+			return `<span class="project-base-chip" title="Branch ${this.escapeHtml(feature.branch)} already existed and matches the base branch">reused branch</span>`;
+		}
+		const detail = relation.status === "diverged"
+			? `${relation.ahead} ahead &middot; ${relation.behind} behind`
+			: relation.status === "ahead"
+				? `${relation.ahead} ahead`
+				: `${relation.behind} behind`;
+		const tone = relation.status === "diverged" || relation.status === "ahead" ? "error" : "warning";
+		return `<span class="project-base-chip project-base-chip--${tone}" title="Branch ${this.escapeHtml(feature.branch)} already existed when this feature was created; the existing branch was reused and its relation to base is ${detail}">reused &middot; ${detail}</span>`;
 	}
 
 	private renderGitStatsContent(stats: GitStats): string {
@@ -1569,6 +1591,7 @@ export class HomePanel {
 								<div class="project-feature-color" style="background: ${dotColor}"></div>
 								<span class="project-feature-branch">${this.escapeHtml(feature.branch)}</span>
 								${statusBadge}
+								${this.renderReusedBranchChip(feature)}
 								<span class="project-feature-counts">${counts}</span>
 								<button class="project-feature-delete" onclick="event.stopPropagation(); deleteFeature('${feature.id}')" title="Finish Feature">&times;</button>
 							</div>

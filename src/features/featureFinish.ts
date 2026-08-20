@@ -38,14 +38,14 @@ export interface FeatureFinishAssessment {
 }
 
 /** Read-only, fail-closed assessment used before and after confirmation. */
-export function assessFeatureFinish(
+export async function assessFeatureFinish(
 	ctx: ProjectContext,
 	feature: Feature,
 	evidence: FeatureFinishEvidence,
 	pathExists: (candidate: string) => boolean = fs.existsSync,
-): FeatureFinishAssessment {
+): Promise<FeatureFinishAssessment> {
 	const checks: FeatureFinishCheck[] = [];
-	const worktrees = ctx.gitClient.readSync(
+	const worktrees = await ctx.gitClient.read(
 		["worktree", "list", "--porcelain"],
 		{
 			cwd: ctx.project.repoPath,
@@ -63,7 +63,7 @@ export function assessFeatureFinish(
 	const featurePath = path.resolve(feature.worktreePath);
 	let activeFeatureBranch: string | undefined = feature.branch;
 	if (registeredPaths.has(featurePath)) {
-		const branch = observeRegisteredBranch(
+		const branch = await observeRegisteredBranch(
 			ctx,
 			feature.worktreePath,
 			registeredBranches.get(featurePath),
@@ -75,7 +75,7 @@ export function assessFeatureFinish(
 		activeFeatureBranch = branch;
 	}
 
-	const check = (
+	const check = async (
 		kind: FeatureFinishCheck["kind"],
 		worktreePath: string,
 		branch: string | undefined,
@@ -87,11 +87,11 @@ export function assessFeatureFinish(
 			const exists = pathExists(resolvedPath);
 			const retentionBranch =
 				kind === "feature"
-					? resolveFeatureRetentionBranch(ctx, feature, branch)
+					? await resolveFeatureRetentionBranch(ctx, feature, branch)
 					: branch;
 			const safety = exists
 				? undefined
-				: checkBranchRetentionSafety({
+				: await checkBranchRetentionSafety({
 						repoRoot: ctx.project.repoPath,
 						branch: retentionBranch,
 						baseBranch: comparisonBranch,
@@ -111,7 +111,7 @@ export function assessFeatureFinish(
 			});
 			return;
 		}
-		const safety = checkWorktreeDeletionSafety({
+		const safety = await checkWorktreeDeletionSafety({
 			repoRoot: ctx.project.repoPath,
 			worktreeBase: ctx.featureManager.getWorktreeBase(),
 			worktreePath,
@@ -130,7 +130,7 @@ export function assessFeatureFinish(
 		});
 	};
 
-	check(
+	await check(
 		"feature",
 		feature.worktreePath,
 		activeFeatureBranch,
@@ -141,14 +141,14 @@ export function assessFeatureFinish(
 		const registered = registeredPaths.has(path.resolve(agent.worktreePath));
 		const resolvedAgentPath = path.resolve(agent.worktreePath);
 		const branch = registered
-			? observeRegisteredBranch(
+			? await observeRegisteredBranch(
 					ctx,
 					agent.worktreePath,
 					registeredBranches.get(resolvedAgentPath),
 					ctx.agentManager.getAgentBranchName(feature, agent.id),
 				)
 			: undefined;
-		check(
+		await check(
 			"agent",
 			agent.worktreePath,
 			registered ? branch : ctx.agentManager.getAgentBranchName(feature, agent.id),
@@ -195,11 +195,11 @@ export function assessFeatureFinish(
 	};
 }
 
-function resolveFeatureRetentionBranch(
+async function resolveFeatureRetentionBranch(
 	ctx: ProjectContext,
 	feature: Feature,
 	declaredBranch: string | undefined,
-): string | undefined {
+): Promise<string | undefined> {
 	const candidates = new Set<string>();
 	if (declaredBranch) candidates.add(declaredBranch);
 	const name = feature.name.trim().replace(/\s+/gu, "-").toLowerCase();
@@ -207,7 +207,7 @@ function resolveFeatureRetentionBranch(
 		candidates.add(`feature/${name}`);
 		candidates.add(`feat/${name}`);
 	}
-	const refs = ctx.gitClient.readSync(
+	const refs = await ctx.gitClient.read(
 		["for-each-ref", "--format=%(refname:short)", "refs/heads"],
 		{ cwd: ctx.project.repoPath },
 	);
@@ -220,31 +220,34 @@ function resolveFeatureRetentionBranch(
 		const derived = available.filter((ref) => ref !== declaredBranch);
 		return derived.length === 1 ? derived[0] : undefined;
 	}
-	const resolved = [...candidates].filter((candidate) => {
-		const resolved = ctx.gitClient.readSync(
+	const resolved: string[] = [];
+	for (const candidate of candidates) {
+		const observed = await ctx.gitClient.read(
 			["rev-parse", "--verify", `${candidate}^{commit}`],
 			{ cwd: ctx.project.repoPath },
 		);
-		return resolved.exitCode === 0 && !resolved.error && resolved.stdout.trim();
-	});
+		if (observed.exitCode === 0 && !observed.error && observed.stdout.trim()) {
+			resolved.push(candidate);
+		}
+	}
 	if (declaredBranch && resolved.includes(declaredBranch)) return declaredBranch;
 	return resolved.length === 1 ? resolved[0] : undefined;
 }
 
-function observeRegisteredBranch(
+async function observeRegisteredBranch(
 	ctx: ProjectContext,
 	worktreePath: string,
 	inventoryBranch: string | undefined,
 	declaredBranch: string,
-): string | undefined {
-	const symbolic = ctx.gitClient.readSync(
+): Promise<string | undefined> {
+	const symbolic = await ctx.gitClient.read(
 		["symbolic-ref", "--quiet", "--short", "HEAD"],
 		{ cwd: worktreePath },
 	);
 	if (symbolic.exitCode === 0 && !symbolic.error) {
 		return symbolic.stdout.trim() || undefined;
 	}
-	const current = ctx.gitClient.readSync(["branch", "--show-current"], {
+	const current = await ctx.gitClient.read(["branch", "--show-current"], {
 		cwd: worktreePath,
 	});
 	const currentBranch = current.stdout.trim();
@@ -259,10 +262,10 @@ function observeRegisteredBranch(
 	}
 	if (inventoryBranch) return inventoryBranch;
 	if (symbolic.exitCode === 1 || current.exitCode === 1) {
-		const head = ctx.gitClient.readSync(["rev-parse", "--verify", "HEAD^{commit}"], {
+		const head = await ctx.gitClient.read(["rev-parse", "--verify", "HEAD^{commit}"], {
 			cwd: worktreePath,
 		});
-		const declared = ctx.gitClient.readSync(
+		const declared = await ctx.gitClient.read(
 			["rev-parse", "--verify", `${declaredBranch}^{commit}`],
 			{ cwd: ctx.project.repoPath },
 		);
@@ -327,8 +330,8 @@ function finishDecision(
 			// A human may explicitly accept the unknown GitHub state when local
 			// worktree deletion is independently forceable. Branches are retained;
 			// this only removes the worktree and Agent Space records.
-			forceable: safety.forceable,
-			requiresForce: safety.forceable,
+			forceable: safety.forceable && !("dirty" in safety && safety.dirty),
+			requiresForce: safety.forceable && !("dirty" in safety && safety.dirty),
 			reasons: [integrationReason, ...safety.reasons],
 		};
 	}

@@ -254,6 +254,33 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(showA).not.toHaveBeenCalled();
 	});
 
+	it("renders a reused-branch chip with the behind count", () => {
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		const html = (buildPanel() as any).renderReusedBranchChip({
+			...feature,
+			reusedExistingBranch: { relation: { status: "behind", ahead: 0, behind: 3 } },
+		});
+		expect(html).toContain("project-base-chip--warning");
+		expect(html).toContain("reused &middot; 3 behind");
+		expect(html).toContain("3 behind");
+	});
+
+	it("renders a plain reused-branch chip when the branch is up to date", () => {
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		const html = (buildPanel() as any).renderReusedBranchChip({
+			...feature,
+			reusedExistingBranch: { relation: { status: "current", ahead: 0, behind: 0 } },
+		});
+		expect(html).toContain("reused branch");
+		expect(html).not.toContain("behind");
+		expect(html).not.toContain("--warning");
+	});
+
+	it("renders no chip when the branch was created fresh", () => {
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		expect((buildPanel() as any).renderReusedBranchChip(feature)).toBe("");
+	});
+
 	it("opens only the PR URL observed by the extension host", () => {
 		getSnapshot.mockReturnValue({
 			github: {

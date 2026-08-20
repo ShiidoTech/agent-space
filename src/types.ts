@@ -82,6 +82,14 @@ export interface AgentSessionBinding {
 
 export type FeatureBranchRole = "primary" | "continuation";
 
+/** Complete local commit-graph relation for a reused branch against base. */
+export type ReusedBranchRelation =
+	| { status: "current"; ahead: 0; behind: 0 }
+	| { status: "behind"; ahead: 0; behind: number }
+	| { status: "ahead"; ahead: number; behind: 0 }
+	| { status: "diverged"; ahead: number; behind: number }
+	| { status: "unknown"; reason: string };
+
 /**
  * Persisted relationship between the human Feature and one Git branch.
  *
@@ -118,6 +126,12 @@ export interface Feature {
 	provisioning?: FeatureProvisioning;
 	/** Commit the feature branch was created from, when known. */
 	createdFromSha?: string;
+	/**
+	 * Set when the feature reused an already-existing Git branch at creation.
+	 * The relation is read from the local commit graph; no fetch or merge is
+	 * performed during feature creation.
+	 */
+	reusedExistingBranch?: { relation: ReusedBranchRelation };
 }
 
 /**
