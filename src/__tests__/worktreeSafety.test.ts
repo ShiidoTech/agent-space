@@ -88,6 +88,40 @@ describe("checkWorktreeDeletionSafety", () => {
 		expect(result.reasons.join()).toContain("outside the allowed base");
 	});
 
+	it("is safe outside the base only when the caller proves registration", async () => {
+		mockCleanMerged();
+
+		const result = await checkWorktreeDeletionSafety({
+			repoRoot,
+			worktreeBase,
+			worktreePath: "/elsewhere/feature-x",
+			branch: "feature/x",
+			baseBranch: "main",
+			allowRegisteredOutsideBase: true,
+		});
+
+		expect(result.safe).toBe(true);
+		expect(result.forceable).toBe(true);
+		expect(result.reasons).toEqual([]);
+	});
+
+	it("still blocks dirty or unmerged work outside the base even when registered", async () => {
+		mockGitSequence(" M src/index.ts\n", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+
+		const result = await checkWorktreeDeletionSafety({
+			repoRoot,
+			worktreeBase,
+			worktreePath: "/elsewhere/feature-x",
+			branch: "feature/x",
+			baseBranch: "main",
+			allowRegisteredOutsideBase: true,
+		});
+
+		expect(result.safe).toBe(false);
+		expect(result.forceable).toBe(true);
+		expect(result.reasons.join()).toContain("Uncommitted changes");
+	});
+
 	it("is unsafe when the worktree has uncommitted changes", async () => {
 		mockGitSequence(" M src/index.ts\n", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
 

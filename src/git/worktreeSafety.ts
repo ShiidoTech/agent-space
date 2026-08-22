@@ -37,6 +37,12 @@ export interface WorktreeDeletionInput {
 	worktreePath: string;
 	branch?: string;
 	baseBranch?: string;
+	/**
+	 * Allow a caller that has already proven this exact path/branch pairing
+	 * through `git worktree list` to clean up a legacy worktree outside the
+	 * configured Agent Space base directory.
+	 */
+	allowRegisteredOutsideBase?: boolean;
 }
 
 export interface BranchRetentionSafety {
@@ -191,9 +197,17 @@ export async function checkBranchRetentionSafety(input: {
 export async function checkWorktreeDeletionSafety(
 	input: WorktreeDeletionInput,
 ): Promise<WorktreeDeletionSafety> {
-	const { repoRoot, worktreeBase, worktreePath, branch, baseBranch } = input;
+	const {
+		repoRoot,
+		worktreeBase,
+		worktreePath,
+		branch,
+		baseBranch,
+		allowRegisteredOutsideBase = false,
+	} = input;
 
 	const insideBase = isWorktreePathSafe(worktreePath, worktreeBase);
+	const pathScoped = insideBase || allowRegisteredOutsideBase;
 
 	let statusObserved = false;
 	let dirty = false;
@@ -263,7 +277,7 @@ export async function checkWorktreeDeletionSafety(
 	}
 
 	const reasons: string[] = [];
-	if (!insideBase) {
+	if (!pathScoped) {
 		reasons.push(`Worktree path is outside the allowed base: ${worktreePath}`);
 	}
 	if (!statusObserved) {
@@ -323,13 +337,13 @@ export async function checkWorktreeDeletionSafety(
 		...(localCommitCount !== undefined ? { localCommitCount } : {}),
 		unmerged,
 		forceable:
-			insideBase &&
+			pathScoped &&
 			statusObserved &&
 			refsObserved &&
 			integrationObserved &&
 			localCommitsObserved,
 		safe:
-			insideBase &&
+			pathScoped &&
 			statusObserved &&
 			refsObserved &&
 			integrationObserved &&
