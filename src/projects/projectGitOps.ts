@@ -337,16 +337,12 @@ export async function assessWorktreeBranchDeletion(
 			reasons: ["The main working tree cannot be removed as a worktree."],
 		};
 	}
-	if (!isWorktreePathSafe(worktreePath, worktreeBase)) {
-		return {
-			deletable: false,
-			reasons: [`Refusing to remove worktree outside base: ${worktreePath}`],
-		};
-	}
-
 	const presence = await checkPathPresence(worktreePath);
 	if (!presence.present) {
 		if (presence.confirmedAbsent) {
+			// Nothing exists at the path, so even outside the managed base there
+			// is no live directory to protect — only possibly a stale Git
+			// registration ("prunable"). Integration checks alone decide.
 			if (baseBranch) {
 				// The worktree is already gone (pruned residue): only the branch
 				// ref remains, and it must still be fully integrated.
@@ -369,6 +365,12 @@ export async function assessWorktreeBranchDeletion(
 			reasons: [
 				`Cannot verify whether ${worktreePath} still exists (${presence.reason}). Refusing to delete a possibly-live worktree.`,
 			],
+		};
+	}
+	if (!isWorktreePathSafe(worktreePath, worktreeBase)) {
+		return {
+			deletable: false,
+			reasons: [`Refusing to remove worktree outside base: ${worktreePath}`],
 		};
 	}
 
@@ -423,20 +425,23 @@ export async function deleteWorktreeBranch(
 
 	const { repoRoot, worktreePath, branchRef } = input;
 	const presence = await checkPathPresence(worktreePath);
-	if (presence.present) {
-		const removal = await git.read(["worktree", "remove", worktreePath], {
-			cwd: repoRoot,
-		});
-		if (removal.exitCode !== 0 || removal.error) {
-			return {
-				status: "error",
-				message: `git worktree remove failed: ${gitError(removal, "git worktree remove failed.")}`,
-			};
-		}
-	} else if (!presence.confirmedAbsent) {
+	if (!presence.present && !presence.confirmedAbsent) {
 		return {
 			status: "error",
 			message: `Cannot verify whether ${worktreePath} still exists (${presence.reason}).`,
+		};
+	}
+
+	// Runs even when the path is confirmed absent: `git worktree remove`
+	// clears the stale registration left by a manually deleted directory, so
+	// the branch deletion below cannot fail with "checked out at".
+	const removal = await git.read(["worktree", "remove", worktreePath], {
+		cwd: repoRoot,
+	});
+	if (removal.exitCode !== 0 || removal.error) {
+		return {
+			status: "error",
+			message: `git worktree remove failed: ${gitError(removal, "git worktree remove failed.")}`,
 		};
 	}
 

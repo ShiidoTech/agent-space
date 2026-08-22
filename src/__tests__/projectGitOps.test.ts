@@ -453,8 +453,48 @@ describe("deleteWorktreeBranch", () => {
 		});
 		expect(outcome).toEqual({ status: "deleted", branch: "feat/gone" });
 		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "remove", `${worktreeBase}/feat/gone`],
 			["branch", "-d", "feat/gone"],
 		]);
+	});
+
+	it("deletes a stale out-of-base registration when fully integrated", async () => {
+		statMock.mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+		);
+		mockGitSequence(`${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		const foreignPath = "/tmp/foreign/agent-space-recovery";
+		const git = readerOk(foreignPath, "recover/x");
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: foreignPath,
+			branchRef: "recover/x",
+			baseBranch: "main",
+		});
+		expect(outcome).toEqual({ status: "deleted", branch: "recover/x" });
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "remove", foreignPath],
+			["branch", "-d", "recover/x"],
+		]);
+	});
+
+	it("fails closed on an unmerged stale out-of-base registration", async () => {
+		statMock.mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+		);
+		mockGitSequence(`${featureSha}\n`, `${baseSha}\n`, gitError(1), "3\n");
+		const foreignPath = "/tmp/foreign/agent-space-recovery";
+		const git = readerOk(foreignPath, "recover/x");
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: foreignPath,
+			branchRef: "recover/x",
+			baseBranch: "main",
+		});
+		expect(outcome.status).toBe("not_deletable");
+		expect(vi.mocked(git.read).mock.calls.length).toBe(0);
 	});
 
 	it("fails closed when an already-gone branch is unmerged", async () => {
