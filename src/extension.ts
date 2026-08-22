@@ -1851,6 +1851,21 @@ removeWorktreeResidue: async (worktreePath) => {
 		),
 	);
 
+	/** Activity younger than this suggests a live session in a foreign worktree. */
+	const FOREIGN_ACTIVE_WINDOW_MS = 30 * 60 * 1000;
+
+	function formatRelativeAge(ageMs: number): string {
+		const minutes = Math.round(ageMs / 60_000);
+		if (minutes < 1) return "less than a minute ago";
+		if (minutes === 1) return "1 minute ago";
+		if (minutes < 60) return `${minutes} minutes ago`;
+		const hours = Math.floor(minutes / 60);
+		if (hours === 1) return "1 hour ago";
+		if (hours < 48) return `${hours} hours ago`;
+		const days = Math.floor(hours / 24);
+		return days === 1 ? "1 day ago" : `${days} days ago`;
+	}
+
 	// Command: Delete a finished worktree branch from the project page.
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
@@ -1894,13 +1909,49 @@ removeWorktreeResidue: async (worktreePath) => {
 					},
 					ctx.gitClient,
 				);
-				if (!assessment.deletable) {
-					vscode.window.showWarningMessage(
-						`Branch "${branchRef}" cannot be deleted yet:\n\n${assessment.reasons.join("\n")}`,
-					);
-					return;
-				}
+			if (!assessment.deletable) {
+				vscode.window.showWarningMessage(
+					`Branch "${branchRef}" cannot be deleted yet:\n\n${assessment.reasons.join("\n")}`,
+				);
+				return;
+			}
 
+			if (assessment.foreign) {
+				const foreignActivity = assessment.foreign.lastActivity;
+				const activityLine = foreignActivity
+					? `Last observed activity: ${formatRelativeAge(foreignActivity.ageMs)} (${foreignActivity.source}).`
+					: "Last observed activity: could not be determined.";
+				const recentlyActive =
+					foreignActivity !== undefined &&
+					foreignActivity.ageMs < FOREIGN_ACTIVE_WINDOW_MS;
+				const firstChoice = await vscode.window.showWarningMessage(
+					[
+						`"${branchRef}" is checked out in a worktree OUTSIDE Agent Space's managed folder:`,
+						worktreePath,
+						"It was probably created by another tool (e.g. Claude Code) and may still be in use.",
+						activityLine,
+						`Git reports it fully integrated into ${baseBranch} with a clean working tree.`,
+						...(recentlyActive
+							? [
+									"\u26a0 Activity observed within the last 30 minutes — a session may still be running.",
+								]
+							: []),
+					].join("\n\n"),
+					{ modal: true },
+					"Delete anyway",
+					"Cancel",
+				);
+				if (firstChoice !== "Delete anyway") return;
+				if (recentlyActive) {
+					const secondChoice = await vscode.window.showWarningMessage(
+						`This worktree showed activity ${formatRelativeAge(foreignActivity.ageMs)}. Deleting it can disrupt a running session.\n\nDelete "${branchRef}" anyway?`,
+						{ modal: true },
+						"Yes, delete it",
+						"Cancel",
+					);
+					if (secondChoice !== "Yes, delete it") return;
+				}
+			} else {
 				const choice = await vscode.window.showWarningMessage(
 					`Delete branch "${branchRef}" and its worktree?\n\nIt is fully integrated into ${baseBranch} with a clean working tree.`,
 					{ modal: true },
@@ -1908,6 +1959,7 @@ removeWorktreeResidue: async (worktreePath) => {
 					"Cancel",
 				);
 				if (choice !== "Delete") return;
+			}
 
 				const outcome = await deleteWorktreeBranch(ctx.gitClient, {
 					repoRoot: ctx.project.repoPath,

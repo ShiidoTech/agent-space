@@ -122,6 +122,7 @@ function setup(
 			getBaseBranchName: () => "main",
 			getFeatures: vi.fn(() => features),
 			listFeaturesCached: vi.fn(() => features),
+			getWorktreeBase: () => "/repo/.worktrees",
 		},
 		featureGitInspector: {
 			inspect,
@@ -1419,6 +1420,7 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 				getBaseBranchName: () => "main",
 				getFeatures: vi.fn(() => featuresByProject[projectId]),
 				listFeaturesCached: vi.fn(() => featuresByProject[projectId]),
+				getWorktreeBase: () => `/repo-${projectId}/.worktrees`,
 			},
 			featureGitInspector: {
 				inspect: inspects[projectId],

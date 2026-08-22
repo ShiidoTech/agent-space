@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { stat, readFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { GitReader } from "../git/gitClient";
 import {
@@ -303,6 +303,25 @@ export interface DeleteWorktreeBranchInput {
 export interface WorktreeBranchDeletionAssessment {
 	readonly deletable: boolean;
 	readonly reasons: readonly string[];
+	/**
+	 * Present when the worktree lives outside Agent Space's managed base. The
+	 * branch may still be deletable, but the caller must reinforce the human
+	 * confirmation (foreign tool ownership + activity recency evidence).
+	 */
+	readonly foreign?: {
+		/** Dated evidence of the last observable activity, when any was found. */
+		readonly lastActivity?: ForeignWorktreeActivity;
+	};
+}
+
+/** Dated evidence of the last observable activity in a foreign worktree. */
+export interface ForeignWorktreeActivity {
+	/** ISO timestamp of the most recent observed activity. */
+	readonly observedAt: string;
+	/** Age in milliseconds at assessment time. */
+	readonly ageMs: number;
+	/** Human-readable provenance, e.g. "git index" or "last commit". */
+	readonly source: string;
 }
 
 /**
@@ -367,12 +386,11 @@ export async function assessWorktreeBranchDeletion(
 			],
 		};
 	}
-	if (!isWorktreePathSafe(worktreePath, worktreeBase)) {
-		return {
-			deletable: false,
-			reasons: [`Refusing to remove worktree outside base: ${worktreePath}`],
-		};
-	}
+	// A live worktree outside the managed base (typically created by another
+	// tool such as Claude Code) is no longer refused outright: content safety
+	// evidence (clean tree, full integration) stays mandatory, and the caller
+	// must reinforce the human confirmation using the attached activity data.
+	const foreign = !isWorktreePathSafe(worktreePath, worktreeBase);
 
 	// Authoritative pairing: the worktree at worktreePath must actually have
 	// branchRef checked out. Guards against pairing worktree A + branch B.
@@ -405,8 +423,68 @@ export async function assessWorktreeBranchDeletion(
 		worktreePath,
 		branch: branchRef,
 		baseBranch,
+		...(foreign ? { allowOutsideBase: true } : {}),
 	});
+	if (foreign && safety.safe) {
+		const lastActivity = await observeForeignLastActivity(
+			git,
+			repoRoot,
+			worktreePath,
+			branchRef,
+		);
+		return {
+			deletable: true,
+			reasons: safety.reasons,
+			foreign: { ...(lastActivity ? { lastActivity } : {}) },
+		};
+	}
 	return { deletable: safety.safe, reasons: safety.reasons };
+}
+
+/**
+ * Best-effort dating of the last observable activity inside a foreign
+ * worktree, so the human can judge whether a session may still be running.
+ * Unknown evidence simply yields `undefined` — it never blocks the flow.
+ */
+async function observeForeignLastActivity(
+	git: GitReader,
+	repoRoot: string,
+	worktreePath: string,
+	branchRef: string,
+): Promise<ForeignWorktreeActivity | undefined> {
+	const candidates: Array<{ atMs: number; source: string }> = [];
+	try {
+		const dotGit = await readFile(path.join(worktreePath, ".git"), "utf8");
+		const match = /^gitdir:\s*(.+)$/mu.exec(dotGit);
+		if (match) {
+			const gitdir = path.resolve(worktreePath, match[1].trim());
+			const info = await stat(path.join(gitdir, "index"));
+			candidates.push({ atMs: info.mtimeMs, source: "git index" });
+		}
+	} catch {
+		// No gitdir pointer or unreadable index: commit date may still apply.
+	}
+	try {
+		const committed = await git.read(
+			["log", "-1", "--format=%ct", branchRef],
+			{ cwd: repoRoot },
+		);
+		if (committed.exitCode === 0 && !committed.error) {
+			const seconds = Number.parseInt(committed.stdout.trim(), 10);
+			if (Number.isSafeInteger(seconds) && seconds > 0) {
+				candidates.push({ atMs: seconds * 1000, source: "last commit" });
+			}
+		}
+	} catch {
+		// Unreadable commit date is tolerated.
+	}
+	if (candidates.length === 0) return undefined;
+	const newest = candidates.reduce((a, b) => (b.atMs > a.atMs ? b : a));
+	return {
+		observedAt: new Date(newest.atMs).toISOString(),
+		ageMs: Math.max(0, Date.now() - newest.atMs),
+		source: newest.source,
+	};
 }
 
 /**

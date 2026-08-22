@@ -863,4 +863,44 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 			},
 		);
 	});
+
+	it("renders an external badge for worktrees outside the managed base", () => {
+		const panel = buildPanel();
+		getProjectWorktreeBranches.mockReturnValue({
+			repoPath: "/repo",
+			baseRef: "main",
+			status: "known",
+			observedAt: "2026-08-12T10:00:00.000Z",
+			branches: [
+				{
+					ref: "feat/external",
+					worktreePath: "/tmp/claude/worktree",
+					headSha: "d".repeat(40),
+					detached: false,
+					prunable: false,
+					baseRelation: { status: "merged" },
+					workingTree: { status: "clean" },
+					outsideBase: true,
+				},
+			],
+		});
+		(
+			panel as unknown as {
+				projectManager: { getContext: ReturnType<typeof vi.fn> };
+			}
+		).projectManager.getContext = vi.fn(() => ({
+			project: { id: "p1", name: "Proj", repoPath: "/repo" },
+		}));
+		const render = (
+			panel as unknown as {
+				renderWorktreeBranches: (projectId: string) => string;
+			}
+		).renderWorktreeBranches.bind(panel);
+
+		const html = render("p1");
+
+		expect(html).toContain("worktree-branch-external");
+		expect(html).toContain("worktree-branch-delete");
+		expect(html).toContain("extra confirmation will be asked");
+	});
 });
