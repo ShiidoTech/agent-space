@@ -577,6 +577,32 @@ describe("deleteWorktreeBranch", () => {
 		expect(vi.mocked(git.read)).not.toHaveBeenCalled();
 	});
 
+	it("requires reconfirmation when a same-count dirty path was substituted", async () => {
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence(
+			" M src/b.ts\n",
+			`${featureSha}\n`,
+			`${baseSha}\n`,
+			"",
+			"0\n",
+		);
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+			acknowledgedLoss: { dirtyFiles: ["src/a.ts"] },
+		});
+		expect(outcome.status).toBe("confirmation_required");
+		const calls = vi.mocked(git.read).mock.calls.map(([argv]) => argv);
+		expect(
+			calls.some((argv) => argv[0] === "worktree" && argv[1] === "remove"),
+		).toBe(false);
+		expect(calls.some((argv) => argv[0] === "branch")).toBe(false);
+	});
+
 	it("downgrades to safe forms when the acknowledged loss disappeared", async () => {
 		statMock.mockResolvedValue({} as never);
 		mockGitSequence("", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");

@@ -573,7 +573,9 @@ async function observeForeignLastActivity(
  * Destructive evidence observed in the fresh assessment but NOT covered by
  * the human's acknowledgement. Any entry here means the confirmation no
  * longer matches reality and deletion must not proceed: a re-assessment may
- * downgrade (loss disappeared) but never escalate on its own.
+ * downgrade (loss disappeared) but never escalate on its own. Dirty-file
+ * evidence is compared as a set — every fresh path must have been shown in
+ * the confirmation dialog, so same-count substitutions still abort.
  */
 function uncoveredLoss(
 	fresh: WorktreeBranchDataLoss | undefined,
@@ -582,14 +584,21 @@ function uncoveredLoss(
 	if (!fresh) return [];
 	const reasons: string[] = [];
 	if (fresh.dirtyFiles?.length) {
-		if (!acknowledged?.dirtyFiles?.length) {
+		const acknowledgedFiles = acknowledged?.dirtyFiles;
+		if (!acknowledgedFiles?.length) {
 			reasons.push(
 				"Uncommitted changes exist now but were not part of the confirmed evidence.",
 			);
-		} else if (fresh.dirtyFiles.length > acknowledged.dirtyFiles.length) {
-			reasons.push(
-				`More uncommitted files than acknowledged (${fresh.dirtyFiles.length} > ${acknowledged.dirtyFiles.length}).`,
+		} else {
+			const known = new Set(acknowledgedFiles);
+			const unacknowledged = fresh.dirtyFiles.filter(
+				(file) => !known.has(file),
 			);
+			if (unacknowledged.length > 0) {
+				reasons.push(
+					`Uncommitted file(s) that were never confirmed: ${unacknowledged.join(", ")}.`,
+				);
+			}
 		}
 	}
 	if (typeof fresh.unmergedCommits === "number") {
