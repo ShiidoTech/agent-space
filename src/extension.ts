@@ -2006,7 +2006,15 @@ removeWorktreeResidue: async (worktreePath) => {
 					branchRef,
 					baseBranch,
 					...(ownedByFeatureId ? { ownedByFeatureId } : {}),
+					// Bound destructive flags by exactly what was confirmed.
+					...(hasLoss ? { acknowledgedLoss: losses } : {}),
 				});
+				if (outcome.status === "confirmation_required") {
+					vscode.window.showWarningMessage(
+						`"${branchRef}" changed since you confirmed:\n\n${outcome.reasons.join("\n")}\n\nNothing was deleted. Review it and confirm again.`,
+					);
+					return;
+				}
 				if (outcome.status !== "deleted") {
 					vscode.window.showErrorMessage(
 						outcome.status === "not_deletable"

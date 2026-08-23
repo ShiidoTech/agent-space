@@ -523,11 +523,76 @@ describe("deleteWorktreeBranch", () => {
 			worktreePath: `${worktreeBase}/feat/x`,
 			branchRef: "feat/x",
 			baseBranch: "main",
+			acknowledgedLoss: { dirtyFiles: ["src/x.ts"] },
 		});
 		expect(outcome).toEqual({ status: "deleted", branch: "feat/x" });
 		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
 			["worktree", "list", "--porcelain"],
 			["worktree", "remove", "--force", `${worktreeBase}/feat/x`],
+			["branch", "-d", "feat/x"],
+		]);
+	});
+
+	it("never escalates when the tree became dirty after a non-destructive confirmation", async () => {
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence(
+			" M src/x.ts\n",
+			`${featureSha}\n`,
+			`${baseSha}\n`,
+			"",
+			"0\n",
+		);
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+			acknowledgedLoss: {},
+		});
+		expect(outcome.status).toBe("confirmation_required");
+		const calls = vi.mocked(git.read).mock.calls.map(([argv]) => argv);
+		expect(
+			calls.some((argv) => argv[0] === "worktree" && argv[1] === "remove"),
+		).toBe(false);
+		expect(calls.some((argv) => argv[0] === "branch")).toBe(false);
+	});
+
+	it("requires reconfirmation when more commits became unmerged than acknowledged", async () => {
+		statMock.mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+		);
+		mockGitSequence(`${featureSha}\n`, `${baseSha}\n`, gitError(1), "5\n");
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/gone`,
+			branchRef: "feat/gone",
+			baseBranch: "main",
+			acknowledgedLoss: { unmergedCommits: 3 },
+		});
+		expect(outcome.status).toBe("confirmation_required");
+		expect(vi.mocked(git.read)).not.toHaveBeenCalled();
+	});
+
+	it("downgrades to safe forms when the acknowledged loss disappeared", async () => {
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence("", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+			acknowledgedLoss: { dirtyFiles: ["src/x.ts"] },
+		});
+		expect(outcome).toEqual({ status: "deleted", branch: "feat/x" });
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "list", "--porcelain"],
+			["worktree", "remove", `${worktreeBase}/feat/x`],
 			["branch", "-d", "feat/x"],
 		]);
 	});
@@ -586,6 +651,7 @@ describe("deleteWorktreeBranch", () => {
 			worktreePath: foreignPath,
 			branchRef: "recover/x",
 			baseBranch: "main",
+			acknowledgedLoss: { unmergedCommits: 3 },
 		});
 		expect(outcome).toEqual({ status: "deleted", branch: "recover/x" });
 		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
@@ -604,6 +670,7 @@ describe("deleteWorktreeBranch", () => {
 			worktreePath: `${worktreeBase}/feat/x`,
 			branchRef: "feat/x",
 			baseBranch: "main",
+			acknowledgedLoss: { integrationUnknown: true },
 		});
 		expect(outcome).toEqual({ status: "deleted", branch: "feat/x" });
 		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([

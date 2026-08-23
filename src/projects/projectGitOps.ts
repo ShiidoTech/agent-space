@@ -16,6 +16,11 @@ export type BaseBranchUpdateResult =
 export type WorktreeBranchDeleteResult =
 	| { readonly status: "deleted"; readonly branch: string }
 	| { readonly status: "not_deletable"; readonly reasons: readonly string[] }
+	| {
+			/** Fresh observation found destructive evidence beyond what the human acknowledged; nothing was modified. */
+			readonly status: "confirmation_required";
+			readonly reasons: readonly string[];
+	  }
 	| { readonly status: "error"; readonly message: string };
 
 export interface BaseBranchUpdateOptions {
@@ -298,6 +303,16 @@ export interface DeleteWorktreeBranchInput {
 	 * when the button was hidden: the command revalidates the link itself.
 	 */
 	readonly ownedByFeatureId?: string;
+	/**
+	 * Destructive evidence the human explicitly acknowledged in the
+	 * confirmation dialog. The mutator re-observes just before deleting and
+	 * bounds every destructive flag by this acknowledgement: destructive
+	 * evidence that is new or larger than acknowledged aborts with
+	 * `confirmation_required` instead of executing. A re-assessment can
+	 * therefore never escalate `-d`/plain removal to `-D`/`--force` on its
+	 * own.
+	 */
+	readonly acknowledgedLoss?: WorktreeBranchDataLoss;
 }
 
 export interface WorktreeBranchDeletionAssessment {
@@ -555,11 +570,54 @@ async function observeForeignLastActivity(
 }
 
 /**
+ * Destructive evidence observed in the fresh assessment but NOT covered by
+ * the human's acknowledgement. Any entry here means the confirmation no
+ * longer matches reality and deletion must not proceed: a re-assessment may
+ * downgrade (loss disappeared) but never escalate on its own.
+ */
+function uncoveredLoss(
+	fresh: WorktreeBranchDataLoss | undefined,
+	acknowledged: WorktreeBranchDataLoss | undefined,
+): string[] {
+	if (!fresh) return [];
+	const reasons: string[] = [];
+	if (fresh.dirtyFiles?.length) {
+		if (!acknowledged?.dirtyFiles?.length) {
+			reasons.push(
+				"Uncommitted changes exist now but were not part of the confirmed evidence.",
+			);
+		} else if (fresh.dirtyFiles.length > acknowledged.dirtyFiles.length) {
+			reasons.push(
+				`More uncommitted files than acknowledged (${fresh.dirtyFiles.length} > ${acknowledged.dirtyFiles.length}).`,
+			);
+		}
+	}
+	if (typeof fresh.unmergedCommits === "number") {
+		if (typeof acknowledged?.unmergedCommits !== "number") {
+			reasons.push(
+				"Commits missing from the base exist now but were not part of the confirmed evidence.",
+			);
+		} else if (fresh.unmergedCommits > acknowledged.unmergedCommits) {
+			reasons.push(
+				`More commits missing from the base than acknowledged (${fresh.unmergedCommits} > ${acknowledged.unmergedCommits}).`,
+			);
+		}
+	}
+	if (fresh.integrationUnknown && !acknowledged?.integrationUnknown) {
+		reasons.push(
+			"Integration could not be verified now but was verified at confirmation time.",
+		);
+	}
+	return reasons;
+}
+
+/**
  * Remove a finished worktree branch: `git worktree remove` then `git branch`.
- * The caller must have confirmed any `dataLoss` evidence from the assessment
- * first: acknowledged dirty files delete with `--force`, acknowledged commit
- * loss or unverified integration deletes the ref with `-D`. Otherwise the
- * plain safe forms are used and Git still refuses on its own when needed.
+ * The caller must pass as `acknowledgedLoss` exactly the `dataLoss` evidence
+ * the human confirmed. Fresh observations bound every destructive flag:
+ * acknowledged dirty files allow `--force`, acknowledged commit loss or
+ * integration uncertainty allows `-D`; anything new or larger aborts with
+ * `confirmation_required` before any mutation. Downgrades stay allowed.
  */
 export async function deleteWorktreeBranch(
 	git: GitReader,
@@ -579,10 +637,20 @@ export async function deleteWorktreeBranch(
 		};
 	}
 
+	// TOCTOU guard: the fresh observation must not exceed what the human
+	// acknowledged. Fail closed BEFORE touching anything.
+	const uncovered = uncoveredLoss(assessment.dataLoss, input.acknowledgedLoss);
+	if (uncovered.length > 0) {
+		return { status: "confirmation_required", reasons: uncovered };
+	}
+	const acknowledged = input.acknowledgedLoss;
+
 	// Runs even when the path is confirmed absent: `git worktree remove`
 	// clears the stale registration left by a manually deleted directory, so
 	// the branch deletion below cannot fail with "checked out at".
-	const forceRemove = (assessment.dataLoss?.dirtyFiles?.length ?? 0) > 0;
+	const forceRemove =
+		(assessment.dataLoss?.dirtyFiles?.length ?? 0) > 0 &&
+		acknowledged?.dirtyFiles !== undefined;
 	const removal = await git.read(
 		[
 			"worktree",
@@ -602,8 +670,10 @@ export async function deleteWorktreeBranch(
 	}
 
 	const forceBranch =
-		assessment.dataLoss?.unmergedCommits !== undefined ||
-		assessment.dataLoss?.integrationUnknown === true;
+		(assessment.dataLoss?.unmergedCommits !== undefined ||
+			assessment.dataLoss?.integrationUnknown === true) &&
+		(acknowledged?.unmergedCommits !== undefined ||
+			acknowledged?.integrationUnknown === true);
 	const branchFlag = forceBranch ? "-D" : "-d";
 	const deletion = await git.read(["branch", branchFlag, branchRef], {
 		cwd: repoRoot,
