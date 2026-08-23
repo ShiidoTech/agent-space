@@ -5,6 +5,7 @@ import { presentAgentCard } from "../agents/observation/presentAgentCard";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
+import { ICON_BRAND } from "../constants/icons";
 import {
 	type FeatureCockpitPresentation,
 	type FeatureCockpitPrimaryAction,
@@ -1049,7 +1050,7 @@ export class HomePanel {
 			body = `
 			<div class="welcome-container">
 				<div class="welcome-header">
-					<div class="welcome-title">Agent Space</div>
+					<div class="welcome-title">${ICON_BRAND} Agent Space</div>
 					<div class="welcome-subtitle">Your features at a glance</div>
 				</div>
 				<div class="empty-welcome">
@@ -1137,7 +1138,7 @@ export class HomePanel {
 			body = `
 			<div class="welcome-container">
 				<div class="welcome-header">
-					<div class="welcome-title">Agent Space</div>
+					<div class="welcome-title">${ICON_BRAND} Agent Space</div>
 					<div class="welcome-subtitle">Your features at a glance</div>
 				</div>
 				<div class="quick-actions-row">
