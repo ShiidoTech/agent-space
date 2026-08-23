@@ -228,6 +228,35 @@ describe("WorktreeBranchObserver", () => {
 		});
 	});
 
+	it("flags worktrees outside the managed base when a base is provided", async () => {
+		const observer = new WorktreeBranchObserver({
+			git: defaultGit(),
+			now: () => NOW,
+		});
+		const inventory = await observer.observe({
+			repoPath: "/repo",
+			worktrees: [
+				worktree({
+					path: "/repo/.worktrees/inside",
+					headSha: HEAD_A,
+					branchRef: "refs/heads/feat/inside",
+				}),
+				worktree({
+					path: "/tmp/claude/outside",
+					headSha: HEAD_B,
+					branchRef: "refs/heads/feat/outside",
+				}),
+			],
+			baseRef: "main",
+			worktreeBase: "/repo/.worktrees",
+		});
+		const byRef = new Map(
+			inventory.branches.map((branch) => [branch.ref, branch]),
+		);
+		expect(byRef.get("feat/inside")?.outsideBase).toBe(false);
+		expect(byRef.get("feat/outside")?.outsideBase).toBe(true);
+	});
+
 	it("reports unknown relation when the base ref cannot be resolved", async () => {
 		const observer = new WorktreeBranchObserver({
 			git: defaultGit({

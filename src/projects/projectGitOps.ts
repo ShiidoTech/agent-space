@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { stat, readFile } from "node:fs/promises";
 import * as path from "node:path";
 import type { GitReader } from "../git/gitClient";
 import {
@@ -16,6 +16,11 @@ export type BaseBranchUpdateResult =
 export type WorktreeBranchDeleteResult =
 	| { readonly status: "deleted"; readonly branch: string }
 	| { readonly status: "not_deletable"; readonly reasons: readonly string[] }
+	| {
+			/** Fresh observation found destructive evidence beyond what the human acknowledged; nothing was modified. */
+			readonly status: "confirmation_required";
+			readonly reasons: readonly string[];
+	  }
 	| { readonly status: "error"; readonly message: string };
 
 export interface BaseBranchUpdateOptions {
@@ -298,11 +303,81 @@ export interface DeleteWorktreeBranchInput {
 	 * when the button was hidden: the command revalidates the link itself.
 	 */
 	readonly ownedByFeatureId?: string;
+	/**
+	 * Destructive evidence the human explicitly acknowledged in the
+	 * confirmation dialog. The mutator re-observes just before deleting and
+	 * bounds every destructive flag by this acknowledgement: destructive
+	 * evidence that is new or larger than acknowledged aborts with
+	 * `confirmation_required` instead of executing. A re-assessment can
+	 * therefore never escalate `-d`/plain removal to `-D`/`--force` on its
+	 * own.
+	 */
+	readonly acknowledgedLoss?: WorktreeBranchDataLoss;
 }
 
 export interface WorktreeBranchDeletionAssessment {
+	/**
+	 * False ONLY for structural blockers that would break Agent Space's own
+	 * model (main working tree, project base branch, Feature-owned ref) or
+	 * when the target cannot be observed at all. Data-loss risks never block
+	 * deletion: they surface as `dataLoss` evidence for the confirmation.
+	 */
 	readonly deletable: boolean;
 	readonly reasons: readonly string[];
+	/** What a confirmed deletion would irreversibly discard, when any. */
+	readonly dataLoss?: WorktreeBranchDataLoss;
+	/**
+	 * Present when the worktree lives outside Agent Space's managed base.
+	 * The caller must reinforce the human confirmation (foreign tool
+	 * ownership + activity recency evidence).
+	 */
+	readonly foreign?: {
+		/** Dated evidence of the last observable activity, when any was found. */
+		readonly lastActivity?: ForeignWorktreeActivity;
+	};
+}
+
+/** Evidence of what a confirmed deletion would irreversibly discard. */
+export interface WorktreeBranchDataLoss {
+	/** Uncommitted changes present in the worktree (porcelain paths). */
+	readonly dirtyFiles?: readonly string[];
+	/** Commits on the branch that are not reachable from the base branch. */
+	readonly unmergedCommits?: number;
+	/** Integration could not be observed; the extent of loss is unknown. */
+	readonly integrationUnknown?: boolean;
+}
+
+/** Dated evidence of the last observable activity in a foreign worktree. */
+export interface ForeignWorktreeActivity {
+	/** ISO timestamp of the most recent observed activity. */
+	readonly observedAt: string;
+	/** Age in milliseconds at assessment time. */
+	readonly ageMs: number;
+	/** Human-readable provenance, e.g. "git index" or "last commit". */
+	readonly source: string;
+}
+
+function structuralBlock(reason: string): WorktreeBranchDeletionAssessment {
+	return { deletable: false, reasons: [reason] };
+}
+
+/**
+ * Extract file paths from `git status --porcelain` output. The stored status
+ * is outer-trimmed by the git helper, so the leading X column may be missing
+ * on the first line; the parser never assumes fixed columns.
+ */
+function porcelainFilePaths(status: string | undefined): readonly string[] {
+	if (!status) return [];
+	const paths: string[] = [];
+	for (const rawLine of status.split(/\r?\n/u)) {
+		if (!rawLine) continue;
+		const match = /^[ MADRCU?!]{1,2}\s+(.+)$/u.exec(rawLine);
+		const entry = (match ? match[1] : rawLine).trim();
+		if (!entry) continue;
+		const separator = entry.indexOf(" -> ");
+		paths.push(separator === -1 ? entry : entry.slice(separator + 4));
+	}
+	return paths;
 }
 
 /**
@@ -316,61 +391,67 @@ export async function assessWorktreeBranchDeletion(
 	const { repoRoot, worktreeBase, worktreePath, branchRef, baseBranch } = input;
 
 	if (input.ownedByFeatureId) {
-		return {
-			deletable: false,
-			reasons: [
-				`Branch ${branchRef} belongs to Feature ${input.ownedByFeatureId} and cannot be deleted while the Feature record exists.`,
-			],
-		};
+		return structuralBlock(
+			`Branch ${branchRef} belongs to Feature ${input.ownedByFeatureId} and cannot be deleted while the Feature record exists.`,
+		);
 	}
 	if (baseBranch && branchRef === baseBranch) {
-		return {
-			deletable: false,
-			reasons: [
-				`Branch ${branchRef} is the project's base branch and cannot be deleted.`,
-			],
-		};
+		return structuralBlock(
+			`Branch ${branchRef} is the project's base branch and cannot be deleted.`,
+		);
 	}
 	if (path.resolve(worktreePath) === path.resolve(repoRoot)) {
-		return {
-			deletable: false,
-			reasons: ["The main working tree cannot be removed as a worktree."],
-		};
+		return structuralBlock(
+			"The main working tree cannot be removed as a worktree.",
+		);
 	}
-	if (!isWorktreePathSafe(worktreePath, worktreeBase)) {
-		return {
-			deletable: false,
-			reasons: [`Refusing to remove worktree outside base: ${worktreePath}`],
-		};
-	}
-
 	const presence = await checkPathPresence(worktreePath);
 	if (!presence.present) {
 		if (presence.confirmedAbsent) {
+			// Nothing exists at the path, so even outside the managed base there
+			// is no live directory to protect — only possibly a stale Git
+			// registration ("prunable"). Integration checks alone decide.
 			if (baseBranch) {
-				// The worktree is already gone (pruned residue): only the branch
-				// ref remains, and it must still be fully integrated.
 				const retention = await checkBranchRetentionSafety({
 					repoRoot,
 					branch: branchRef,
 					baseBranch,
 				});
-				return { deletable: retention.safe, reasons: retention.reasons };
+				if (retention.safe) return { deletable: true, reasons: [] };
+				// Unmerged-but-observed residue stays deletable: the caller
+				// surfaces the commit loss in its confirmation.
+				return {
+					deletable: true,
+					reasons: retention.reasons,
+					dataLoss: {
+						...(retention.hasLocalCommits &&
+						typeof retention.localCommitCount === "number"
+							? { unmergedCommits: retention.localCommitCount }
+							: {}),
+						...(!retention.forceable ||
+						(retention.unmerged && !retention.hasLocalCommits)
+							? { integrationUnknown: true }
+							: {}),
+					},
+				};
 			}
 			return {
-				deletable: false,
+				deletable: true,
 				reasons: [
-					"The base branch is unknown; integration cannot be verified.",
+					"The base branch is unknown; integration could not be verified.",
 				],
+				dataLoss: { integrationUnknown: true },
 			};
 		}
-		return {
-			deletable: false,
-			reasons: [
-				`Cannot verify whether ${worktreePath} still exists (${presence.reason}). Refusing to delete a possibly-live worktree.`,
-			],
-		};
+		return structuralBlock(
+			`Cannot verify whether ${worktreePath} still exists (${presence.reason}). Refusing to delete a possibly-live worktree.`,
+		);
 	}
+	// A live worktree outside the managed base (typically created by another
+	// tool such as Claude Code) is no longer refused outright: content safety
+	// evidence (clean tree, full integration) stays mandatory, and the caller
+	// must reinforce the human confirmation using the attached activity data.
+	const foreign = !isWorktreePathSafe(worktreePath, worktreeBase);
 
 	// Authoritative pairing: the worktree at worktreePath must actually have
 	// branchRef checked out. Guards against pairing worktree A + branch B.
@@ -381,20 +462,14 @@ export async function assessWorktreeBranchDeletion(
 		branchRef,
 	);
 	if (pairing.status === "unverifiable") {
-		return {
-			deletable: false,
-			reasons: [
-				`Cannot verify the branch checked out in ${worktreePath}; git worktree list failed.`,
-			],
-		};
+		return structuralBlock(
+			`Cannot verify the branch checked out in ${worktreePath}; git worktree list failed.`,
+		);
 	}
 	if (pairing.status === "mismatch") {
-		return {
-			deletable: false,
-			reasons: [
-				`Worktree ${worktreePath} does not have branch ${branchRef} checked out (observed: ${pairing.actual ?? "detached"}). Refusing to delete an unrelated branch.`,
-			],
-		};
+		return structuralBlock(
+			`Worktree ${worktreePath} does not have branch ${branchRef} checked out (observed: ${pairing.actual ?? "detached"}). Refusing to delete an unrelated branch.`,
+		);
 	}
 
 	const safety = await checkWorktreeDeletionSafety({
@@ -403,14 +478,155 @@ export async function assessWorktreeBranchDeletion(
 		worktreePath,
 		branch: branchRef,
 		baseBranch,
+		// Location never blocks deletion anymore: foreign worktrees carry
+		// their own reinforced confirmation evidence instead.
+		allowOutsideBase: true,
 	});
-	return { deletable: safety.safe, reasons: safety.reasons };
+
+	// Data-loss evidence for the human confirmation. When git status could
+	// not be observed, no --force is derived and Git itself refuses a dirty
+	// removal — fail-safe by construction.
+	const dirtyFiles = safety.dirty
+		? porcelainFilePaths(safety.workingTreeStatus)
+		: [];
+	const dataLoss: WorktreeBranchDataLoss = {
+		...(dirtyFiles.length > 0 ? { dirtyFiles } : {}),
+		...(safety.hasLocalCommits && typeof safety.localCommitCount === "number"
+			? { unmergedCommits: safety.localCommitCount }
+			: {}),
+		...(!safety.refsObserved ||
+		!safety.integrationObserved ||
+		!safety.localCommitsObserved ||
+		(safety.unmerged && !safety.hasLocalCommits)
+			? { integrationUnknown: true }
+			: {}),
+	};
+	const hasDataLoss =
+		dataLoss.dirtyFiles !== undefined ||
+		dataLoss.unmergedCommits !== undefined ||
+		dataLoss.integrationUnknown !== undefined;
+
+	let lastActivity: ForeignWorktreeActivity | undefined;
+	if (foreign) {
+		lastActivity = await observeForeignLastActivity(
+			git,
+			repoRoot,
+			worktreePath,
+			branchRef,
+		);
+	}
+	return {
+		deletable: true,
+		reasons: safety.reasons,
+		...(hasDataLoss ? { dataLoss } : {}),
+		...(foreign ? { foreign: { ...(lastActivity ? { lastActivity } : {}) } } : {}),
+	};
 }
 
 /**
- * Remove a finished worktree branch: `git worktree remove` then `git branch -d`.
- * Only fully integrated, clean branches are deletable; anything else is
- * reported with its safety reasons so the human can decide manually.
+ * Best-effort dating of the last observable activity inside a foreign
+ * worktree, so the human can judge whether a session may still be running.
+ * Unknown evidence simply yields `undefined` — it never blocks the flow.
+ */
+async function observeForeignLastActivity(
+	git: GitReader,
+	repoRoot: string,
+	worktreePath: string,
+	branchRef: string,
+): Promise<ForeignWorktreeActivity | undefined> {
+	const candidates: Array<{ atMs: number; source: string }> = [];
+	try {
+		const dotGit = await readFile(path.join(worktreePath, ".git"), "utf8");
+		const match = /^gitdir:\s*(.+)$/mu.exec(dotGit);
+		if (match) {
+			const gitdir = path.resolve(worktreePath, match[1].trim());
+			const info = await stat(path.join(gitdir, "index"));
+			candidates.push({ atMs: info.mtimeMs, source: "git index" });
+		}
+	} catch {
+		// No gitdir pointer or unreadable index: commit date may still apply.
+	}
+	try {
+		const committed = await git.read(
+			["log", "-1", "--format=%ct", branchRef],
+			{ cwd: repoRoot },
+		);
+		if (committed.exitCode === 0 && !committed.error) {
+			const seconds = Number.parseInt(committed.stdout.trim(), 10);
+			if (Number.isSafeInteger(seconds) && seconds > 0) {
+				candidates.push({ atMs: seconds * 1000, source: "last commit" });
+			}
+		}
+	} catch {
+		// Unreadable commit date is tolerated.
+	}
+	if (candidates.length === 0) return undefined;
+	const newest = candidates.reduce((a, b) => (b.atMs > a.atMs ? b : a));
+	return {
+		observedAt: new Date(newest.atMs).toISOString(),
+		ageMs: Math.max(0, Date.now() - newest.atMs),
+		source: newest.source,
+	};
+}
+
+/**
+ * Destructive evidence observed in the fresh assessment but NOT covered by
+ * the human's acknowledgement. Any entry here means the confirmation no
+ * longer matches reality and deletion must not proceed: a re-assessment may
+ * downgrade (loss disappeared) but never escalate on its own. Dirty-file
+ * evidence is compared as a set — every fresh path must have been shown in
+ * the confirmation dialog, so same-count substitutions still abort.
+ */
+function uncoveredLoss(
+	fresh: WorktreeBranchDataLoss | undefined,
+	acknowledged: WorktreeBranchDataLoss | undefined,
+): string[] {
+	if (!fresh) return [];
+	const reasons: string[] = [];
+	if (fresh.dirtyFiles?.length) {
+		const acknowledgedFiles = acknowledged?.dirtyFiles;
+		if (!acknowledgedFiles?.length) {
+			reasons.push(
+				"Uncommitted changes exist now but were not part of the confirmed evidence.",
+			);
+		} else {
+			const known = new Set(acknowledgedFiles);
+			const unacknowledged = fresh.dirtyFiles.filter(
+				(file) => !known.has(file),
+			);
+			if (unacknowledged.length > 0) {
+				reasons.push(
+					`Uncommitted file(s) that were never confirmed: ${unacknowledged.join(", ")}.`,
+				);
+			}
+		}
+	}
+	if (typeof fresh.unmergedCommits === "number") {
+		if (typeof acknowledged?.unmergedCommits !== "number") {
+			reasons.push(
+				"Commits missing from the base exist now but were not part of the confirmed evidence.",
+			);
+		} else if (fresh.unmergedCommits > acknowledged.unmergedCommits) {
+			reasons.push(
+				`More commits missing from the base than acknowledged (${fresh.unmergedCommits} > ${acknowledged.unmergedCommits}).`,
+			);
+		}
+	}
+	if (fresh.integrationUnknown && !acknowledged?.integrationUnknown) {
+		reasons.push(
+			"Integration could not be verified now but was verified at confirmation time.",
+		);
+	}
+	return reasons;
+}
+
+/**
+ * Remove a finished worktree branch: `git worktree remove` then `git branch`.
+ * The caller must pass as `acknowledgedLoss` exactly the `dataLoss` evidence
+ * the human confirmed. Fresh observations bound every destructive flag:
+ * acknowledged dirty files allow `--force`, acknowledged commit loss or
+ * integration uncertainty allows `-D`; anything new or larger aborts with
+ * `confirmation_required` before any mutation. Downgrades stay allowed.
  */
 export async function deleteWorktreeBranch(
 	git: GitReader,
@@ -423,30 +639,58 @@ export async function deleteWorktreeBranch(
 
 	const { repoRoot, worktreePath, branchRef } = input;
 	const presence = await checkPathPresence(worktreePath);
-	if (presence.present) {
-		const removal = await git.read(["worktree", "remove", worktreePath], {
-			cwd: repoRoot,
-		});
-		if (removal.exitCode !== 0 || removal.error) {
-			return {
-				status: "error",
-				message: `git worktree remove failed: ${gitError(removal, "git worktree remove failed.")}`,
-			};
-		}
-	} else if (!presence.confirmedAbsent) {
+	if (!presence.present && !presence.confirmedAbsent) {
 		return {
 			status: "error",
 			message: `Cannot verify whether ${worktreePath} still exists (${presence.reason}).`,
 		};
 	}
 
-	const deletion = await git.read(["branch", "-d", branchRef], {
+	// TOCTOU guard: the fresh observation must not exceed what the human
+	// acknowledged. Fail closed BEFORE touching anything.
+	const uncovered = uncoveredLoss(assessment.dataLoss, input.acknowledgedLoss);
+	if (uncovered.length > 0) {
+		return { status: "confirmation_required", reasons: uncovered };
+	}
+	const acknowledged = input.acknowledgedLoss;
+
+	// Runs even when the path is confirmed absent: `git worktree remove`
+	// clears the stale registration left by a manually deleted directory, so
+	// the branch deletion below cannot fail with "checked out at".
+	const forceRemove =
+		(assessment.dataLoss?.dirtyFiles?.length ?? 0) > 0 &&
+		acknowledged?.dirtyFiles !== undefined;
+	const removal = await git.read(
+		[
+			"worktree",
+			"remove",
+			...(forceRemove ? ["--force"] : []),
+			worktreePath,
+		],
+		{
+			cwd: repoRoot,
+		},
+	);
+	if (removal.exitCode !== 0 || removal.error) {
+		return {
+			status: "error",
+			message: `git worktree remove failed: ${gitError(removal, "git worktree remove failed.")}`,
+		};
+	}
+
+	const forceBranch =
+		(assessment.dataLoss?.unmergedCommits !== undefined ||
+			assessment.dataLoss?.integrationUnknown === true) &&
+		(acknowledged?.unmergedCommits !== undefined ||
+			acknowledged?.integrationUnknown === true);
+	const branchFlag = forceBranch ? "-D" : "-d";
+	const deletion = await git.read(["branch", branchFlag, branchRef], {
 		cwd: repoRoot,
 	});
 	if (deletion.exitCode !== 0 || deletion.error) {
 		return {
 			status: "error",
-			message: `git branch -d failed: ${gitError(deletion, "git branch -d failed.")}`,
+			message: `git branch ${branchFlag} failed: ${gitError(deletion, `git branch ${branchFlag} failed.`)}`,
 		};
 	}
 	return { status: "deleted", branch: branchRef };

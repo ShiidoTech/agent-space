@@ -1851,6 +1851,21 @@ removeWorktreeResidue: async (worktreePath) => {
 		),
 	);
 
+	/** Activity younger than this suggests a live session in a foreign worktree. */
+	const FOREIGN_ACTIVE_WINDOW_MS = 30 * 60 * 1000;
+
+	function formatRelativeAge(ageMs: number): string {
+		const minutes = Math.round(ageMs / 60_000);
+		if (minutes < 1) return "less than a minute ago";
+		if (minutes === 1) return "1 minute ago";
+		if (minutes < 60) return `${minutes} minutes ago`;
+		const hours = Math.floor(minutes / 60);
+		if (hours === 1) return "1 hour ago";
+		if (hours < 48) return `${hours} hours ago`;
+		const days = Math.floor(hours / 24);
+		return days === 1 ? "1 day ago" : `${days} days ago`;
+	}
+
 	// Command: Delete a finished worktree branch from the project page.
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
@@ -1896,18 +1911,93 @@ removeWorktreeResidue: async (worktreePath) => {
 				);
 				if (!assessment.deletable) {
 					vscode.window.showWarningMessage(
-						`Branch "${branchRef}" cannot be deleted yet:\n\n${assessment.reasons.join("\n")}`,
+						`Branch "${branchRef}" cannot be deleted:\n\n${assessment.reasons.join("\n")}`,
 					);
 					return;
 				}
 
+				// Data-loss evidence shown verbatim; deletion stays a human
+				// choice, never blocked — only confirmed with full knowledge.
+				const losses = assessment.dataLoss;
+				const warnings: string[] = [];
+				if (losses?.dirtyFiles?.length) {
+					const shown = losses.dirtyFiles.slice(0, 10);
+					warnings.push(
+						`${losses.dirtyFiles.length} uncommitted file(s) will be DISCARDED:\n${shown.join("\n")}` +
+							(losses.dirtyFiles.length > shown.length
+								? `\n… and ${losses.dirtyFiles.length - shown.length} more`
+								: ""),
+					);
+				}
+				if (typeof losses?.unmergedCommits === "number") {
+					warnings.push(
+						`${losses.unmergedCommits} commit(s) unique to "${branchRef}" are not on ${baseBranch ?? "the base branch"} and will become unreachable.`,
+					);
+				}
+				if (losses?.integrationUnknown) {
+					warnings.push(
+						"Git could not verify whether this branch is fully integrated.",
+					);
+				}
+				const hasLoss = warnings.length > 0;
+
+				let recentlyActive = false;
+				let recentActivityAgeMs = 0;
+				const introLines: string[] = [];
+				if (assessment.foreign) {
+					const foreignActivity = assessment.foreign.lastActivity;
+					introLines.push(
+						`"${branchRef}" is checked out in a worktree OUTSIDE Agent Space's managed folder:`,
+						worktreePath,
+						"It was probably created by another tool (e.g. Claude Code) and may still be in use.",
+						foreignActivity
+							? `Last observed activity: ${formatRelativeAge(foreignActivity.ageMs)} (${foreignActivity.source}).`
+							: "Last observed activity: could not be determined.",
+					);
+					recentlyActive =
+						foreignActivity !== undefined &&
+						foreignActivity.ageMs < FOREIGN_ACTIVE_WINDOW_MS;
+					recentActivityAgeMs = foreignActivity?.ageMs ?? 0;
+				} else {
+					introLines.push(`Delete branch "${branchRef}" and its worktree?`);
+				}
+				introLines.push(
+					hasLoss
+						? warnings.join("\n\n")
+						: `Git reports it fully integrated into ${baseBranch ?? "the base branch"} with a clean working tree.`,
+				);
+
+				const confirmLabel = hasLoss ? "Delete anyway" : "Delete";
 				const choice = await vscode.window.showWarningMessage(
-					`Delete branch "${branchRef}" and its worktree?\n\nIt is fully integrated into ${baseBranch} with a clean working tree.`,
+					introLines.join("\n\n"),
 					{ modal: true },
-					"Delete",
+					confirmLabel,
 					"Cancel",
 				);
-				if (choice !== "Delete") return;
+				if (choice !== confirmLabel) return;
+
+				if (recentlyActive) {
+					const secondChoice = await vscode.window.showWarningMessage(
+						`This worktree showed activity ${formatRelativeAge(recentActivityAgeMs)}. Deleting it can disrupt a running session.\n\nDelete "${branchRef}" anyway?`,
+						{ modal: true },
+						"Yes, delete it",
+						"Cancel",
+					);
+					if (secondChoice !== "Yes, delete it") return;
+				}
+
+				if (hasLoss) {
+					// Irreversible loss requires typing the exact branch name.
+					const typed = await vscode.window.showInputBox({
+						prompt: `This deletion is irreversible. Type "${branchRef}" to confirm.`,
+						placeHolder: branchRef,
+						validateInput: (value) =>
+							value.trim() === branchRef
+								? undefined
+								: `Type exactly "${branchRef}" to confirm.`,
+					});
+					if (typed?.trim() !== branchRef) return;
+				}
 
 				const outcome = await deleteWorktreeBranch(ctx.gitClient, {
 					repoRoot: ctx.project.repoPath,
@@ -1916,7 +2006,15 @@ removeWorktreeResidue: async (worktreePath) => {
 					branchRef,
 					baseBranch,
 					...(ownedByFeatureId ? { ownedByFeatureId } : {}),
+					// Bound destructive flags by exactly what was confirmed.
+					...(hasLoss ? { acknowledgedLoss: losses } : {}),
 				});
+				if (outcome.status === "confirmation_required") {
+					vscode.window.showWarningMessage(
+						`"${branchRef}" changed since you confirmed:\n\n${outcome.reasons.join("\n")}\n\nNothing was deleted. Review it and confirm again.`,
+					);
+					return;
+				}
 				if (outcome.status !== "deleted") {
 					vscode.window.showErrorMessage(
 						outcome.status === "not_deletable"

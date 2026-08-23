@@ -624,6 +624,10 @@ body {
 .worktree-branch-prunable {
 	color: var(--vscode-notificationsWarningIcon-foreground);
 }
+.worktree-branch-external {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+	font-weight: 600;
+}
 .worktree-branch-chips {
 	margin-left: auto;
 	display: inline-flex;

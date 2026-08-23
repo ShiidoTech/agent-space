@@ -37,6 +37,13 @@ export interface WorktreeDeletionInput {
 	worktreePath: string;
 	branch?: string;
 	baseBranch?: string;
+	/**
+	 * Authorizes a worktree outside the managed base (e.g. created by another
+	 * tool such as Claude Code) to be evaluated for deletion. Content safety
+	 * evidence (clean tree, full integration) is still mandatory; the caller
+	 * must reinforce the human confirmation when this flag is set.
+	 */
+	allowOutsideBase?: boolean;
 }
 
 export interface BranchRetentionSafety {
@@ -194,6 +201,8 @@ export async function checkWorktreeDeletionSafety(
 	const { repoRoot, worktreeBase, worktreePath, branch, baseBranch } = input;
 
 	const insideBase = isWorktreePathSafe(worktreePath, worktreeBase);
+	const outsideAllowed = !insideBase && input.allowOutsideBase === true;
+	const locationSafe = insideBase || outsideAllowed;
 
 	let statusObserved = false;
 	let dirty = false;
@@ -263,7 +272,7 @@ export async function checkWorktreeDeletionSafety(
 	}
 
 	const reasons: string[] = [];
-	if (!insideBase) {
+	if (!insideBase && !outsideAllowed) {
 		reasons.push(`Worktree path is outside the allowed base: ${worktreePath}`);
 	}
 	if (!statusObserved) {
@@ -323,13 +332,13 @@ export async function checkWorktreeDeletionSafety(
 		...(localCommitCount !== undefined ? { localCommitCount } : {}),
 		unmerged,
 		forceable:
-			insideBase &&
+			locationSafe &&
 			statusObserved &&
 			refsObserved &&
 			integrationObserved &&
 			localCommitsObserved,
 		safe:
-			insideBase &&
+			locationSafe &&
 			statusObserved &&
 			refsObserved &&
 			integrationObserved &&

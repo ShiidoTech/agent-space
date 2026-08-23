@@ -903,13 +903,21 @@ export class HomePanel {
 				const link = branch.linkedFeatureId
 					? `<span class="worktree-branch-linked">feature</span>`
 					: "";
+				const externalChip =
+					branch.outsideBase === true
+						? `<span class="worktree-branch-external" title="Outside Agent Space's managed base — created by another tool (e.g. Claude Code). Deleting asks an extra confirmation with last-activity evidence.">&#9888; external</span>`
+						: "";
 				const deletable =
 					!branch.linkedFeatureId &&
 					branch.ref !== inventory.baseRef &&
 					repoPath !== undefined &&
 					branch.worktreePath !== repoPath;
+				const deleteTitle =
+					branch.outsideBase === true
+						? "Delete this external branch and its worktree (an extra confirmation will be asked)"
+						: "Delete this branch and its worktree";
 				const deleteAction = deletable
-					? `<button class="worktree-branch-delete" data-project-id="${this.escapeHtml(projectId)}" data-branch-ref="${this.escapeHtml(branch.ref)}" data-worktree-path="${this.escapeHtml(branch.worktreePath)}" title="Delete this branch and its worktree">&times;</button>`
+					? `<button class="worktree-branch-delete" data-project-id="${this.escapeHtml(projectId)}" data-branch-ref="${this.escapeHtml(branch.ref)}" data-worktree-path="${this.escapeHtml(branch.worktreePath)}" title="${deleteTitle}">&times;</button>`
 					: "";
 				return `
 				<div class="worktree-branch-row">
@@ -918,7 +926,7 @@ export class HomePanel {
 						<span title="${this.escapeHtml(branch.headSha)}">@${this.escapeHtml(branch.headSha.slice(0, 8))}</span>
 						${branch.prunable ? '<span class="worktree-branch-prunable">prunable</span>' : ""}
 					</span>
-					<span class="worktree-branch-chips">${relation}${worktreeChip}${link}${deleteAction}</span>
+					<span class="worktree-branch-chips">${relation}${worktreeChip}${link}${externalChip}${deleteAction}</span>
 				</div>`;
 			})
 			.join("");

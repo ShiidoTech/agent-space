@@ -819,6 +819,7 @@ export class FeatureStateCoordinator implements Disposable {
 					worktrees: projectObservation.worktrees.value,
 					baseRef,
 					featureBranches: featureBranchRefs(features),
+					worktreeBase: ctx.featureManager.getWorktreeBase(),
 				})
 				.then((inventory) =>
 					this.acceptWorktreeInventory(

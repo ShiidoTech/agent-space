@@ -5,12 +5,14 @@ vi.mock("node:child_process", () => ({
 }));
 vi.mock("node:fs/promises", () => ({
 	stat: vi.fn(),
+	readFile: vi.fn(),
 }));
 
 import { execFile } from "node:child_process";
-import { stat } from "node:fs/promises";
+import { stat, readFile } from "node:fs/promises";
 import type { GitReader, GitReadResult } from "../git/gitClient";
 import {
+	assessWorktreeBranchDeletion,
 	deleteWorktreeBranch,
 	updateBaseBranch,
 } from "../projects/projectGitOps";
@@ -22,6 +24,7 @@ interface ExecFileMock {
 }
 const execFileMock = vi.mocked(execFile) as unknown as ExecFileMock;
 const statMock = vi.mocked(stat);
+const readFileMock = vi.mocked(readFile);
 
 type GitResponse = string | Error;
 
@@ -324,6 +327,7 @@ describe("deleteWorktreeBranch", () => {
 	beforeEach(() => {
 		execFileMock.mockReset();
 		statMock.mockReset();
+		readFileMock.mockReset();
 	});
 
 	/** `git worktree list --porcelain` proving worktreePath ↔ branchRef. */
@@ -383,18 +387,105 @@ describe("deleteWorktreeBranch", () => {
 		).toContain("main working tree");
 	});
 
-	it("refuses paths outside the worktree base", async () => {
-		const outcome = await deleteWorktreeBranch(readerOk(), {
+	it("evaluates a live foreign worktree instead of refusing when clean and integrated", async () => {
+		statMock.mockResolvedValue({ mtimeMs: Date.now() } as never);
+		readFileMock.mockResolvedValue("gitdir: /repo/.git/worktrees/foreign\n");
+		mockGitSequence("", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		const foreignPath = "/tmp/foreign/agent-worktree";
+		const git = readerOk(foreignPath, "recover/x");
+		const assessment = await assessWorktreeBranchDeletion(
+			{
+				repoRoot,
+				worktreeBase,
+				worktreePath: foreignPath,
+				branchRef: "recover/x",
+				baseBranch: "main",
+			},
+			git,
+		);
+		expect(assessment.deletable).toBe(true);
+		expect(assessment.foreign?.lastActivity?.source).toBe("git index");
+	});
+
+	it("falls back to the commit date when the gitdir pointer is unreadable", async () => {
+		statMock.mockResolvedValue({} as never);
+		readFileMock.mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+		);
+		mockGitSequence("", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		const foreignPath = "/tmp/foreign/agent-worktree";
+		const git: GitReader = {
+			readSync: vi.fn(),
+			read: vi.fn(async (argv) =>
+				argv[0] === "worktree"
+					? result({ stdout: porcelain(foreignPath, "recover/x") })
+					: argv[0] === "log"
+						? result({ stdout: `${Math.floor(Date.now() / 1000)}\n` })
+						: result(),
+			) as GitReader["read"],
+		};
+		const assessment = await assessWorktreeBranchDeletion(
+			{
+				repoRoot,
+				worktreeBase,
+				worktreePath: foreignPath,
+				branchRef: "recover/x",
+				baseBranch: "main",
+			},
+			git,
+		);
+		expect(assessment.deletable).toBe(true);
+		expect(assessment.foreign?.lastActivity?.source).toBe("last commit");
+	});
+
+	it("surfaces data-loss evidence for a dirty live foreign worktree", async () => {
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence(
+			" M src/x.ts\n",
+			`${featureSha}\n`,
+			`${baseSha}\n`,
+			"",
+			"3\n",
+		);
+		const foreignPath = "/tmp/foreign/agent-worktree";
+		const git = readerOk(foreignPath, "recover/x");
+		const assessment = await assessWorktreeBranchDeletion(
+			{
+				repoRoot,
+				worktreeBase,
+				worktreePath: foreignPath,
+				branchRef: "recover/x",
+				baseBranch: "main",
+			},
+			git,
+		);
+		expect(assessment.deletable).toBe(true);
+		expect(assessment.reasons.join("\n")).toContain("Uncommitted changes");
+		expect(assessment.dataLoss?.dirtyFiles).toEqual(["src/x.ts"]);
+		expect(assessment.dataLoss?.unmergedCommits).toBe(3);
+		expect(assessment.foreign).toBeDefined();
+	});
+
+	it("deletes an integrated live foreign worktree through the normal flow", async () => {
+		statMock.mockResolvedValue({ mtimeMs: Date.now() } as never);
+		readFileMock.mockResolvedValue("gitdir: /repo/.git/worktrees/foreign\n");
+		mockGitSequence("", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		const foreignPath = "/tmp/foreign/agent-worktree";
+		const git = readerOk(foreignPath, "recover/x");
+		const outcome = await deleteWorktreeBranch(git, {
 			repoRoot,
 			worktreeBase,
-			worktreePath: "/elsewhere",
-			branchRef: "feat/x",
+			worktreePath: foreignPath,
+			branchRef: "recover/x",
 			baseBranch: "main",
 		});
-		expect(outcome.status).toBe("not_deletable");
-		expect(
-			(outcome as { reasons: readonly string[] }).reasons.join(),
-		).toContain("outside base");
+		expect(outcome).toEqual({ status: "deleted", branch: "recover/x" });
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "list", "--porcelain"],
+			["log", "-1", "--format=%ct", "recover/x"],
+			["worktree", "remove", foreignPath],
+			["branch", "-d", "recover/x"],
+		]);
 	});
 
 	it("removes the worktree and deletes the branch when safe", async () => {
@@ -416,7 +507,7 @@ describe("deleteWorktreeBranch", () => {
 		]);
 	});
 
-	it("reports safety reasons instead of deleting a dirty worktree", async () => {
+	it("deletes a dirty worktree with --force once the loss is acknowledged", async () => {
 		statMock.mockResolvedValue({} as never);
 		mockGitSequence(
 			" M src/x.ts\n",
@@ -425,17 +516,111 @@ describe("deleteWorktreeBranch", () => {
 			"",
 			"0\n",
 		);
-		const outcome = await deleteWorktreeBranch(readerOk(), {
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
 			repoRoot,
 			worktreeBase,
 			worktreePath: `${worktreeBase}/feat/x`,
 			branchRef: "feat/x",
 			baseBranch: "main",
+			acknowledgedLoss: { dirtyFiles: ["src/x.ts"] },
 		});
-		expect(outcome.status).toBe("not_deletable");
+		expect(outcome).toEqual({ status: "deleted", branch: "feat/x" });
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "list", "--porcelain"],
+			["worktree", "remove", "--force", `${worktreeBase}/feat/x`],
+			["branch", "-d", "feat/x"],
+		]);
+	});
+
+	it("never escalates when the tree became dirty after a non-destructive confirmation", async () => {
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence(
+			" M src/x.ts\n",
+			`${featureSha}\n`,
+			`${baseSha}\n`,
+			"",
+			"0\n",
+		);
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+			acknowledgedLoss: {},
+		});
+		expect(outcome.status).toBe("confirmation_required");
+		const calls = vi.mocked(git.read).mock.calls.map(([argv]) => argv);
 		expect(
-			(outcome as { reasons: readonly string[] }).reasons.join(),
-		).toContain("Uncommitted changes");
+			calls.some((argv) => argv[0] === "worktree" && argv[1] === "remove"),
+		).toBe(false);
+		expect(calls.some((argv) => argv[0] === "branch")).toBe(false);
+	});
+
+	it("requires reconfirmation when more commits became unmerged than acknowledged", async () => {
+		statMock.mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+		);
+		mockGitSequence(`${featureSha}\n`, `${baseSha}\n`, gitError(1), "5\n");
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/gone`,
+			branchRef: "feat/gone",
+			baseBranch: "main",
+			acknowledgedLoss: { unmergedCommits: 3 },
+		});
+		expect(outcome.status).toBe("confirmation_required");
+		expect(vi.mocked(git.read)).not.toHaveBeenCalled();
+	});
+
+	it("requires reconfirmation when a same-count dirty path was substituted", async () => {
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence(
+			" M src/b.ts\n",
+			`${featureSha}\n`,
+			`${baseSha}\n`,
+			"",
+			"0\n",
+		);
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+			acknowledgedLoss: { dirtyFiles: ["src/a.ts"] },
+		});
+		expect(outcome.status).toBe("confirmation_required");
+		const calls = vi.mocked(git.read).mock.calls.map(([argv]) => argv);
+		expect(
+			calls.some((argv) => argv[0] === "worktree" && argv[1] === "remove"),
+		).toBe(false);
+		expect(calls.some((argv) => argv[0] === "branch")).toBe(false);
+	});
+
+	it("downgrades to safe forms when the acknowledged loss disappeared", async () => {
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence("", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		const git = readerOk();
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: "main",
+			acknowledgedLoss: { dirtyFiles: ["src/x.ts"] },
+		});
+		expect(outcome).toEqual({ status: "deleted", branch: "feat/x" });
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "list", "--porcelain"],
+			["worktree", "remove", `${worktreeBase}/feat/x`],
+			["branch", "-d", "feat/x"],
+		]);
 	});
 
 	it("deletes an already-gone worktree branch when fully merged", async () => {
@@ -453,25 +638,72 @@ describe("deleteWorktreeBranch", () => {
 		});
 		expect(outcome).toEqual({ status: "deleted", branch: "feat/gone" });
 		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "remove", `${worktreeBase}/feat/gone`],
 			["branch", "-d", "feat/gone"],
 		]);
 	});
 
-	it("fails closed when an already-gone branch is unmerged", async () => {
+	it("deletes a stale out-of-base registration when fully integrated", async () => {
+		statMock.mockRejectedValue(
+			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+		);
+		mockGitSequence(`${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		const foreignPath = "/tmp/foreign/agent-space-recovery";
+		const git = readerOk(foreignPath, "recover/x");
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: foreignPath,
+			branchRef: "recover/x",
+			baseBranch: "main",
+		});
+		expect(outcome).toEqual({ status: "deleted", branch: "recover/x" });
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "remove", foreignPath],
+			["branch", "-d", "recover/x"],
+		]);
+	});
+
+	it("forces deletion of an unmerged stale out-of-base registration once acknowledged", async () => {
 		statMock.mockRejectedValue(
 			Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
 		);
 		mockGitSequence(`${featureSha}\n`, `${baseSha}\n`, gitError(1), "3\n");
+		const foreignPath = "/tmp/foreign/agent-space-recovery";
+		const git = readerOk(foreignPath, "recover/x");
+		const outcome = await deleteWorktreeBranch(git, {
+			repoRoot,
+			worktreeBase,
+			worktreePath: foreignPath,
+			branchRef: "recover/x",
+			baseBranch: "main",
+			acknowledgedLoss: { unmergedCommits: 3 },
+		});
+		expect(outcome).toEqual({ status: "deleted", branch: "recover/x" });
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "remove", foreignPath],
+			["branch", "-D", "recover/x"],
+		]);
+	});
+
+	it("marks integration unknown and still deletes when refs cannot be resolved", async () => {
+		statMock.mockResolvedValue({} as never);
+		mockGitSequence("", gitError(1));
 		const git = readerOk();
 		const outcome = await deleteWorktreeBranch(git, {
 			repoRoot,
 			worktreeBase,
-			worktreePath: `${worktreeBase}/feat/gone`,
-			branchRef: "feat/gone",
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
 			baseBranch: "main",
+			acknowledgedLoss: { integrationUnknown: true },
 		});
-		expect(outcome.status).toBe("not_deletable");
-		expect(git.read).not.toHaveBeenCalled();
+		expect(outcome).toEqual({ status: "deleted", branch: "feat/x" });
+		expect(vi.mocked(git.read).mock.calls.map(([argv]) => argv)).toEqual([
+			["worktree", "list", "--porcelain"],
+			["worktree", "remove", `${worktreeBase}/feat/x`],
+			["branch", "-D", "feat/x"],
+		]);
 	});
 
 	it("refuses when the worktree path is paired with a different branch", async () => {

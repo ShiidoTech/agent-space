@@ -1,6 +1,7 @@
 import type { GitWorktreeObservation } from "./featureGitObservations";
 import type { GitReader, GitReadResult } from "./gitClient";
 import { defaultGitClient } from "./gitClient";
+import { isWorktreePathSafe } from "../utils/worktreeGuard";
 
 /**
  * Relation of one worktree branch to the project base branch, computed from
@@ -28,6 +29,11 @@ export interface WorktreeBranchState {
 	readonly workingTree: { readonly status: "clean" | "dirty" | "unknown" };
 	/** Feature whose primary/linked branch equals this ref, when known. */
 	readonly linkedFeatureId?: string;
+	/**
+	 * True when the worktree lives outside Agent Space's managed base
+	 * (typically created by another tool). Absent when no base was provided.
+	 */
+	readonly outsideBase?: boolean;
 }
 
 export interface WorktreeBranchInventory {
@@ -50,6 +56,8 @@ export interface WorktreeBranchObserveRequest {
 	readonly baseRef?: string;
 	/** Maps a branch ref to the Feature owning it, for cross-linking. */
 	readonly featureBranches?: ReadonlyMap<string, string>;
+	/** Agent Space's managed worktree base, for outside-base detection. */
+	readonly worktreeBase?: string;
 }
 
 const FULL_SHA = /^[0-9a-f]{40,64}$/iu;
@@ -102,10 +110,18 @@ export class WorktreeBranchObserver {
 				prunable: worktree.prunable,
 				baseRelation,
 				workingTree,
-				...(request.featureBranches?.has(ref)
-					? { linkedFeatureId: request.featureBranches.get(ref) }
-					: {}),
-			});
+			...(request.featureBranches?.has(ref)
+				? { linkedFeatureId: request.featureBranches.get(ref) }
+				: {}),
+			...(request.worktreeBase !== undefined
+				? {
+						outsideBase: !isWorktreePathSafe(
+							worktree.path,
+							request.worktreeBase,
+						),
+					}
+				: {}),
+		});
 		}
 
 		return {
