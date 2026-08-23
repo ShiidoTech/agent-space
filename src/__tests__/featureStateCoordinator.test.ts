@@ -271,6 +271,24 @@ describe("FeatureStateCoordinator", () => {
 		expect(coordinator.getProjectSnapshots("p1")).toEqual([]);
 	});
 
+	it("rolls up per-project counts for Home including the active/done split", async () => {
+		const doneFeature = { ...feature("f2"), status: "done" as const };
+		const fixture = setup();
+		fixture.setFeatures([feature(), doneFeature]);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		coordinator.start(undefined, 15_000);
+		await coordinator.reconcile();
+
+		const summary = coordinator.getProjectSummary(fixture.context);
+		expect(summary.projectId).toBe("p1");
+		expect(summary.featureCount).toBe(2);
+		expect(summary.activeFeatureCount).toBe(1);
+		expect(summary.doneFeatureCount).toBe(1);
+
+		coordinator.stop();
+		coordinator.dispose();
+	});
+
 	it("does not poll without an active consumer", async () => {
 		vi.useFakeTimers();
 		const fixture = setup();
