@@ -1054,6 +1054,31 @@ describe("Home portfolio card (piloting view)", () => {
 		expect(html).toContain(">2 need attention</span>");
 	});
 
+	it("colors the attention badge from base-snapshot alerts too", () => {
+		const html = renderCard(
+			[
+				makeSnapshot({
+					base: true,
+					attention: [
+						{
+							code: "upstream_unknown",
+							severity: "error",
+							summary: "Base unreachable",
+							detail: "Remote unreadable",
+							evidence: {},
+						},
+					],
+				}),
+			],
+			{ attentionCount: 1 },
+		);
+
+		expect(html).toContain("severity-error");
+		expect(html).toContain(">1 needs attention</span>");
+		// The synthetic base feature never appears in the preview rows.
+		expect(html).not.toContain("openFeature('base:p1')");
+	});
+
 	it("previews the most recent active features and collapses the overflow", () => {
 		const html = renderCard([
 			makeSnapshot({ id: "old", createdAt: "2026-08-01T00:00:00Z" }),

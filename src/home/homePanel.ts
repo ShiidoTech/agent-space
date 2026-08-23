@@ -2007,13 +2007,15 @@ export class HomePanel {
 	private renderProjectPortfolioCard(ctx: ProjectContext): string {
 		const projectId = ctx.project.id;
 		const summary = this.featureStateCoordinator.getProjectSummary(ctx);
-		const snapshots = this.featureStateCoordinator
-			.getProjectSnapshots(projectId)
-			.filter((snapshot) => !snapshot.feature.id.startsWith("base:"));
+		const allSnapshots =
+			this.featureStateCoordinator.getProjectSnapshots(projectId);
 
+		// Severity spans every snapshot, including the synthetic base: one —
+		// getProjectSummary() counts its attention too, so the badge color
+		// must cover the same evidence set as the count.
 		const severityRank = { info: 1, warning: 2, error: 3 } as const;
 		let worstSeverity: keyof typeof severityRank | undefined;
-		for (const snapshot of snapshots) {
+		for (const snapshot of allSnapshots) {
 			for (const problem of snapshot.attention) {
 				if (
 					!worstSeverity ||
@@ -2028,6 +2030,10 @@ export class HomePanel {
 				? `<span class="portfolio-attention severity-${worstSeverity ?? "info"}" title="${summary.attentionCount} item${summary.attentionCount === 1 ? "" : "s"} need attention">${summary.attentionCount} need${summary.attentionCount === 1 ? "s" : ""} attention</span>`
 				: "";
 
+		// base: is excluded only from the portfolio counters and preview.
+		const snapshots = allSnapshots.filter(
+			(snapshot) => !snapshot.feature.id.startsWith("base:"),
+		);
 		const previewCount = 3;
 		const activeFeatures = snapshots
 			.filter((snapshot) => snapshot.feature.status !== "done")
