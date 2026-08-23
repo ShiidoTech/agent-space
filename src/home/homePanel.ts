@@ -1003,46 +1003,6 @@ export class HomePanel {
 		);
 
 		const contexts = this.projectManager.getAllContexts();
-
-		// Gather all features across all projects
-		const allFeatures: Array<{
-			feature: Feature;
-			projectName: string;
-			projectId: string;
-			agentCount: number | null;
-			serviceCount: number | null;
-		}> = [];
-		for (const ctx of contexts) {
-			for (const snapshot of this.featureStateCoordinator.getProjectSnapshots(
-				ctx.project.id,
-			)) {
-				const isBase = snapshot.feature.id.startsWith("base:");
-				const agentCount =
-					snapshot.runtime.agents.status === "known"
-						? snapshot.runtime.agents.value.length
-						: null;
-				const serviceCount =
-					snapshot.runtime.services.status === "known"
-						? snapshot.runtime.services.value.length
-						: null;
-				if (isBase && agentCount === 0 && serviceCount === 0) continue;
-				allFeatures.push({
-					feature: snapshot.feature as Feature,
-					projectName: ctx.project.name,
-					projectId: ctx.project.id,
-					agentCount,
-					serviceCount,
-				});
-			}
-		}
-		// Sort: active first, then by creation date desc
-		allFeatures.sort((a, b) => {
-			if (a.feature.status !== b.feature.status) {
-				return a.feature.status === "active" ? -1 : 1;
-			}
-			return b.feature.createdAt.localeCompare(a.feature.createdAt);
-		});
-
 		const projects = this.projectManager.getProjects();
 
 		let body: string;
@@ -1062,75 +1022,30 @@ export class HomePanel {
 				</div>
 			</div>`;
 		} else {
-			const featureCards =
-				allFeatures.length > 0
-					? allFeatures
-							.map((entry) => {
-								const f = entry.feature;
-								const dotColor = TERMINAL_COLOR_MAP[f.color] || "#569cd6";
-								const agentLabel =
-									entry.agentCount === null
-										? "agents unknown"
-										: entry.agentCount === 1
-											? "1 agent"
-											: `${entry.agentCount} agents`;
-								const serviceLabel =
-									entry.serviceCount === null
-										? "scripts unknown"
-										: entry.serviceCount === 1
-											? "1 script"
-											: `${entry.serviceCount} scripts`;
-								return `
-						<div class="feature-resume-card" onclick="openFeature('${f.id}')">
-							<div class="feature-card-top">
-								<div class="feature-card-color" style="background: ${dotColor}"></div>
-								<div class="feature-card-name">${this.escapeHtml(f.branch)}</div>
-								<span class="feature-card-status ${f.status}">${f.status === "done" ? "Done" : "Active"}</span>
-							</div>
-							<div class="feature-card-meta">
-								<span class="feature-card-project">${this.escapeHtml(entry.projectName)}</span>
-								<span class="feature-card-counts">${agentLabel} &middot; ${serviceLabel}</span>
-							</div>
-							<button class="feature-card-resume" onclick="event.stopPropagation(); openFeature('${f.id}')">Open &rarr;</button>
-						</div>`;
-							})
-							.join("")
-					: '<div class="empty-welcome"><div class="empty-welcome-text">No features yet. Create one to get started.</div></div>';
-
-			const projectRows = contexts
-				.map((ctx) => {
-					// Cheap portfolio rollup: never triggers a new observation.
-					const summary = this.featureStateCoordinator.getProjectSummary(ctx);
-					const featureCount = summary.featureCount;
-					const snapshots = this.featureStateCoordinator.getProjectSnapshots(
-						ctx.project.id,
-					);
-					const explicitBaseBranch = ctx.config.baseBranch?.trim();
-					const effectiveBaseBranch =
-						snapshots.find((snapshot) =>
-							snapshot.feature.id.startsWith("base:"),
-						)?.feature.branch ?? "Unknown";
-					const branchKinds = ctx.featureManager.getBranchKinds();
-					const defaultBranchKind = ctx.featureManager.getDefaultBranchKind();
-					const referenceHealth = this.renderReferenceHealthChip(
-						ctx.project.id,
-					);
-					return `
-					<tr>
-						<td>${this.escapeHtml(ctx.project.name)}</td>
-						<td class="project-path-cell" title="${this.escapeHtml(ctx.project.repoPath)}">${this.escapeHtml(ctx.project.repoPath)}</td>
-						<td>
-							<strong>${this.escapeHtml(effectiveBaseBranch)}</strong>
-							<div class="project-setting-source">${explicitBaseBranch ? "Configured" : "Current checkout fallback"}</div>
-							<div class="project-base-chips">${referenceHealth}</div>
-						</td>
-						<td>${this.escapeHtml(branchKinds.join(", ") || "Default")}${defaultBranchKind ? ` <span class="project-setting-source">(default: ${this.escapeHtml(defaultBranchKind)})</span>` : ""}</td>
-						<td class="project-worktree-cell">${this.escapeHtml(ctx.featureManager.getWorktreeBase())}</td>
-						<td>${featureCount}</td>
-						<td><button class="project-settings-btn" onclick="showProject('${ctx.project.id}')">Open project</button></td>
-					</tr>`;
-				})
+			const portfolioCards = contexts
+				.map((ctx) => this.renderProjectPortfolioCard(ctx))
 				.join("");
+			const totals = contexts.reduce(
+				(acc, ctx) => {
+					const summary =
+						this.featureStateCoordinator.getProjectSummary(ctx);
+					acc.activeFeatures += summary.activeFeatureCount;
+					acc.agents += summary.agentsActive;
+					acc.scripts += summary.servicesActive;
+					acc.attention += summary.attentionCount;
+					return acc;
+				},
+				{ activeFeatures: 0, agents: 0, scripts: 0, attention: 0 },
+			);
+			const totalsChips = [
+				`<span class="portfolio-total-chip"><strong>${contexts.length}</strong> project${contexts.length === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip"><strong>${totals.activeFeatures}</strong> active feature${totals.activeFeatures === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip"><strong>${totals.agents}</strong> agent${totals.agents === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip"><strong>${totals.scripts}</strong> script${totals.scripts === 1 ? "" : "s"}</span>`,
+				totals.attention > 0
+					? `<span class="portfolio-total-chip attention"><strong>${totals.attention}</strong> need${totals.attention === 1 ? "s" : ""} attention</span>`
+					: "",
+			].join("");
 
 			// For "New Feature" button, use first project if only one
 			const newFeatureProjectId = projects.length === 1 ? projects[0].id : "";
@@ -1139,8 +1054,9 @@ export class HomePanel {
 			<div class="welcome-container">
 				<div class="welcome-header">
 					<div class="welcome-title">${ICON_BRAND} Agent Space</div>
-					<div class="welcome-subtitle">Your features at a glance</div>
+					<div class="welcome-subtitle">Portfolio at a glance</div>
 				</div>
+				<div class="portfolio-totals">${totalsChips}</div>
 				<div class="quick-actions-row">
 					<button class="action-btn" onclick="newFeature('${newFeatureProjectId}')">
 						${ICON_PLUS} New Feature
@@ -1149,18 +1065,8 @@ export class HomePanel {
 						${ICON_FOLDER} Add Project
 					</button>
 				</div>
-				<div class="section-label">Features</div>
-				<div class="feature-grid">
-					${featureCards}
-				</div>
 				<div class="section-label">Projects</div>
-				<table class="projects-table">
-					<thead>
-						<tr><th>Name</th><th>Path</th><th>Base branch</th><th>Branch kinds</th><th>Worktrees</th><th>Features</th><th></th></tr>
-					</thead>
-					<tbody>${projectRows}</tbody>
-				</table>
-				${this.renderWelcomeTmuxSection(contexts)}
+				<div class="portfolio-grid">${portfolioCards}</div>
 			</div>`;
 		}
 
@@ -1582,6 +1488,14 @@ export class HomePanel {
 		const baseStateChips = this.renderBaseStateChips(baseSnapshot);
 		const referenceHealthChip = this.renderReferenceHealthChip(projectId);
 		const worktreeBranches = this.renderWorktreeBranches(projectId);
+		const hasManagedSessions = snapshots.some((snapshot) => {
+			const rows = this.getTmuxSessionRows(snapshot);
+			return (
+				rows.liveRows.length > 0 ||
+				rows.inactiveRows.length > 0 ||
+				rows.unknownRows.length > 0
+			);
+		});
 		const referenceHealth =
 			this.featureStateCoordinator.getProjectReferenceHealth(projectId);
 		const baseUpdateAction =
@@ -1718,6 +1632,7 @@ export class HomePanel {
 				<div class="header-branch">${this.escapeHtml(context.project.repoPath)}</div>
 			</div>
 			<button class="header-action-btn" onclick="quickAction('refresh', '')" title="Refresh local and remote observations">${ICON_REFRESH}</button>
+			${hasManagedSessions ? `<button class="project-delete-btn" onclick="killProjectSessions('${projectId}')" title="Kill every managed tmux session of this project">Kill sessions</button>` : ""}
 			<button class="project-delete-btn" onclick="removeProject('${projectId}')" title="Remove project">Remove project</button>
 		</div>
 		<div class="workspace-content project-page">
@@ -2084,44 +1999,87 @@ export class HomePanel {
 		</div>`;
 	}
 
-	private renderWelcomeTmuxSection(
-		contexts: ReturnType<ProjectManager["getAllContexts"]>,
-	): string {
-		const projectSections = contexts
-			.map((ctx) => {
-				const featureSections = this.featureStateCoordinator
-					.getProjectSnapshots(ctx.project.id)
-					.map((snapshot) =>
-						this.renderTmuxFeatureGroup(snapshot, ctx.project.id),
-					)
-					.filter(Boolean)
-					.join("");
-				if (!featureSections) return "";
+	/**
+	 * Portfolio card for the Home piloting view: a cheap per-project rollup
+	 * plus a preview of the most recent active features. Built purely from
+	 * cached state — never triggers a new Git/GitHub observation.
+	 */
+	private renderProjectPortfolioCard(ctx: ProjectContext): string {
+		const projectId = ctx.project.id;
+		const summary = this.featureStateCoordinator.getProjectSummary(ctx);
+		const allSnapshots =
+			this.featureStateCoordinator.getProjectSnapshots(projectId);
 
+		// Severity spans every snapshot, including the synthetic base: one —
+		// getProjectSummary() counts its attention too, so the badge color
+		// must cover the same evidence set as the count.
+		const severityRank = { info: 1, warning: 2, error: 3 } as const;
+		let worstSeverity: keyof typeof severityRank | undefined;
+		for (const snapshot of allSnapshots) {
+			for (const problem of snapshot.attention) {
+				if (
+					!worstSeverity ||
+					severityRank[problem.severity] > severityRank[worstSeverity]
+				) {
+					worstSeverity = problem.severity;
+				}
+			}
+		}
+		const attentionBadge =
+			summary.attentionCount > 0
+				? `<span class="portfolio-attention severity-${worstSeverity ?? "info"}" title="${summary.attentionCount} item${summary.attentionCount === 1 ? "" : "s"} need attention">${summary.attentionCount} need${summary.attentionCount === 1 ? "s" : ""} attention</span>`
+				: "";
+
+		// base: is excluded only from the portfolio counters and preview.
+		const snapshots = allSnapshots.filter(
+			(snapshot) => !snapshot.feature.id.startsWith("base:"),
+		);
+		const previewCount = 3;
+		const activeFeatures = snapshots
+			.filter((snapshot) => snapshot.feature.status !== "done")
+			.sort((a, b) => b.feature.createdAt.localeCompare(a.feature.createdAt));
+		const previewRows = activeFeatures
+			.slice(0, previewCount)
+			.map((snapshot) => {
+				const feature = snapshot.feature as Feature;
+				const dotColor = TERMINAL_COLOR_MAP[feature.color] || "#569cd6";
+				const cockpitSummary = presentFeatureCockpit(
+					snapshot,
+					this.featureStateCoordinator.getProjectReferenceHealth(projectId),
+				).summary;
 				return `
-				<div class="tmux-project-card">
-					<div class="tmux-project-header">
-						<div>
-							<div class="tmux-project-name">${this.escapeHtml(ctx.project.name)}</div>
-							<div class="tmux-project-path">${this.escapeHtml(ctx.project.repoPath)}</div>
-						</div>
-						<button class="quick-action-btn danger subtle" onclick="killProjectSessions('${ctx.project.id}')">Kill Project Sessions</button>
-					</div>
-					<div class="tmux-feature-groups">
-						${featureSections}
-					</div>
+				<div class="portfolio-feature-row" onclick="event.stopPropagation(); openFeature('${feature.id}')">
+					<span class="portfolio-feature-dot" style="background: ${dotColor}"></span>
+					<span class="portfolio-feature-name" title="${this.escapeHtml(feature.branch)}">${this.escapeHtml(feature.name || feature.branch)}</span>
+					<span class="portfolio-feature-status tone-${cockpitSummary.tone}" title="${this.escapeHtml(cockpitSummary.detail ?? cockpitSummary.label)}">${this.escapeHtml(cockpitSummary.label)}</span>
 				</div>`;
 			})
-			.filter(Boolean)
 			.join("");
+		const overflowCount =
+			activeFeatures.length - Math.min(activeFeatures.length, previewCount);
+		const preview =
+			activeFeatures.length > 0
+				? `${previewRows}${overflowCount > 0 ? `<div class="portfolio-feature-more" onclick="showProject('${projectId}')">+${overflowCount} more&hellip;</div>` : ""}`
+				: '<div class="portfolio-features-empty">No active features</div>';
 
 		return `
-		<div>
-			<div class="section-label">Tmux Sessions</div>
-			${
-				projectSections ||
-				'<div class="tmux-empty-state">No managed tmux sessions yet.</div>'
-			}
+		<div class="portfolio-card" onclick="showProject('${projectId}')">
+			<div class="portfolio-card-header">
+				<div>
+					<div class="portfolio-card-title">${this.escapeHtml(ctx.project.name)}</div>
+					<div class="portfolio-card-path" title="${this.escapeHtml(ctx.project.repoPath)}">${this.escapeHtml(ctx.project.repoPath)}</div>
+				</div>
+				${attentionBadge}
+			</div>
+			<div class="portfolio-card-stats">
+				<span class="portfolio-stat"><strong>${summary.activeFeatureCount}</strong>/${summary.featureCount} features</span>
+				<span class="portfolio-stat"><strong>${summary.agentsActive}</strong> agent${summary.agentsActive === 1 ? "" : "s"}</span>
+				<span class="portfolio-stat"><strong>${summary.servicesActive}</strong> script${summary.servicesActive === 1 ? "" : "s"}</span>
+			</div>
+			<div class="portfolio-features">${preview}</div>
+			<div class="portfolio-card-footer">
+				<button class="quick-action-btn primary" onclick="event.stopPropagation(); newFeature('${projectId}')">New Feature</button>
+			</div>
 		</div>`;
 	}
 

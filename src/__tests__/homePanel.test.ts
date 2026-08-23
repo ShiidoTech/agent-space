@@ -22,6 +22,7 @@ vi.mock("vscode", () => ({
 
 import * as vscode from "vscode";
 import { HomePanel } from "../home/homePanel";
+import type { FeatureSnapshot } from "../features/featureSnapshot";
 import type { Feature } from "../types";
 
 describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
@@ -902,5 +903,203 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		expect(html).toContain("worktree-branch-external");
 		expect(html).toContain("worktree-branch-delete");
 		expect(html).toContain("extra confirmation will be asked");
+	});
+});
+
+describe("Home portfolio card (piloting view)", () => {
+	const unknownGit = { status: "unknown", reason: "git_command_failed" };
+
+	function makeSnapshot(overrides?: {
+		id?: string;
+		name?: string;
+		status?: "active" | "done";
+		createdAt?: string;
+		base?: boolean;
+		attention?: readonly {
+			code: string;
+			severity: "info" | "warning" | "error";
+			summary: string;
+			detail: string;
+			evidence: Record<string, never>;
+		}[];
+	}): FeatureSnapshot {
+		const id = overrides?.id ?? "f1";
+		return {
+			projectId: "p1",
+			feature: {
+				id: overrides?.base ? `base:p1` : id,
+				name: overrides?.name ?? `Feature ${id}`,
+				branch: overrides?.base ? "main" : `feat/${id}`,
+				worktreePath: "/repo/.worktrees/x",
+				status: overrides?.status ?? "active",
+				color: "terminal.ansiBlue",
+				isolation: "shared",
+				createdAt: overrides?.createdAt ?? "2026-08-12T00:00:00Z",
+			},
+			source: { status: "known" },
+			git: {
+				repository: unknownGit,
+				worktree: unknownGit,
+				branch: unknownGit,
+				head: unknownGit,
+				feature: unknownGit,
+				base: unknownGit,
+				creationPoint: unknownGit,
+				creationPointInFeature: unknownGit,
+				upstream: unknownGit,
+				upstreamDivergence: unknownGit,
+				featureDelta: unknownGit,
+				featureDiff: unknownGit,
+				workingTree: unknownGit,
+				worktrees: unknownGit,
+				featureInBase: unknownGit,
+			},
+			github: {
+				status: "unavailable",
+				reason: "repository_unknown",
+				provider: "github",
+				repository: { status: "unknown", reason: "remote_unreadable" },
+				observedAt: "2026-08-12T00:00:00Z",
+			},
+			integration: { status: "unknown", reason: "ancestry_unknown", evidence: {} },
+			runtime: {
+				agents: { status: "unknown", reason: "not_observed" },
+				services: { status: "unknown", reason: "not_observed" },
+			},
+			attention: overrides?.attention ?? [],
+			observedAt: "2026-08-12T00:00:00Z",
+		} as unknown as FeatureSnapshot;
+	}
+
+	const summary = {
+		projectId: "p1",
+		projectName: "Agent Space",
+		featureCount: 4,
+		activeFeatureCount: 2,
+		doneFeatureCount: 2,
+		agentsActive: 3,
+		servicesActive: 1,
+		attentionCount: 0,
+		lastObservedAt: undefined,
+	};
+
+	function renderCard(
+		snapshots: FeatureSnapshot[],
+		summaryOverrides?: Partial<typeof summary>,
+	): string {
+		const panel = Object.create(HomePanel.prototype) as HomePanel;
+		Object.assign(panel, {
+			featureStateCoordinator: {
+				getProjectSummary: () => ({ ...summary, ...summaryOverrides }),
+				getProjectSnapshots: () => snapshots,
+				getProjectReferenceHealth: () => undefined,
+			},
+		});
+		const ctx = {
+			project: { id: "p1", name: "Agent Space", repoPath: "/repo/agent-space" },
+			config: {},
+		};
+		return (
+			panel as unknown as {
+				renderProjectPortfolioCard: (ctx: unknown) => string;
+			}
+		).renderProjectPortfolioCard(ctx);
+	}
+
+	it("renders one piloting card per project with counters and a scoped action", () => {
+		const html = renderCard([]);
+
+		expect(html).toContain('onclick="showProject(\'p1\')"');
+		expect(html).toContain(">Agent Space</div>");
+		expect(html).toContain("<strong>2</strong>/4 features");
+		expect(html).toContain("<strong>3</strong> agents");
+		expect(html).toContain("<strong>1</strong> script");
+		expect(html).not.toContain("portfolio-attention ");
+		expect(html).toContain("No active features");
+		expect(html).toContain("newFeature('p1')");
+	});
+
+	it("surfaces the worst attention severity across the project snapshots", () => {
+		const html = renderCard(
+			[
+				makeSnapshot({
+					id: "warned",
+					attention: [
+						{
+							code: "working_tree_changes",
+							severity: "warning",
+							summary: "Uncommitted changes",
+							detail: "2 files pending",
+							evidence: {},
+						},
+					],
+				}),
+				makeSnapshot({
+					id: "failed",
+					attention: [
+						{
+							code: "agent_failed",
+							severity: "error",
+							summary: "Agent crashed",
+							detail: "Exit code 1",
+							evidence: {},
+						},
+					],
+				}),
+			],
+			{ attentionCount: 2 },
+		);
+
+		expect(html).toContain("severity-error");
+		expect(html).toContain(">2 need attention</span>");
+	});
+
+	it("colors the attention badge from base-snapshot alerts too", () => {
+		const html = renderCard(
+			[
+				makeSnapshot({
+					base: true,
+					attention: [
+						{
+							code: "upstream_unknown",
+							severity: "error",
+							summary: "Base unreachable",
+							detail: "Remote unreadable",
+							evidence: {},
+						},
+					],
+				}),
+			],
+			{ attentionCount: 1 },
+		);
+
+		expect(html).toContain("severity-error");
+		expect(html).toContain(">1 needs attention</span>");
+		// The synthetic base feature never appears in the preview rows.
+		expect(html).not.toContain("openFeature('base:p1')");
+	});
+
+	it("previews the most recent active features and collapses the overflow", () => {
+		const html = renderCard([
+			makeSnapshot({ id: "old", createdAt: "2026-08-01T00:00:00Z" }),
+			makeSnapshot({ id: "oldest", createdAt: "2026-07-31T00:00:00Z" }),
+			makeSnapshot({ id: "newest", createdAt: "2026-08-21T00:00:00Z" }),
+			makeSnapshot({
+				id: "finished",
+				status: "done",
+				createdAt: "2026-08-22T00:00:00Z",
+			}),
+			makeSnapshot({ id: "newer", createdAt: "2026-08-20T00:00:00Z" }),
+		]);
+
+		const newest = html.indexOf("openFeature('newest')");
+		const newer = html.indexOf("openFeature('newer')");
+		const oldest = html.indexOf("openFeature('old')");
+		expect(newest).toBeGreaterThan(-1);
+		expect(newer).toBeGreaterThan(newest);
+		expect(oldest).toBeGreaterThan(newer);
+		expect(html).not.toContain("openFeature('finished')");
+		expect(html).not.toContain("openFeature('oldest')");
+		expect(html).toContain("+1 more&hellip;");
 	});
 });

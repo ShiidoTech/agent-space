@@ -8,6 +8,10 @@ export interface ProjectSummary {
 	readonly projectId: string;
 	readonly projectName: string;
 	readonly featureCount: number;
+	/** Non-base features whose lifecycle status is still `active`. */
+	readonly activeFeatureCount: number;
+	/** Non-base features marked `done` in the persisted lifecycle record. */
+	readonly doneFeatureCount: number;
 	readonly agentsActive: number;
 	readonly servicesActive: number;
 	readonly attentionCount: number;

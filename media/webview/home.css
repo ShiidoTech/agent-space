@@ -97,91 +97,167 @@ body {
 .quick-actions-row .action-btn.secondary:hover {
 	background: var(--vscode-button-secondaryHoverBackground);
 }
-/* ── Feature Cards Grid ──────────────────────────────── */
-.feature-grid {
+/* ── Portfolio Grid (Home piloting view) ─────────────── */
+.portfolio-totals {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 18px;
+}
+.portfolio-total-chip {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	background: var(--vscode-sideBar-background, transparent);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 10px;
+	padding: 3px 10px;
+}
+.portfolio-total-chip strong {
+	color: var(--vscode-foreground);
+}
+.portfolio-total-chip.attention {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+	border-color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 45%, transparent);
+}
+.portfolio-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
 	gap: 12px;
 	margin-bottom: 28px;
 }
-
-.feature-resume-card {
+.portfolio-card {
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 	border: 1px solid var(--vscode-panel-border);
-	border-radius: 6px;
+	border-radius: 8px;
 	padding: 14px 16px;
 	cursor: pointer;
 	transition: border-color 0.15s;
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 10px;
 }
-.feature-resume-card:hover {
+.portfolio-card:hover {
 	border-color: var(--vscode-focusBorder);
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
-.feature-card-top {
+.portfolio-card-header {
 	display: flex;
-	align-items: center;
+	align-items: flex-start;
+	justify-content: space-between;
 	gap: 10px;
 }
-.feature-card-color {
-	width: 10px;
-	height: 10px;
-	border-radius: 50%;
-	flex-shrink: 0;
-}
-.feature-card-name {
+.portfolio-card-title {
 	font-size: 14px;
 	font-weight: 600;
-	flex: 1;
+}
+.portfolio-card-path {
+	font-family: var(--vscode-editor-font-family);
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	margin-top: 2px;
+	max-width: 260px;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
-.feature-card-status {
+.portfolio-attention {
 	font-size: 10px;
 	padding: 2px 8px;
 	border-radius: 10px;
 	font-weight: 500;
 	flex-shrink: 0;
+	white-space: nowrap;
 }
-.feature-card-status.active {
-	background: var(--vscode-testing-iconPassed);
-	color: var(--vscode-editor-background);
+.portfolio-attention.severity-error {
+	color: var(--vscode-errorForeground);
+	background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent);
 }
-.feature-card-status.done {
-	background: var(--vscode-descriptionForeground);
-	color: var(--vscode-editor-background);
+.portfolio-attention.severity-warning {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+	background: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 14%, transparent);
 }
-.feature-card-meta {
-	font-size: 12px;
+.portfolio-attention.severity-info {
 	color: var(--vscode-descriptionForeground);
+	background: color-mix(in srgb, var(--vscode-descriptionForeground) 14%, transparent);
+}
+.portfolio-card-stats {
 	display: flex;
 	gap: 12px;
-}
-.feature-card-project {
-	opacity: 0.8;
-}
-.feature-card-counts {
-	font-family: var(--vscode-editor-font-family);
-}
-.feature-card-resume {
-	align-self: flex-end;
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	padding: 4px 12px;
-	background: var(--vscode-button-background);
-	color: var(--vscode-button-foreground);
-	border: none;
-	border-radius: 4px;
 	font-size: 11px;
-	cursor: pointer;
-	transition: background 0.12s;
+	color: var(--vscode-descriptionForeground);
 }
-.feature-card-resume:hover {
-	background: var(--vscode-button-hoverBackground);
+.portfolio-card-stats strong {
+	color: var(--vscode-foreground);
+}
+.portfolio-features {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	border-top: 1px solid var(--vscode-panel-border);
+	padding-top: 8px;
+}
+.portfolio-feature-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 3px 6px;
+	margin: 0 -6px;
+	border-radius: 4px;
+	cursor: pointer;
+}
+.portfolio-feature-row:hover {
+	background: color-mix(in srgb, var(--vscode-focusBorder) 12%, transparent);
+}
+.portfolio-feature-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	flex-shrink: 0;
+}
+.portfolio-feature-name {
+	font-size: 12px;
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.portfolio-feature-status {
+	font-size: 10px;
+	padding: 1px 7px;
+	border-radius: 9px;
+	flex-shrink: 0;
+	color: var(--vscode-descriptionForeground);
+}
+.portfolio-feature-status.tone-normal {
+	color: var(--vscode-testing-iconPassed);
+}
+.portfolio-feature-status.tone-warning {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+}
+.portfolio-feature-status.tone-error {
+	color: var(--vscode-errorForeground);
+}
+.portfolio-feature-more {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	padding: 3px 6px;
+	margin: 0 -6px;
+	border-radius: 4px;
+	cursor: pointer;
+}
+.portfolio-feature-more:hover {
+	color: var(--vscode-foreground);
+	background: color-mix(in srgb, var(--vscode-focusBorder) 12%, transparent);
+}
+.portfolio-features-empty {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	font-style: italic;
+}
+.portfolio-card-footer {
+	display: flex;
+	justify-content: flex-end;
 }
 
 .quick-action-btn.subtle {
@@ -192,38 +268,6 @@ body {
 	background: var(--vscode-button-secondaryHoverBackground);
 }
 
-/* ── Projects Table ──────────────────────────────────── */
-.projects-table {
-	width: 100%;
-	border-collapse: collapse;
-	font-size: 12px;
-}
-.projects-table th {
-	text-align: left;
-	font-weight: 600;
-	color: var(--vscode-descriptionForeground);
-	text-transform: uppercase;
-	letter-spacing: 0.5px;
-	font-size: 10px;
-	padding: 6px 8px;
-	border-bottom: 1px solid var(--vscode-panel-border);
-}
-.projects-table td {
-	padding: 8px;
-	border-bottom: 1px solid var(--vscode-panel-border);
-}
-.projects-table tr:last-child td {
-	border-bottom: none;
-}
-.projects-table .project-path-cell {
-	font-family: var(--vscode-editor-font-family);
-	color: var(--vscode-descriptionForeground);
-	font-size: 11px;
-	max-width: 300px;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
 .project-setting-source {
 	font-size: 10px;
 	color: var(--vscode-descriptionForeground);
@@ -233,18 +277,6 @@ body {
 	font-family: var(--vscode-editor-font-family);
 	font-size: 11px;
 	color: var(--vscode-descriptionForeground);
-}
-.project-settings-btn {
-	padding: 4px 8px;
-	border: 1px solid var(--vscode-button-border, transparent);
-	border-radius: 3px;
-	background: var(--vscode-button-secondaryBackground);
-	color: var(--vscode-button-secondaryForeground);
-	font-size: 11px;
-	cursor: pointer;
-}
-.project-settings-btn:hover {
-	background: var(--vscode-button-secondaryHoverBackground);
 }
 
 /* ── Empty Welcome State ─────────────────────────────── */
@@ -264,16 +296,11 @@ body {
 }
 
 /* ── Tmux Sessions Inventory ─────────────────────────── */
-.tmux-project-card,
 .tmux-feature-card {
 	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
 	border: 1px solid var(--vscode-panel-border);
 	border-radius: 8px;
 }
-.tmux-project-card {
-	margin-top: 12px;
-}
-.tmux-project-header,
 .tmux-feature-header {
 	display: flex;
 	align-items: flex-start;
@@ -282,24 +309,16 @@ body {
 	padding: 14px 16px;
 	border-bottom: 1px solid var(--vscode-panel-border);
 }
-.tmux-project-name,
 .tmux-feature-name {
 	font-size: 13px;
 	font-weight: 600;
 }
-.tmux-project-path,
 .tmux-feature-branch {
 	font-family: var(--vscode-editor-font-family);
 	font-size: 11px;
 	color: var(--vscode-descriptionForeground);
 	margin-top: 4px;
 	word-break: break-all;
-}
-.tmux-feature-groups {
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-	padding: 12px;
 }
 .tmux-feature-actions {
 	display: flex;

@@ -246,8 +246,14 @@ export class FeatureStateCoordinator implements Disposable {
 		let attentionCount = 0;
 		let lastObservedAt: string | undefined;
 		let featureCount = 0;
+		let activeFeatureCount = 0;
+		let doneFeatureCount = 0;
 		for (const snapshot of snapshots) {
-			if (!snapshot.feature.id.startsWith("base:")) featureCount += 1;
+			if (!snapshot.feature.id.startsWith("base:")) {
+				featureCount += 1;
+				if (snapshot.feature.status === "done") doneFeatureCount += 1;
+				else activeFeatureCount += 1;
+			}
 			if (snapshot.runtime.agents.status === "known") {
 				agentsActive += snapshot.runtime.agents.value.length;
 			}
@@ -263,6 +269,8 @@ export class FeatureStateCoordinator implements Disposable {
 			projectId: ctx.project.id,
 			projectName: ctx.project.name,
 			featureCount,
+			activeFeatureCount,
+			doneFeatureCount,
 			agentsActive,
 			servicesActive,
 			attentionCount,
