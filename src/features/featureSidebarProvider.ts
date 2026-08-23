@@ -13,7 +13,7 @@ import {
 	ICON_CHEVRON_RIGHT,
 	ICON_DELETE,
 	ICON_GIT,
-	ICON_HOME,
+	ICON_BRAND,
 	ICON_RESTART,
 	ICON_STOP,
 } from "../constants/icons";
@@ -532,7 +532,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
 	<button class="btn-home" onclick="openHome(event)" title="Open Agent Space home">
-		<span class="home-icon">${ICON_HOME}</span>
+		<span class="home-icon">${ICON_BRAND}</span>
 		<span>Agent Space</span>
 	</button>
 	${body}

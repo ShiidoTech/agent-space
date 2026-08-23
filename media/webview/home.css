@@ -48,6 +48,10 @@ body {
 	font-weight: 600;
 	margin-bottom: 6px;
 }
+.welcome-title svg {
+	vertical-align: -2px;
+	margin-right: 6px;
+}
 .welcome-subtitle {
 	font-size: 13px;
 	color: var(--vscode-descriptionForeground);
