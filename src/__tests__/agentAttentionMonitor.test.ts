@@ -23,7 +23,7 @@ describe("AgentAttentionMonitor", () => {
 		attentionReason: "Asked a question",
 	};
 
-	let collect: ReturnType<typeof vi.fn<() => AttentionWatchedAgent[]>>;
+	let collect: ReturnType<typeof vi.fn<() => Promise<readonly AttentionWatchedAgent[]>>>;
 	let onAlert: ReturnType<typeof vi.fn<(alert: AgentAttentionAlert) => void>>;
 	let onError: ReturnType<typeof vi.fn<(error: unknown) => void>>;
 
@@ -38,7 +38,7 @@ describe("AgentAttentionMonitor", () => {
 
 	beforeEach(() => {
 		vi.useFakeTimers();
-		collect = vi.fn(() => [workingAgent]);
+		collect = vi.fn(async () => [workingAgent]);
 		onAlert = vi.fn();
 		onError = vi.fn();
 	});
@@ -58,7 +58,7 @@ describe("AgentAttentionMonitor", () => {
 		// Only the provider-side attention changed — no Feature/Project
 		// mutation, no coordinator change. The next poll tick observes the
 		// transition itself and notifies exactly once.
-		collect.mockReturnValue([waitingAgent]);
+		collect.mockResolvedValue([waitingAgent]);
 		await vi.advanceTimersByTimeAsync(5000);
 
 		expect(onAlert).toHaveBeenCalledTimes(1);
@@ -84,7 +84,7 @@ describe("AgentAttentionMonitor", () => {
 		});
 		monitor.start();
 
-		collect.mockReturnValue([waitingAgent]);
+		collect.mockResolvedValue([waitingAgent]);
 		monitor.nudge();
 		monitor.nudge();
 		monitor.nudge();
@@ -95,6 +95,34 @@ describe("AgentAttentionMonitor", () => {
 		await vi.advanceTimersByTimeAsync(100);
 		expect(collect).toHaveBeenCalledTimes(1);
 		expect(onAlert).toHaveBeenCalledTimes(1);
+
+		monitor.dispose();
+	});
+
+	it("coalesces in-flight scans instead of stacking them", async () => {
+		const monitor = buildMonitor({ pollIntervalMs: 1000 });
+		monitor.start();
+
+		let release!: (agents: readonly AttentionWatchedAgent[]) => void;
+		collect.mockReturnValue(
+			new Promise<readonly AttentionWatchedAgent[]>((resolve) => {
+				release = resolve;
+			}),
+		);
+
+		// Two ticks elapse while the first collection is still in flight:
+		// no second concurrent scan is started.
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(collect).toHaveBeenCalledTimes(1);
+
+		release([waitingAgent]);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(onAlert).toHaveBeenCalledTimes(1);
+
+		// Collection finished — the loop resumes scanning on later ticks.
+		collect.mockResolvedValue([]);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(collect).toHaveBeenCalledTimes(2);
 
 		monitor.dispose();
 	});
@@ -123,14 +151,12 @@ describe("AgentAttentionMonitor", () => {
 		const monitor = buildMonitor({ pollIntervalMs: 1000 });
 		monitor.start();
 
-		collect.mockImplementation(() => {
-			throw new Error("probe boom");
-		});
+		collect.mockRejectedValue(new Error("probe boom"));
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(onError).toHaveBeenCalledTimes(1);
 		expect(onAlert).not.toHaveBeenCalled();
 
-		collect.mockReturnValue([waitingAgent]);
+		collect.mockResolvedValue([waitingAgent]);
 		onAlert.mockImplementation(() => {
 			throw new Error("surface boom");
 		});
@@ -139,7 +165,7 @@ describe("AgentAttentionMonitor", () => {
 
 		// Loop is still alive after both failures.
 		onAlert.mockImplementation(() => {});
-		collect.mockReturnValue([]);
+		collect.mockResolvedValue([]);
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(collect).toHaveBeenCalledTimes(3);
 

@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { AgentFocusService } from "./agents/agentFocusService";
 import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor";
+import { collectWatchedAgents } from "./agents/attention/agentAttentionCollector";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
@@ -554,34 +555,17 @@ export async function activate(
 
 	let featureRefreshQueued = false;
 	// Dedicated attention observation source: polls provider attention on its
-	// own clock (the coordinator's light poll uses non-probing read models,
-	// so a working -> waiting_for_user transition alone never surfaces there)
-	// and fires notifications on the transition itself. Coordinator changes
-	// only nudge it — coalesced and off the change stack, never a synchronous
-	// fleet-wide sweep per FeatureState update.
+	// own clock through the fully asynchronous collector (cached feature list,
+	// read-model pre-filter, getAgentsAsync probes — never a synchronous
+	// process call on the Extension Host), because the coordinator's light
+	// poll uses non-probing read models: a working -> waiting_for_user
+	// transition alone never surfaces there. Notifications fire on the
+	// transition itself; coordinator changes only nudge the monitor —
+	// coalesced and off the change stack.
 	const attentionMonitor = new AgentAttentionMonitor(
 		{
 			collect: () =>
-				projectManager.getAllContexts().flatMap((ctx) =>
-					ctx.featureManager.getFeatures().flatMap((feature) => {
-						// Pre-filter with the cached read model: probe (tmux +
-						// provider) only features that actually have a running
-						// agent — waiting transitions can only happen there.
-						const known =
-							ctx.agentManager.getAgentsReadModel?.(feature.id) ?? [];
-						if (!known.some((agent) => agent.status === "running")) {
-							return [];
-						}
-						return ctx.agentManager.getAgents(feature.id).map((agent) => ({
-							id: agent.id,
-							name: agent.name,
-							featureId: feature.id,
-							featureName: feature.name,
-							attentionStatus: agent.attentionStatus,
-							attentionReason: agent.attentionReason,
-						}));
-					}),
-				),
+				collectWatchedAgents(projectManager.getAllContexts()),
 			onAlert: (alert) => {
 				if (
 					!vscode.workspace

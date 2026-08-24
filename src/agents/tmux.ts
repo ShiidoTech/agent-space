@@ -196,6 +196,32 @@ export class TmuxIntegration {
 		}
 	}
 
+	/**
+	 * Non-blocking twin of {@link getPaneStatus}. Used by background
+	 * observation paths (attention monitoring) that must never block the
+	 * Extension Host on a synchronous tmux round trip.
+	 */
+	async getPaneStatusAsync(
+		sessionName: string,
+	): Promise<{ dead: boolean; exitCode: number } | null> {
+		try {
+			const output = (
+				await execAsync(
+					`tmux display-message -t "${sessionName}" -p "#{pane_dead} #{pane_dead_status}"`,
+				)
+			)
+				.toString()
+				.trim();
+			const [deadStr, codeStr] = output.split(" ");
+			return {
+				dead: deadStr === "1",
+				exitCode: Number.parseInt(codeStr ?? "0", 10),
+			};
+		} catch {
+			return null;
+		}
+	}
+
 	createCommand(sessionName: string, innerCommand: string): string {
 		return `tmux new-session -d -s "${sessionName}" "${innerCommand}"`;
 	}

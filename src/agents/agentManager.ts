@@ -75,6 +75,26 @@ export class AgentManager {
 	}
 
 	/**
+	 * Non-blocking twin of {@link getAgents}: identical attention semantics,
+	 * but the tmux/provider probes run through the async helpers so callers
+	 * on background observation paths never block the Extension Host.
+	 */
+	async getAgentsAsync(featureId: string): Promise<Agent[]> {
+		const agents = this.loadAgents(featureId);
+		return Promise.all(
+			agents.map(async (agent) => {
+				const attention =
+					await this.attentionResolver.resolveAsync(agent);
+				return {
+					...agent,
+					attentionStatus: attention.status,
+					attentionReason: attention.reason,
+				};
+			}),
+		);
+	}
+
+	/**
 	 * Read the persisted/runtime agent model without probing a provider. This is
 	 * the startup/presence read path: provider attention is active observation
 	 * and must never block the Extension Host or replace the last-known model.

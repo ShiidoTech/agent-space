@@ -3,11 +3,12 @@ import { AgentAttentionNotifier } from "./agentAttentionNotifier";
 
 export interface AgentAttentionMonitorDeps {
 	/**
-	 * Collect the agents worth watching right now. This is the only probing
-	 * entry point and it runs on the monitor's own clock (poll tick or
-	 * coalesced nudge), never synchronously on a caller's change stack.
+	 * Collect the agents worth watching right now. Must be non-blocking:
+	 * it runs on the monitor's own clock and may only use cached models and
+	 * async probes — never synchronous process APIs. Overlapping scans are
+	 * coalesced: while a collection is in flight, further ticks are skipped.
 	 */
-	collect(): AttentionWatchedAgent[];
+	collect(): Promise<readonly AttentionWatchedAgent[]>;
 	/** Surface one alert — the host decides how (notification, sound, ...). */
 	onAlert(alert: AgentAttentionAlert): void;
 	onError?(error: unknown): void;
@@ -27,18 +28,20 @@ const DEFAULT_NUDGE_DEBOUNCE_MS = 150;
  * uses non-probing read models, so a provider-side transition
  * working -> waiting_for_user does not by itself produce a coordinator
  * change — and reacting to every unrelated change would turn each one into
- * a synchronous probe sweep of the whole fleet on the Extension Host.
+ * a probe sweep of the whole fleet.
  *
- * Instead this monitor polls on its own clock and fires alerts on the
- * transition itself (one alert per continuous waiting episode, deduplicated
- * by {@link AgentAttentionNotifier}). External change hints arrive via
- * {@link nudge}, which coalesces bursts and always runs off the caller's
- * stack.
+ * This monitor polls on its own clock, fires alerts on the transition
+ * itself (one alert per continuous waiting episode, deduplicated by
+ * {@link AgentAttentionNotifier}) and keeps the Extension Host free:
+ * collection is asynchronous end to end and in-flight scans coalesce —
+ * a slow tick never stacks up behind itself. External change hints arrive
+ * via {@link nudge}, which coalesces bursts off the caller's stack.
  */
 export class AgentAttentionMonitor {
 	private readonly notifier = new AgentAttentionNotifier();
 	private timer?: ReturnType<typeof setInterval>;
 	private nudgeTimer?: ReturnType<typeof setTimeout>;
+	private scanning = false;
 	private disposed = false;
 
 	constructor(
@@ -49,7 +52,7 @@ export class AgentAttentionMonitor {
 	start(): void {
 		if (this.disposed || this.timer) return;
 		this.timer = setInterval(
-			() => this.scanOnce(),
+			() => void this.scanOnce(),
 			this.options.pollIntervalMs,
 		);
 	}
@@ -59,7 +62,7 @@ export class AgentAttentionMonitor {
 		if (this.disposed || this.timer === undefined || this.nudgeTimer) return;
 		this.nudgeTimer = setTimeout(() => {
 			this.nudgeTimer = undefined;
-			this.scanOnce();
+			void this.scanOnce();
 		}, this.options.nudgeDebounceMs ?? DEFAULT_NUDGE_DEBOUNCE_MS);
 	}
 
@@ -75,21 +78,23 @@ export class AgentAttentionMonitor {
 		}
 	}
 
-	private scanOnce(): void {
-		if (this.disposed) return;
-		let watched: readonly AttentionWatchedAgent[];
+	private async scanOnce(): Promise<void> {
+		if (this.disposed || this.scanning) return;
+		this.scanning = true;
 		try {
-			watched = this.deps.collect();
-		} catch (error) {
-			this.deps.onError?.(error);
-			return;
-		}
-		try {
-			for (const alert of this.notifier.scan(watched)) {
-				this.deps.onAlert(alert);
+			const watched = await this.deps.collect();
+			if (this.disposed) return;
+			try {
+				for (const alert of this.notifier.scan(watched)) {
+					this.deps.onAlert(alert);
+				}
+			} catch (error) {
+				this.deps.onError?.(error);
 			}
 		} catch (error) {
 			this.deps.onError?.(error);
+		} finally {
+			this.scanning = false;
 		}
 	}
 }
