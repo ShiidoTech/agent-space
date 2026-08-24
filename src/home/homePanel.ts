@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
+import type { AgentFocusService } from "../agents/agentFocusService";
 import { presentAgentCard } from "../agents/observation/presentAgentCard";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
@@ -39,20 +40,17 @@ export class HomePanel {
 	private readonly extensionUri: vscode.Uri;
 	private readonly globalStore: GlobalStore;
 	private terminalController?: TerminalController;
+	private agentFocus?: AgentFocusService;
 	private currentFeatureId: string | null = null;
 	private currentProjectId: string | null = null;
 	private currentProjectSettings = false;
+	private showingProblems = false;
+	private problemsProjectFilter: string | undefined;
 	private onViewStateChangeCallback?:
 		| ((state: { active: boolean; visible: boolean }) => void)
 		| undefined;
 	private disposables: vscode.Disposable[] = [];
 	private coordinatorConsumer?: { dispose: () => void };
-	/**
-	 * Monotonic focus counter: incremented on every focus request so a cold
-	 * reconciliation that resolves late never steals focus from a more recent
-	 * warm/cold focus (same arbitration as the sidebar's `focusSequence`).
-	 */
-	private focusSequence = 0;
 
 	public static createOrShow(
 		projectManager: ProjectManager,
@@ -228,6 +226,8 @@ export class HomePanel {
 	public showWelcome(): void {
 		this.currentFeatureId = null;
 		this.currentProjectId = null;
+		this.showingProblems = false;
+		this.problemsProjectFilter = undefined;
 		this.panel.title = "Agent Space";
 		this.panel.webview.html = this.getWelcomeHtml();
 	}
@@ -236,6 +236,8 @@ export class HomePanel {
 		const startedAt = Date.now();
 		this.currentFeatureId = featureId;
 		this.currentProjectId = null;
+		this.showingProblems = false;
+		this.problemsProjectFilter = undefined;
 		this.globalStore.setPreference("lastActiveFeatureId", featureId);
 		const resolved = this.projectManager.resolveFeature(featureId);
 		this.panel.title = resolved
@@ -258,6 +260,21 @@ export class HomePanel {
 		this.showProjectPage(projectId, true);
 	}
 
+	/**
+	 * Portfolio-wide attention list: every problem currently attached to a
+	 * cached snapshot (features and base), worst severity first. Purely built
+	 * from cached state — never triggers a new Git/GitHub observation.
+	 */
+	public showProblems(projectId?: string): void {
+		this.currentFeatureId = null;
+		this.currentProjectId = null;
+		this.showingProblems = true;
+		this.problemsProjectFilter = projectId;
+		this.panel.title = "Agent Space: Attention";
+		this.panel.reveal(vscode.ViewColumn.One, true);
+		this.panel.webview.html = this.getProblemsHtml(projectId);
+	}
+
 	private showProjectPage(projectId: string, settings: boolean): void {
 		const startedAt = Date.now();
 		const context = this.projectManager.getContext(projectId);
@@ -265,6 +282,8 @@ export class HomePanel {
 		this.currentFeatureId = null;
 		this.currentProjectId = projectId;
 		this.currentProjectSettings = settings;
+		this.showingProblems = false;
+		this.problemsProjectFilter = undefined;
 		this.panel.title = `Agent Space: ${context.project.name}`;
 		this.panel.reveal(vscode.ViewColumn.One, true);
 		this.panel.webview.html = this.getProjectHtml(projectId, settings);
@@ -282,6 +301,10 @@ export class HomePanel {
 				this.panel.webview.html = this.getProjectHtml(
 					this.currentProjectId,
 					this.currentProjectSettings,
+				);
+			} else if (this.showingProblems) {
+				this.panel.webview.html = this.getProblemsHtml(
+					this.problemsProjectFilter,
 				);
 			} else {
 				this.panel.webview.html = this.getWelcomeHtml();
@@ -338,6 +361,12 @@ export class HomePanel {
 			case "showProject":
 				run("agentSpace.openProject", message.projectId as string);
 				break;
+			case "showProblems":
+				run(
+					"agentSpace.openProblems",
+					message.projectId as string | undefined,
+				);
+				break;
 			case "showProjectSettings":
 				run("agentSpace.openProjectSettings", message.projectId as string);
 				break;
@@ -368,7 +397,12 @@ export class HomePanel {
 				);
 				break;
 			case "focusAgent":
-				this.focusAgentTerminal(message.agentId as string);
+				this.focusAgentTerminal(
+					(message.featureId as string | undefined) ??
+						this.currentFeatureId ??
+						undefined,
+					message.agentId as string,
+				);
 				break;
 			case "focusService":
 				this.focusServiceTerminal(
@@ -545,40 +579,20 @@ export class HomePanel {
 	 * identical — warm focus and cold reattachment; a fresh-spawn branch
 	 * still contains a few synchronous calls.
 	 */
-	private focusAgentTerminal(agentId: string): void {
-		if (!this.terminalController || !this.currentFeatureId) return;
-		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
-		if (!resolved) return;
-		const { ctx, feature } = resolved;
-		const agents =
-			typeof ctx.agentManager.getAgentsReadModel === "function"
-				? ctx.agentManager.getAgentsReadModel(this.currentFeatureId)
-				: ctx.agentManager.getAgents(feature.id);
-		const agent = agents.find((a) => a.id === agentId);
-		if (!agent) return;
-		const agentIndex = agents.indexOf(agent);
+	/**
+	 * Thin delegation to the shared AgentFocusService — the behavioral source
+	 * of truth for agent terminal focusing (see its contract). This panel adds
+	 * no behavior of its own.
+	 */
+	public focusAgentTerminal(
+		featureId: string | undefined,
+		agentId: string,
+	): void {
+		this.agentFocus?.requestFocus(featureId ?? "", agentId);
+	}
 
-		const focusSeq = ++this.focusSequence;
-
-		const existing = this.terminalController.getTerminal(agentId);
-		if (existing) {
-			existing.show();
-			return;
-		}
-		void this.terminalController
-			.focusOrCreateTerminalAsync(feature, agent, agentIndex, true)
-			.then((terminal) => {
-				// Still the latest focus request — reveal it. A cold terminal
-				// that is no longer current stays tracked but unrevealed, so
-				// the next click is an instant warm switch without ever
-				// stealing focus (same guard as the sidebar).
-				if (focusSeq === this.focusSequence && terminal) {
-					terminal.show();
-				}
-			})
-			.catch((error) => {
-				console.warn(`[HomePanel] focusAgent reconciliation failed: ${error}`);
-			});
+	public setAgentFocusService(service: AgentFocusService): void {
+		this.agentFocus = service;
 	}
 
 	private focusServiceTerminal(featureId: string, serviceId: string): void {
@@ -1043,7 +1057,7 @@ export class HomePanel {
 				`<span class="portfolio-total-chip"><strong>${totals.agents}</strong> agent${totals.agents === 1 ? "" : "s"}</span>`,
 				`<span class="portfolio-total-chip"><strong>${totals.scripts}</strong> script${totals.scripts === 1 ? "" : "s"}</span>`,
 				totals.attention > 0
-					? `<span class="portfolio-total-chip attention"><strong>${totals.attention}</strong> need${totals.attention === 1 ? "s" : ""} attention</span>`
+					? `<span class="portfolio-total-chip attention clickable" role="button" title="List every attention item" onclick="showProblems()"><strong>${totals.attention}</strong> need${totals.attention === 1 ? "s" : ""} attention</span>`
 					: "",
 			].join("");
 
@@ -1069,6 +1083,125 @@ export class HomePanel {
 				<div class="portfolio-grid">${portfolioCards}</div>
 			</div>`;
 		}
+
+		return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${cssUri}">
+</head>
+<body>
+	${body}
+	<script src="${jsUri}"></script>
+</body>
+</html>`;
+	}
+
+	private getProblemsHtml(projectId?: string): string {
+		const cssUri = this.panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.css"),
+		);
+		const jsUri = this.panel.webview.asWebviewUri(
+			vscode.Uri.joinPath(this.extensionUri, "media", "webview", "home.js"),
+		);
+
+		const contexts = this.projectManager.getAllContexts();
+		const scopedContexts = projectId
+			? contexts.filter((ctx) => ctx.project.id === projectId)
+			: contexts;
+
+		const severityRank = { info: 1, warning: 2, error: 3 } as const;
+		const rows: {
+			severity: keyof typeof severityRank;
+			summary: string;
+			detail: string;
+			projectName: string;
+			featureLabel: string;
+			openTarget: string;
+		}[] = [];
+		const counts = { error: 0, warning: 0, info: 0 };
+		for (const ctx of scopedContexts) {
+			for (const snapshot of this.featureStateCoordinator.getProjectSnapshots(
+				ctx.project.id,
+			)) {
+				const isBase = snapshot.feature.id.startsWith("base:");
+				const featureLabel = isBase
+					? `${ctx.project.name} · base`
+					: (snapshot.feature.name || snapshot.feature.branch);
+				const openTarget = isBase
+					? `showProject('${ctx.project.id}')`
+					: `openFeature('${snapshot.feature.id}')`;
+				for (const problem of snapshot.attention) {
+					if (problem.severity === "error") counts.error += 1;
+					else if (problem.severity === "warning") counts.warning += 1;
+					else counts.info += 1;
+					rows.push({
+						severity: problem.severity,
+						summary: problem.summary,
+						detail: problem.detail,
+						projectName: ctx.project.name,
+						featureLabel,
+						openTarget,
+					});
+				}
+			}
+		}
+		rows.sort((a, b) => {
+			if (severityRank[a.severity] !== severityRank[b.severity]) {
+				return severityRank[b.severity] - severityRank[a.severity];
+			}
+			return a.featureLabel.localeCompare(b.featureLabel);
+		});
+
+		const total = rows.length;
+		const filterChips = [
+			`<button class="problems-filter active" data-severity="all" onclick="filterProblems('all')">All ${total}</button>`,
+			`<button class="problems-filter problems-filter--error" data-severity="error" onclick="filterProblems('error')">Errors ${counts.error}</button>`,
+			`<button class="problems-filter problems-filter--warning" data-severity="warning" onclick="filterProblems('warning')">Warnings ${counts.warning}</button>`,
+			`<button class="problems-filter problems-filter--info" data-severity="info" onclick="filterProblems('info')">Info ${counts.info}</button>`,
+		].join("");
+
+		const listHtml =
+			total === 0
+				? '<div class="activity-empty">No attention items. Everything looks calm.</div>'
+				: `<div class="problems-list">${rows
+						.map(
+							(row) => `
+				<div class="problem-row problem-row--${row.severity}" data-severity="${row.severity}" onclick="${row.openTarget}">
+					<span class="problem-severity-dot"></span>
+					<div class="problem-copy">
+						<strong title="${this.escapeHtml(row.detail)}">${this.escapeHtml(row.summary)}</strong>
+						<span>${this.escapeHtml(row.detail)}</span>
+					</div>
+					<div class="problem-location">
+						<span class="problem-feature" title="${this.escapeHtml(row.featureLabel)}">${this.escapeHtml(row.featureLabel)}</span>
+						<span class="problem-project">${this.escapeHtml(row.projectName)}</span>
+					</div>
+				</div>`,
+						)
+						.join("")}</div>`;
+
+		const scopeChip =
+			projectId && contexts.some((ctx) => ctx.project.id === projectId)
+				? `<span class="portfolio-total-chip">Project: ${this.escapeHtml(contexts.find((ctx) => ctx.project.id === projectId)?.project.name ?? projectId)}
+					<button class="problems-scope-clear" title="Show all projects" onclick="showProblems()">&#215;</button>
+				</span>`
+				: "";
+
+		const body = `
+		<div class="welcome-container">
+			<div class="welcome-header">
+				<div class="welcome-title">${ICON_BRAND} Attention items</div>
+				<div class="welcome-subtitle">Every problem Agent Space observed across the portfolio</div>
+			</div>
+			<div class="portfolio-totals">
+				<button class="action-btn secondary" onclick="goHome()">&#8592; Portfolio</button>
+				${scopeChip}
+			</div>
+			<div class="problems-toolbar">${filterChips}</div>
+			${listHtml}
+		</div>`;
 
 		return `<!DOCTYPE html>
 <html>
@@ -2027,7 +2160,7 @@ export class HomePanel {
 		}
 		const attentionBadge =
 			summary.attentionCount > 0
-				? `<span class="portfolio-attention severity-${worstSeverity ?? "info"}" title="${summary.attentionCount} item${summary.attentionCount === 1 ? "" : "s"} need attention">${summary.attentionCount} need${summary.attentionCount === 1 ? "s" : ""} attention</span>`
+				? `<span class="portfolio-attention severity-${worstSeverity ?? "info"} clickable" role="button" title="List this project's ${summary.attentionCount} attention item${summary.attentionCount === 1 ? "" : "s"}" onclick="event.stopPropagation(); showProblems('${projectId}')">${summary.attentionCount} need${summary.attentionCount === 1 ? "s" : ""} attention</span>`
 				: "";
 
 		// base: is excluded only from the portfolio counters and preview.

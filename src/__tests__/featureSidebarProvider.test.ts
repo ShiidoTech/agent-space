@@ -8,6 +8,7 @@ vi.mock("vscode", () => ({
 }));
 
 import * as vscode from "vscode";
+import { AgentFocusService } from "../agents/agentFocusService";
 import {
 	FeatureSidebarProvider,
 	presentSidebarFeatureSummary,
@@ -86,6 +87,16 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 			getTerminal,
 			focusOrCreateTerminalAsync,
 		} as never);
+		// handleFocusAgent delegates to the shared AgentFocusService; wire a
+		// real service around this test's mocks so the issue-#69 guarantees
+		// keep being exercised through the sidebar's observer translation.
+		p.setAgentFocusService(
+			new AgentFocusService({
+				getTerminalController: () =>
+					({ getTerminal, focusOrCreateTerminalAsync }) as never,
+				resolveFeature: resolveFeature as never,
+			}),
+		);
 		return p;
 	}
 

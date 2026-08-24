@@ -100,10 +100,14 @@
 				"icon": "$(server-process)"
 			},
 			{
-				"command": "agentSpace.openFeatureGitView",
+				"command": "agentSpace.openWorkspace",
 				"title": "Open Workspace",
-				"category": "Agent Space",
-				"icon": "$(source-control)"
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.focusAgent",
+				"title": "Focus Agent Terminal",
+				"category": "Agent Space"
 			},
 			{
 				"command": "agentSpace.bootstrapFeature",
@@ -189,6 +193,11 @@
 				"icon": "$(home)"
 			},
 			{
+				"command": "agentSpace.openProblems",
+				"title": "Open Attention Items",
+				"category": "Agent Space"
+			},
+			{
 				"command": "agentSpace.openProject",
 				"title": "Open Project",
 				"category": "Agent Space"
@@ -241,6 +250,11 @@
 		"configuration": {
 			"title": "Agent Space",
 			"properties": {
+				"agentSpace.notifyWhenAgentsNeedYou": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show a notification when a coding agent starts waiting for your input."
+				},
 				"agentSpace.enablePerAgentIsolation": {
 					"type": "boolean",
 					"default": false,

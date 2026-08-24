@@ -59,6 +59,25 @@ function showProject(projectId) {
 	send("showProject", { projectId });
 }
 
+/** @param {string=} projectId */
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function showProblems(projectId) {
+	send("showProblems", { projectId });
+}
+
+/** @param {string} severity */
+// biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
+function filterProblems(severity) {
+	document.body.dataset.severityFilter = severity;
+	for (const btn of document.querySelectorAll(".problems-filter")) {
+		btn.classList.toggle(
+			"active",
+			(/** @type {HTMLElement} */ (btn).dataset.severity ?? "all") ===
+				severity,
+		);
+	}
+}
+
 /** @param {string} projectId */
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function showProjectSettings(projectId) {

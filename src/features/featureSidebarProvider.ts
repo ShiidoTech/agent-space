@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
+import type { AgentFocusService } from "../agents/agentFocusService";
 import {
 	type AgentCardPresentation,
 	presentAgentCard,
@@ -61,15 +62,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private _view?: vscode.WebviewView;
 	private _onVisibilityChange?: (visible: boolean) => void;
 	private consumer?: { dispose: () => void };
-	/**
-	 * Monotonic counter stamped on every focus request. A cold reconciliation
-	 * only reveals its terminal (and claims "focused"/"failed") if its stamp
-	 * is still the latest, so a slower cold resolution can never steal focus
-	 * from a newer click (e.g. A cold → B warm).
-	 */
-	private focusSequence = 0;
 
 	private terminalController?: TerminalController;
+	private agentFocus?: AgentFocusService;
 
 	constructor(
 		private readonly projectManager: ProjectManager,
@@ -81,6 +76,10 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	setTerminalController(controller: TerminalController): void {
 		this.terminalController = controller;
+	}
+
+	setAgentFocusService(service: AgentFocusService): void {
+		this.agentFocus = service;
 	}
 
 	onVisibilityChange(callback: (visible: boolean) => void): void {
@@ -387,58 +386,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private handleFocusAgent(featureId: string, agentId: string): void {
-		if (!this.terminalController) return;
-		const resolved = this.projectManager.resolveFeature(featureId);
-		if (!resolved) return;
-		const { ctx, feature } = resolved;
-		const agents = ctx.agentManager.getAgentsReadModel(featureId);
-		const agent = agents.find((a) => a.id === agentId);
-		if (!agent) return;
-		const agentIndex = agents.indexOf(agent);
-
-		const focusSeq = ++this.focusSequence;
-
-		// Strict fast path: an already-tracked terminal is revealed with no
-		// shell/process call of any kind before terminal.show(). This is the
-		// hot path for switching between already-running agents.
-		const existing = this.terminalController.getTerminal(agentId);
-		if (existing) {
-			existing.show();
-			this.postAgentFocusState(agentId, "focused");
-			return;
-		}
-
-		// Cold path: the VS Code terminal isn't tracked yet (e.g. right after
-		// a window reload). Surface an immediate "opening" state and let
-		// tmux/session reconciliation run asynchronously — it must never run
-		// synchronously on this interactive click path.
-		this.postAgentFocusState(agentId, "opening");
-		void this.terminalController
-			.focusOrCreateTerminalAsync(feature, agent, agentIndex, true)
-			.then((terminal) => {
-				if (focusSeq === this.focusSequence) {
-					if (terminal) {
-						// Still the latest focus request — reveal it. (A cold
-						// terminal that is no longer current stays tracked but
-						// unrevealed, so the next click is an instant warm
-						// switch without ever stealing focus.)
-						terminal.show();
-						this.postAgentFocusState(agentId, "focused");
-					} else {
-						this.postAgentFocusState(agentId, "failed");
-					}
-				}
-				this.refreshState();
-			})
-			.catch((error) => {
-				console.warn(
-					`[FeatureSidebarProvider] focusAgent reconciliation failed: ${error}`,
-				);
-				if (focusSeq === this.focusSequence) {
-					this.postAgentFocusState(agentId, "failed");
-				}
-				this.refreshState();
-			});
+		// All behavior lives in the shared AgentFocusService (warm/cold paths,
+		// focus arbitration, state contract). The sidebar only translates the
+		// emitted states into its own webview badges and refreshes afterwards.
+		this.agentFocus?.requestFocus(featureId, agentId, {
+			onState: (state) => this.postAgentFocusState(agentId, state),
+			onSettled: () => this.refreshState(),
+		});
 	}
 
 	/** Best-effort UI hint for the sidebar's optimistic click feedback. */

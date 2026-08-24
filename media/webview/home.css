@@ -119,6 +119,140 @@ body {
 	color: var(--vscode-notificationsWarningIcon-foreground);
 	border-color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 45%, transparent);
 }
+.clickable {
+	cursor: pointer;
+}
+.clickable:hover {
+	filter: brightness(1.2);
+}
+
+/* ── Attention items view (portfolio-wide problem list) ── */
+.problems-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-bottom: 14px;
+}
+.problems-filter {
+	font-size: 11px;
+	padding: 3px 10px;
+	border-radius: 10px;
+	border: 1px solid var(--vscode-panel-border);
+	background: var(--vscode-sideBar-background, transparent);
+	color: var(--vscode-descriptionForeground);
+	cursor: pointer;
+}
+.problems-filter.active {
+	color: var(--vscode-foreground);
+	border-color: var(--vscode-focusBorder);
+}
+.problems-filter--error.active {
+	color: var(--vscode-errorForeground);
+}
+.problems-filter--warning.active {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+}
+.problems-scope-clear {
+	margin-left: 4px;
+	border: none;
+	background: none;
+	color: var(--vscode-descriptionForeground);
+	cursor: pointer;
+	padding: 0 2px;
+	font-size: 12px;
+	line-height: 1;
+}
+.problems-scope-clear:hover {
+	color: var(--vscode-errorForeground);
+}
+body[data-severity-filter="error"] .problem-row:not([data-severity="error"]),
+body[data-severity-filter="warning"] .problem-row:not([data-severity="warning"]),
+body[data-severity-filter="info"] .problem-row:not([data-severity="info"]) {
+	display: none;
+}
+.problems-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-width: 860px;
+}
+.problem-row {
+	display: grid;
+	grid-template-columns: 10px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 10px;
+	padding: 9px 12px;
+	border: 1px solid var(--vscode-panel-border);
+	border-left-width: 3px;
+	border-radius: 6px;
+	background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+	cursor: pointer;
+	transition: border-color 0.15s;
+}
+.problem-row:hover {
+	border-color: var(--vscode-focusBorder);
+}
+.problem-severity-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--vscode-descriptionForeground);
+}
+.problem-row--error {
+	border-left-color: var(--vscode-errorForeground);
+}
+.problem-row--error .problem-severity-dot {
+	background: var(--vscode-errorForeground);
+}
+.problem-row--warning {
+	border-left-color: var(--vscode-notificationsWarningIcon-foreground);
+}
+.problem-row--warning .problem-severity-dot {
+	background: var(--vscode-notificationsWarningIcon-foreground);
+}
+.problem-copy {
+	display: grid;
+	gap: 2px;
+	min-width: 0;
+}
+.problem-copy strong {
+	font-size: 12.5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.problem-copy span {
+	font-size: 11.5px;
+	color: var(--vscode-descriptionForeground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.problem-row--error .problem-copy strong {
+	color: var(--vscode-errorForeground);
+}
+.problem-row--warning .problem-copy strong {
+	color: var(--vscode-notificationsWarningIcon-foreground);
+}
+.problem-location {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 2px;
+	min-width: 0;
+	max-width: 260px;
+}
+.problem-feature {
+	font-size: 11.5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	max-width: 100%;
+}
+.problem-project {
+	font-size: 10.5px;
+	color: var(--vscode-descriptionForeground);
+}
 .portfolio-grid {
 	display: grid;
 	grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
