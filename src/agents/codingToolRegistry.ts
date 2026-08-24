@@ -231,6 +231,15 @@ function providerForTool(
 		getAttentionSignal: sessionAdapter
 			? (sessionId) => sessionAdapter.readAttention(sessionId)
 			: undefined,
+		// Async twin of the above — mandatory whenever attention capabilities
+		// are announced: the background attention monitor reads exclusively
+		// through the async path, so a wrapper without it would silently stop
+		// notifying waiting_for_user.
+		getAttentionSignalAsync: claudeSessionProvider
+			? (sessionId) => claudeSessionProvider.readAttentionAsync(sessionId)
+			: codexSessionProvider
+				? (sessionId) => codexSessionProvider.readAttentionAsync(sessionId)
+				: undefined,
 		sessionAdapter,
 	};
 }
