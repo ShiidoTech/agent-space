@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { AgentFocusService } from "./agents/agentFocusService";
-import { AgentAttentionNotifier } from "./agents/attention/agentAttentionNotifier";
+import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
@@ -553,44 +553,66 @@ export async function activate(
 	);
 
 	let featureRefreshQueued = false;
-	const attentionNotifier = new AgentAttentionNotifier();
-	const notifyWaitingAgents = () => {
-		if (
-			!vscode.workspace
-				.getConfiguration("agentSpace")
-				.get<boolean>("notifyWhenAgentsNeedYou", true)
-		) {
-			return;
-		}
-		const watched = projectManager.getAllContexts().flatMap((ctx) =>
-			ctx.featureManager.getFeatures().flatMap((feature) =>
-				ctx.agentManager.getAgents(feature.id).map((agent) => ({
-					id: agent.id,
-					name: agent.name,
-					featureId: feature.id,
-					featureName: feature.name,
-					attentionStatus: agent.attentionStatus,
-					attentionReason: agent.attentionReason,
-				})),
-			),
-		);
-		for (const alert of attentionNotifier.scan(watched)) {
-			const label = alert.featureName
-				? `${alert.agentName} needs you (${alert.featureName})`
-				: `${alert.agentName} needs you`;
-			void vscode.window
-				.showWarningMessage(label, "Focus terminal")
-				.then((choice) => {
-					if (choice === "Focus terminal" && alert.featureId) {
-						void vscode.commands.executeCommand(
-							"agentSpace.focusAgent",
-							alert.featureId,
-							alert.agentId,
-						);
-					}
-				});
-		}
-	};
+	// Dedicated attention observation source: polls provider attention on its
+	// own clock (the coordinator's light poll uses non-probing read models,
+	// so a working -> waiting_for_user transition alone never surfaces there)
+	// and fires notifications on the transition itself. Coordinator changes
+	// only nudge it — coalesced and off the change stack, never a synchronous
+	// fleet-wide sweep per FeatureState update.
+	const attentionMonitor = new AgentAttentionMonitor(
+		{
+			collect: () =>
+				projectManager.getAllContexts().flatMap((ctx) =>
+					ctx.featureManager.getFeatures().flatMap((feature) => {
+						// Pre-filter with the cached read model: probe (tmux +
+						// provider) only features that actually have a running
+						// agent — waiting transitions can only happen there.
+						const known =
+							ctx.agentManager.getAgentsReadModel?.(feature.id) ?? [];
+						if (!known.some((agent) => agent.status === "running")) {
+							return [];
+						}
+						return ctx.agentManager.getAgents(feature.id).map((agent) => ({
+							id: agent.id,
+							name: agent.name,
+							featureId: feature.id,
+							featureName: feature.name,
+							attentionStatus: agent.attentionStatus,
+							attentionReason: agent.attentionReason,
+						}));
+					}),
+				),
+			onAlert: (alert) => {
+				if (
+					!vscode.workspace
+						.getConfiguration("agentSpace")
+						.get<boolean>("notifyWhenAgentsNeedYou", true)
+				) {
+					return;
+				}
+				const label = alert.featureName
+					? `${alert.agentName} needs you (${alert.featureName})`
+					: `${alert.agentName} needs you`;
+				void vscode.window
+					.showWarningMessage(label, "Focus terminal")
+					.then((choice) => {
+						if (choice === "Focus terminal" && alert.featureId) {
+							void vscode.commands.executeCommand(
+								"agentSpace.focusAgent",
+								alert.featureId,
+								alert.agentId,
+							);
+						}
+					});
+			},
+			onError: (error) => {
+				console.warn(`[AgentSpace] attention scan failed: ${error}`);
+			},
+		},
+		{ pollIntervalMs: 5000 },
+	);
+	attentionMonitor.start();
+	context.subscriptions.push(attentionMonitor);
 	context.subscriptions.push(
 		featureStateCoordinator.onDidChange(() => {
 			if (featureRefreshQueued) return;
@@ -599,11 +621,7 @@ export async function activate(
 				featureRefreshQueued = false;
 				sidebarProvider.refreshState();
 				HomePanel.refreshAll();
-				try {
-					notifyWaitingAgents();
-				} catch (error) {
-					console.warn(`[AgentSpace] attention notify failed: ${error}`);
-				}
+				attentionMonitor.nudge();
 			}, 150);
 		}),
 	);

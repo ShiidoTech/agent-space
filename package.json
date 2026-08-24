@@ -105,11 +105,6 @@
 				"category": "Agent Space"
 			},
 			{
-				"command": "agentSpace.focusAgent",
-				"title": "Focus Agent Terminal",
-				"category": "Agent Space"
-			},
-			{
 				"command": "agentSpace.bootstrapFeature",
 				"title": "Bootstrap Feature Worktree",
 				"category": "Agent Space",

@@ -10,9 +10,11 @@ import type { TerminalController } from "./terminalController";
  *
  * CONTRACT (guarantees offered to any caller):
  *
- * G1. Warm path is free of side effects on processes: an already-tracked
- *     terminal is revealed with ZERO exec/shell/tmux call before `show()`.
- *     This is the hot switching path and must stay synchronous and instant.
+ * G1. Warm path is free of side effects and free of resolution: an already
+ *     tracked terminal is revealed with ZERO exec/shell/tmux call AND zero
+ *     feature/agent lookup (resolveFeature can run synchronous git execs on
+ *     the Extension Host). This is the hot switching path and must stay
+ *     synchronous and instant.
  *
  * G2. Cold path never blocks the caller: when the VS Code terminal is not
  *     tracked yet (window reload, foreign spawn), tmux/session reconciliation
@@ -68,6 +70,22 @@ export class AgentFocusService {
 	): void {
 		const terminalController = this.deps.getTerminalController();
 		if (!terminalController || !featureId) return;
+
+		// G1 — strict fast path FIRST, before any feature/agent resolution:
+		// resolving a feature can run synchronous git execs on the Extension
+		// Host, and this is the hot interactive path. A tracked terminal is
+		// revealed with zero exec of any kind.
+		const existing = terminalController.getTerminal(agentId);
+		if (existing) {
+			// Supersede any in-flight cold reconciliation before claiming
+			// focus: this warm click is now the latest request.
+			this.focusSequence += 1;
+			existing.show();
+			observer?.onState?.("focused");
+			return;
+		}
+
+		// Cold path only — resolution happens here, never above.
 		const resolved = this.deps.resolveFeature(featureId);
 		if (!resolved) return;
 		const { ctx, feature } = resolved;
@@ -77,15 +95,6 @@ export class AgentFocusService {
 		const agentIndex = agents.indexOf(agent);
 
 		const focusSeq = ++this.focusSequence;
-
-		// G1 — strict fast path: reveal a tracked terminal with no exec call
-		// of any kind. Hot path for switching between running agents.
-		const existing = terminalController.getTerminal(agentId);
-		if (existing) {
-			existing.show();
-			observer?.onState?.("focused");
-			return;
-		}
 
 		// G2/G3 — cold path: immediate `opening`, reconciliation off-stack,
 		// reveal gated by the latest-stamp rule. Rejections are folded into a

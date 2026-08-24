@@ -84,6 +84,16 @@ describe("AgentFocusService (behavioral contract)", () => {
 		expect(settled).toEqual([]);
 	});
 
+	it("warm path: never resolves the feature or lists agents (zero exec guarantee)", () => {
+		getTerminal.mockReturnValue({ show: vi.fn() });
+
+		buildService().requestFocus("f1", "a1");
+
+		expect(resolveFeature).not.toHaveBeenCalled();
+		expect(getAgentsReadModel).not.toHaveBeenCalled();
+		expect(getAgents).not.toHaveBeenCalled();
+	});
+
 	it("cold path: emits opening synchronously, then focused with a single settle", async () => {
 		getTerminal.mockReturnValue(undefined);
 		const states: string[] = [];
@@ -200,7 +210,8 @@ describe("AgentFocusService (behavioral contract)", () => {
 		agents = [];
 		buildService().requestFocus("f1", "ghost", track(states));
 
-		expect(getTerminal).not.toHaveBeenCalled();
+		// Only the cheap tracked-terminal lookup runs before validation; no
+		// reconciliation is ever started for an unknown feature/agent.
 		expect(focusOrCreateTerminalAsync).not.toHaveBeenCalled();
 		expect(states).toEqual([]);
 	});
@@ -212,8 +223,8 @@ describe("AgentFocusService (behavioral contract)", () => {
 		expect(states).toEqual([]);
 	});
 
-	it("prefers the non-probing read model when available, falls back to probing getAgents", () => {
-		getTerminal.mockReturnValue({ show: vi.fn() });
+	it("cold path: prefers the non-probing read model when available, falls back to probing getAgents", () => {
+		getTerminal.mockReturnValue(undefined);
 
 		buildService().requestFocus("f1", "a1");
 
