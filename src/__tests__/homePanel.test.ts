@@ -21,6 +21,7 @@ vi.mock("vscode", () => ({
 }));
 
 import * as vscode from "vscode";
+import { AgentFocusService } from "../agents/agentFocusService";
 import { HomePanel } from "../home/homePanel";
 import type { FeatureSnapshot } from "../features/featureSnapshot";
 import type { Feature } from "../types";
@@ -140,6 +141,16 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		// focus path without the full panel navigation lifecycle.
 		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
 		(p as any).currentFeatureId = "f1";
+		// The panel delegates agent focusing to the shared AgentFocusService;
+		// wire a real service around this test's mocks so the issue-#69 focus
+		// guarantees keep being exercised end to end.
+		p.setAgentFocusService(
+			new AgentFocusService({
+				getTerminalController: () =>
+					({ getTerminal, focusOrCreateTerminalAsync }) as never,
+				resolveFeature: resolveFeature as never,
+			}),
+		);
 		return p;
 	}
 
@@ -172,6 +183,21 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 
 		expect(existingShow).toHaveBeenCalledTimes(1);
 		expect(focusOrCreateTerminalAsync).not.toHaveBeenCalled();
+	});
+
+	it("project page path: an explicit message featureId works with no current feature", () => {
+		const p = buildPanel();
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		(p as any).currentFeatureId = null;
+		const existingShow = vi.fn();
+		getTerminal.mockReturnValue({ show: existingShow });
+
+		const handler = receiveMessage.mock.calls[0][0] as (
+			message: { command: string } & Record<string, unknown>,
+		) => void;
+		handler({ command: "focusAgent", featureId: "f1", agentId: "a1" });
+
+		expect(existingShow).toHaveBeenCalledTimes(1);
 	});
 
 	it("cold path: reconciles asynchronously and reveals on resolution", async () => {
@@ -1101,5 +1127,163 @@ describe("Home portfolio card (piloting view)", () => {
 		expect(html).not.toContain("openFeature('finished')");
 		expect(html).not.toContain("openFeature('oldest')");
 		expect(html).toContain("+1 more&hellip;");
+	});
+
+	it("links the project attention badge to the scoped problems view", () => {
+		const html = renderCard(
+			[
+				makeSnapshot({
+					id: "warned",
+					attention: [
+						{
+							code: "working_tree_changes",
+							severity: "warning",
+							summary: "Uncommitted changes",
+							detail: "2 files pending",
+							evidence: {},
+						},
+					],
+				}),
+			],
+			{ attentionCount: 1 },
+		);
+
+		expect(html).toContain('onclick="event.stopPropagation(); showProblems(\'p1\')"');
+	});
+});
+
+describe("Home problems view (portfolio-wide attention list)", () => {
+	function makeAttention(
+		severity: "info" | "warning" | "error",
+		summary: string,
+		detail: string,
+	) {
+		return { code: `code_${summary}`, severity, summary, detail, evidence: {} };
+	}
+
+	function makeProblemRow(severity: "info" | "warning" | "error") {
+		return {
+			feature: {
+				id: `f-${severity}`,
+				name: `Feature ${severity}`,
+				branch: `feat/${severity}`,
+				worktreePath: "/repo/.worktrees/x",
+				status: "active",
+				color: "terminal.ansiBlue",
+				isolation: "shared",
+				createdAt: "2026-08-12T00:00:00Z",
+			},
+			attention: [
+				makeAttention(severity, `${severity} summary`, `${severity} detail`),
+			],
+		};
+	}
+
+	function renderProblems(options?: {
+		projectFilter?: string;
+		baseAttention?: ReturnType<typeof makeAttention>[];
+	}): string {
+		const snapshots = [
+			makeProblemRow("warning"),
+			makeProblemRow("error"),
+			makeProblemRow("info"),
+		] as unknown as FeatureSnapshot[];
+		if (options?.baseAttention?.length) {
+			snapshots.push({
+				projectId: "p1",
+				feature: {
+					id: "base:p1",
+					name: "base",
+					branch: "main",
+					worktreePath: "/repo",
+					status: "active",
+					color: "terminal.ansiBlue",
+					isolation: "shared",
+					createdAt: "2026-08-12T00:00:00Z",
+				},
+				attention: options.baseAttention,
+			} as unknown as FeatureSnapshot);
+		}
+		const panel = Object.create(HomePanel.prototype) as HomePanel;
+		Object.assign(panel, {
+			panel: {
+				webview: { asWebviewUri: () => "webview://asset" },
+			},
+			extensionUri: {},
+			projectManager: {
+				getAllContexts: () => [
+					{ project: { id: "p1", name: "Agent Space", repoPath: "/repo" } },
+					{ project: { id: "p2", name: "Other", repoPath: "/other" } },
+				],
+			},
+			featureStateCoordinator: {
+				getProjectSnapshots: (projectId: string) =>
+					projectId === "p1" ? snapshots : [],
+			},
+		});
+		return (
+			panel as unknown as {
+				getProblemsHtml: (projectId?: string) => string;
+			}
+		).getProblemsHtml(options?.projectFilter);
+	}
+
+	it("lists every problem worst-severity first and links rows to their feature", () => {
+		const html = renderProblems();
+
+		const error = html.indexOf("data-severity=\"error\"");
+		const warning = html.indexOf("data-severity=\"warning\"");
+		const info = html.indexOf("data-severity=\"info\"");
+		expect(error).toBeGreaterThan(-1);
+		expect(warning).toBeGreaterThan(error);
+		expect(info).toBeGreaterThan(warning);
+
+		expect(html).toContain("error summary");
+		expect(html).toContain("error detail");
+		expect(html).toContain("onclick=\"openFeature('f-error')\"");
+		expect(html).toContain(">All 3</button>");
+	});
+
+	it("routes base-snapshot problems to the project page, not the feature", () => {
+		const html = renderProblems({
+			baseAttention: [
+				makeAttention("error", "Base unreachable", "Remote unreadable"),
+			],
+		});
+
+		expect(html).toContain("Base unreachable");
+		expect(html).toContain("onclick=\"showProject('p1')\"");
+		expect(html).not.toContain("openFeature('base:p1')");
+	});
+
+	it("renders an empty state when the portfolio has no problems", () => {
+		const panel = Object.create(HomePanel.prototype) as HomePanel;
+		Object.assign(panel, {
+			panel: { webview: { asWebviewUri: () => "webview://asset" } },
+			extensionUri: {},
+			projectManager: {
+				getAllContexts: () => [
+					{ project: { id: "p1", name: "Agent Space", repoPath: "/repo" } },
+				],
+			},
+			featureStateCoordinator: { getProjectSnapshots: () => [] },
+		});
+		const html = (
+			panel as unknown as {
+				getProblemsHtml: (projectId?: string) => string;
+			}
+		).getProblemsHtml();
+
+		expect(html).toContain("No attention items");
+		expect(html).toContain("Errors 0");
+	});
+
+	it("scopes the list to one project with a chip back to all projects", () => {
+		const html = renderProblems({ projectFilter: "p1" });
+
+		expect(html).toContain("Project: Agent Space");
+		expect(html).toContain("showProblems()");
+		// The unfiltered view never shows another project's scope chip.
+		expect(renderProblems()).not.toContain("Project: Agent Space");
 	});
 });

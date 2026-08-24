@@ -133,6 +133,131 @@ export class AgentAttentionResolver {
 		};
 	}
 
+	/**
+	 * Non-blocking twin of {@link resolve}: identical decision tree and
+	 * identical semantics, but the tmux probes run through the async helpers
+	 * (`isSessionAliveAsync` / `getPaneStatusAsync`) so background observers
+	 * (attention monitoring) never block the Extension Host on a subprocess.
+	 */
+	async resolveAsync(
+		agent: Agent,
+		lifecycleState?: AgentStatus,
+	): Promise<AgentAttentionSnapshot> {
+		if ((lifecycleState ?? agent.status) === "done") {
+			return {
+				status: "done",
+				reason: "Agent was explicitly marked done",
+				source: "lifecycle",
+			};
+		}
+		if ((lifecycleState ?? agent.status) === "errored" || agent.lastError) {
+			return {
+				status: "failed",
+				reason: "Agent lifecycle recorded a failure",
+				source: "lifecycle",
+			};
+		}
+		if (lifecycleState === "stopped") {
+			return {
+				status: "unknown",
+				reason: "No live tmux session is available",
+				source: "tmux",
+			};
+		}
+		if (agent.hasStarted !== true) {
+			return {
+				status: "unknown",
+				reason: "Agent has not started yet",
+				source: "lifecycle",
+			};
+		}
+
+		const sessionName =
+			agent.tmuxSession ?? this.tmux.sessionName(agent.featureId, agent.id);
+		let alive = false;
+		try {
+			alive = (await this.tmux.isSessionAliveAsync?.(sessionName)) ?? false;
+		} catch {
+			alive = false;
+		}
+		if (!alive) {
+			return {
+				status: "unknown",
+				reason: "No live tmux session is available",
+				source: "tmux",
+			};
+		}
+
+		let pane: Awaited<ReturnType<TmuxIntegration["getPaneStatusAsync"]>> =
+			null;
+		try {
+			pane = (await this.tmux.getPaneStatusAsync?.(sessionName)) ?? null;
+		} catch {
+			pane = null;
+		}
+		if (pane?.dead) {
+			if (pane.exitCode !== 0) {
+				return {
+					status: "failed",
+					reason: `tmux pane exited with code ${pane.exitCode}`,
+					source: "tmux",
+				};
+			}
+			return {
+				status: "idle",
+				reason: "tmux pane exited cleanly",
+				source: "tmux",
+			};
+		}
+
+		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+		const provider = this.toolRegistry.getProvider
+			? this.toolRegistry.getProvider(tool)
+			: tool.provider;
+		if (
+			provider &&
+			!Object.values(provider.capabilities.attention).some(Boolean)
+		) {
+			return {
+				status: "unsupported",
+				reason: "Activity tracking is unsupported by this provider",
+				source: "provider",
+			};
+		}
+		const providerSignal = await this.readProviderSignalAsync(
+			tool,
+			agent.sessionId,
+		);
+		if (providerSignal) {
+			const age = describeAge(providerSignal.observedAt);
+			return {
+				status: providerSignal.status,
+				reason: `Provider emitted ${providerSignal.evidence}${age ? ` ${age}` : ""}`,
+				source: "provider",
+				observedAt: providerSignal.observedAt,
+			};
+		}
+
+		return {
+			status: "unknown",
+			reason: unboundReason(agent),
+			source: "fallback",
+		};
+	}
+
+	private async readProviderSignalAsync(
+		tool: import("../../types").CodingTool,
+		sessionId: string | null,
+	): Promise<ProviderAttentionSignal | null> {
+		if (!sessionId) return null;
+		return (
+			(await this.toolRegistry.getStructuredAttentionSignalAsync?.(
+				tool,
+				sessionId,
+			)) ?? null
+		);
+	}
+
 	private readProviderSignal(
 		tool: import("../../types").CodingTool,
 		sessionId: string | null,

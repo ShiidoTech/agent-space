@@ -2,6 +2,9 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
+import { AgentFocusService } from "./agents/agentFocusService";
+import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor";
+import { collectWatchedAgents } from "./agents/attention/agentAttentionCollector";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
@@ -168,6 +171,15 @@ export async function activate(
 	);
 	context.subscriptions.push(terminalController);
 
+	// Single behavioral source of truth for agent terminal focusing: the
+	// sidebar, the Home panels and the focusAgent command share this one
+	// instance so warm/cold semantics and focus arbitration stay identical
+	// (and a single focus sequence arbitrates across all of them).
+	const agentFocusService = new AgentFocusService({
+		getTerminalController: () => terminalController,
+		resolveFeature: (featureId) => projectManager.resolveFeature(featureId),
+	});
+
 	const sidebarProvider = new FeatureSidebarProvider(
 		projectManager,
 		featureStateCoordinator,
@@ -176,6 +188,7 @@ export async function activate(
 		context.extensionUri,
 	);
 	sidebarProvider.setTerminalController(terminalController);
+	sidebarProvider.setAgentFocusService(agentFocusService);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(
 			FeatureSidebarProvider.viewType,
@@ -194,6 +207,7 @@ export async function activate(
 			globalStore,
 			terminalController,
 		);
+		panel.setAgentFocusService(agentFocusService);
 		panel.onViewStateChange(({ active }) => {
 			if (active) {
 				workspaceIsolation.scheduleEnter();
@@ -229,6 +243,7 @@ export async function activate(
 			globalStore,
 			terminalController,
 		);
+		panel.setAgentFocusService(agentFocusService);
 		panel.onViewStateChange(({ active }) => {
 			if (active) workspaceIsolation.scheduleEnter();
 		});
@@ -539,6 +554,49 @@ export async function activate(
 	);
 
 	let featureRefreshQueued = false;
+	// Dedicated attention observation source: polls provider attention on its
+	// own clock through the fully asynchronous collector (cached feature list,
+	// read-model pre-filter, getAgentsAsync probes — never a synchronous
+	// process call on the Extension Host), because the coordinator's light
+	// poll uses non-probing read models: a working -> waiting_for_user
+	// transition alone never surfaces there. Notifications fire on the
+	// transition itself; coordinator changes only nudge the monitor —
+	// coalesced and off the change stack.
+	const attentionMonitor = new AgentAttentionMonitor(
+		{
+			collect: () =>
+				collectWatchedAgents(projectManager.getAllContexts()),
+			onAlert: (alert) => {
+				if (
+					!vscode.workspace
+						.getConfiguration("agentSpace")
+						.get<boolean>("notifyWhenAgentsNeedYou", true)
+				) {
+					return;
+				}
+				const label = alert.featureName
+					? `${alert.agentName} needs you (${alert.featureName})`
+					: `${alert.agentName} needs you`;
+				void vscode.window
+					.showWarningMessage(label, "Focus terminal")
+					.then((choice) => {
+						if (choice === "Focus terminal" && alert.featureId) {
+							void vscode.commands.executeCommand(
+								"agentSpace.focusAgent",
+								alert.featureId,
+								alert.agentId,
+							);
+						}
+					});
+			},
+			onError: (error) => {
+				console.warn(`[AgentSpace] attention scan failed: ${error}`);
+			},
+		},
+		{ pollIntervalMs: 5000 },
+	);
+	attentionMonitor.start();
+	context.subscriptions.push(attentionMonitor);
 	context.subscriptions.push(
 		featureStateCoordinator.onDidChange(() => {
 			if (featureRefreshQueued) return;
@@ -547,6 +605,7 @@ export async function activate(
 				featureRefreshQueued = false;
 				sidebarProvider.refreshState();
 				HomePanel.refreshAll();
+				attentionMonitor.nudge();
 			}, 150);
 		}),
 	);
@@ -571,6 +630,17 @@ export async function activate(
 		vscode.commands.registerCommand("agentSpace.openHome", async () => {
 			await showAgentSpace();
 		}),
+	);
+
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.openProblems",
+			async (projectId?: string) => {
+				const panel = ensureHomePanel();
+				panel.showProblems(projectId);
+				await workspaceIsolation.enter();
+			},
+		),
 	);
 
 	context.subscriptions.push(
@@ -850,6 +920,22 @@ export async function activate(
 				const featureId = featureIdArg ?? activeFeatureId;
 				if (!featureId) return;
 				await activateFeatureInCurrentWindow(featureId);
+			},
+		),
+	);
+
+	// Command: Focus a specific agent's terminal. Opens the feature first (for
+	// context and workspace isolation), then lands the cursor in the exact
+	// tmux pane where the agent is waiting. Behavior is owned by the shared
+	// AgentFocusService (warm reveal, cold tmux re-attach, focus arbitration).
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.focusAgent",
+			async (featureId?: string, agentId?: string) => {
+				if (!featureId || !agentId) return;
+				if (!projectManager.resolveFeature(featureId)) return;
+				await activateFeatureInCurrentWindow(featureId);
+				agentFocusService.requestFocus(featureId, agentId);
 			},
 		),
 	);

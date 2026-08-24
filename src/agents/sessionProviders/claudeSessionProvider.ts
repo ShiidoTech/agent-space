@@ -7,6 +7,7 @@ import {
 	readFirstJsonlLine,
 	readFirstJsonlLineAsync,
 	readIncrementalJsonl,
+	readIncrementalJsonlAsync,
 } from "./incrementalJsonl";
 import type {
 	SessionInfo,
@@ -753,77 +754,104 @@ export class ClaudeSessionProvider
 		const state = readIncrementalJsonl(
 			filePath,
 			this.attentionCache.get(sessionId),
-			(line, previous): ProviderAttentionSignal | undefined => {
-				const event = JSON.parse(line) as Record<string, unknown>;
-				let signal = previous;
-				const explicitSessionId = event.sessionId ?? event.session_id;
-				if (
-					typeof explicitSessionId === "string" &&
-					explicitSessionId !== sessionId
-				) {
-					return signal;
-				}
-				if (event.isSidechain === true) return signal;
-
-				const observedAt =
-					typeof event.timestamp === "string" ? event.timestamp : undefined;
-
-				if (event.type === "user") {
-					return { status: "working", evidence: "claude.user", observedAt };
-				}
-				// `result` events only exist in the `-p --output-format stream-json`
-				// transcript shape, never in an interactive session. Kept so headless
-				// runs stay readable.
-				if (event.type === "result") {
-					const failed = event.is_error === true;
-					const resultSignal: ProviderAttentionSignal = {
-						status: failed ? "failed" : "idle",
-						evidence: failed ? "claude.result.error" : "claude.result",
-						observedAt,
-					};
-					return resultSignal;
-				}
-				if (event.type === "assistant") {
-					const message = event.message as Record<string, unknown> | undefined;
-					const stopReason = message?.stop_reason ?? event.stop_reason;
-					const content = Array.isArray(message?.content)
-						? message.content
-						: [];
-					const asksUser = content.some((item) => {
-						const block = item as Record<string, unknown>;
-						return (
-							block.type === "tool_use" && block.name === "AskUserQuestion"
-						);
-					});
-					if (asksUser) {
-						signal = {
-							status: "waiting_for_user",
-							evidence: "claude.assistant.ask_user_question",
-							observedAt,
-						};
-					} else if (stopReason === "tool_use") {
-						signal = {
-							status: "working",
-							evidence: "claude.assistant.tool_use",
-							observedAt,
-						};
-					} else if (stopReason === "end_turn") {
-						signal = {
-							status: "idle",
-							evidence: "claude.assistant.end_turn",
-							observedAt,
-						};
-					}
-					return signal;
-				}
-				// Bookkeeping event: carry the last conversational signal through
-				// unchanged rather than discarding hard-won evidence.
-				return signal;
-			},
+			(line, previous) => this.parseAttentionLine(line, previous, sessionId),
 		);
 		if (!state) return undefined;
 		this.attentionCache.set(sessionId, state);
 		return state.value;
+	}
+
+	/**
+	 * Non-blocking twin of {@link readAttention}: identical parsing and cache
+	 * semantics, but session discovery and file reads go through the async
+	 * helpers so background observers never block the Extension Host.
+	 */
+	async readAttentionAsync(
+		sessionId: string,
+	): Promise<ProviderAttentionSignal | undefined> {
+		const filePath = await this.findSessionFileAsync(sessionId);
+		if (!filePath) return undefined;
+
+		const state = await readIncrementalJsonlAsync(
+			filePath,
+			this.attentionCache.get(sessionId),
+			(line, previous) => this.parseAttentionLine(line, previous, sessionId),
+		);
+		if (!state) return undefined;
+		this.attentionCache.set(sessionId, state);
+		return state.value;
+	}
+
+	private parseAttentionLine(
+		line: string,
+		previous: ProviderAttentionSignal | undefined,
+		sessionId: string,
+	): ProviderAttentionSignal | undefined {
+		const event = JSON.parse(line) as Record<string, unknown>;
+		let signal = previous;
+		const explicitSessionId = event.sessionId ?? event.session_id;
+		if (
+			typeof explicitSessionId === "string" &&
+			explicitSessionId !== sessionId
+		) {
+			return signal;
+		}
+		if (event.isSidechain === true) return signal;
+
+		const observedAt =
+			typeof event.timestamp === "string" ? event.timestamp : undefined;
+
+		if (event.type === "user") {
+			return { status: "working", evidence: "claude.user", observedAt };
+		}
+		// `result` events only exist in the `-p --output-format stream-json`
+		// transcript shape, never in an interactive session. Kept so headless
+		// runs stay readable.
+		if (event.type === "result") {
+			const failed = event.is_error === true;
+			const resultSignal: ProviderAttentionSignal = {
+				status: failed ? "failed" : "idle",
+				evidence: failed ? "claude.result.error" : "claude.result",
+				observedAt,
+			};
+			return resultSignal;
+		}
+		if (event.type === "assistant") {
+			const message = event.message as Record<string, unknown> | undefined;
+			const stopReason = message?.stop_reason ?? event.stop_reason;
+			const content = Array.isArray(message?.content)
+				? message.content
+				: [];
+			const asksUser = content.some((item) => {
+				const block = item as Record<string, unknown>;
+				return (
+					block.type === "tool_use" && block.name === "AskUserQuestion"
+				);
+			});
+			if (asksUser) {
+				signal = {
+					status: "waiting_for_user",
+					evidence: "claude.assistant.ask_user_question",
+					observedAt,
+				};
+			} else if (stopReason === "tool_use") {
+				signal = {
+					status: "working",
+					evidence: "claude.assistant.tool_use",
+					observedAt,
+				};
+			} else if (stopReason === "end_turn") {
+				signal = {
+					status: "idle",
+					evidence: "claude.assistant.end_turn",
+					observedAt,
+				};
+			}
+			return signal;
+		}
+		// Bookkeeping event: carry the last conversational signal through
+		// unchanged rather than discarding hard-won evidence.
+		return signal;
 	}
 
 	readTitle(filePath: string): string | null {

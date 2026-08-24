@@ -111,40 +111,136 @@ describe("CodingToolRegistry", () => {
 			});
 		});
 
-		it("keeps a local Claude launcher on its own session store", () => {
-			const configDir = fs.mkdtempSync(
-				path.join(os.tmpdir(), "claude-perso-registry-"),
+	it("keeps a local Claude launcher on its own session store", () => {
+		const configDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "claude-perso-registry-"),
+		);
+		try {
+			const projectsDir = path.join(configDir, "projects", "project");
+			fs.mkdirSync(projectsDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(projectsDir, "local-session.jsonl"),
+				JSON.stringify({ type: "result" }),
 			);
-			try {
-				const projectsDir = path.join(configDir, "projects", "project");
-				fs.mkdirSync(projectsDir, { recursive: true });
-				fs.writeFileSync(
-					path.join(projectsDir, "local-session.jsonl"),
-					JSON.stringify({ type: "result" }),
-				);
-				mockConfig({
-					codingTools: [
-						{
-							id: "claude-perso",
-							name: "Claude perso",
-							command: "claude-perso",
-							family: "claude",
-							sessionsDir: configDir,
-						},
-					],
-				});
-				const tool = registry.resolveAgentTool("claude-perso");
-				const provider = registry.getProvider(tool);
+			mockConfig({
+				codingTools: [
+					{
+						id: "claude-perso",
+						name: "Claude perso",
+						command: "claude-perso",
+						family: "claude",
+						sessionsDir: configDir,
+					},
+				],
+			});
+			const tool = registry.resolveAgentTool("claude-perso");
+			const provider = registry.getProvider(tool);
 
-				expect(provider.capabilities.sessionNaming).toBe(true);
-				expect(provider.getAttentionSignal?.("local-session")).toEqual({
-					status: "idle",
-					evidence: "claude.result",
-				});
-			} finally {
-				fs.rmSync(configDir, { recursive: true, force: true });
-			}
-		});
+			expect(provider.capabilities.sessionNaming).toBe(true);
+			expect(provider.getAttentionSignal?.("local-session")).toEqual({
+				status: "idle",
+				evidence: "claude.result",
+			});
+		} finally {
+			fs.rmSync(configDir, { recursive: true, force: true });
+		}
+	});
+
+	it("exposes async attention for a custom claude-family tool", async () => {
+		const configDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "claude-perso-async-"),
+		);
+		try {
+			const projectsDir = path.join(configDir, "projects", "project");
+			fs.mkdirSync(projectsDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(projectsDir, "waiting-session.jsonl"),
+				[
+					JSON.stringify({
+						type: "assistant",
+						timestamp: "2026-03-06T10:02:00Z",
+						message: {
+							content: [{ type: "tool_use", name: "AskUserQuestion" }],
+						},
+					}),
+				].join("\n") + "\n",
+			);
+			mockConfig({
+				codingTools: [
+					{
+						id: "claude-perso",
+						name: "Claude perso",
+						command: "claude-perso",
+						family: "claude",
+						sessionsDir: configDir,
+					},
+				],
+			});
+			const tool = registry.resolveAgentTool("claude-perso");
+			const provider = registry.getProvider(tool);
+
+			// The background attention monitor reads exclusively through this
+			// path — a custom wrapper without it would never notify.
+			expect(provider.capabilities.attention["attention.waitingForUser"]).toBe(true);
+			expect(typeof provider.getAttentionSignalAsync).toBe("function");
+			await expect(
+				registry.getStructuredAttentionSignalAsync(tool, "waiting-session"),
+			).resolves.toEqual({
+				status: "waiting_for_user",
+				evidence: "claude.assistant.ask_user_question",
+				observedAt: "2026-03-06T10:02:00Z",
+			});
+		} finally {
+			fs.rmSync(configDir, { recursive: true, force: true });
+		}
+	});
+
+	it("exposes async attention for a custom codex-family tool", async () => {
+		const sessionsDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "codex-perso-async-"),
+		);
+		try {
+			fs.writeFileSync(
+				path.join(sessionsDir, "rollout-waiting.jsonl"),
+				[
+					JSON.stringify({
+						type: "session_meta",
+						payload: { id: "codex-custom-1" },
+					}),
+					JSON.stringify({
+						type: "event_msg",
+						payload: { type: "request_user_input" },
+						timestamp: "2026-03-06T09:02:00Z",
+					}),
+				].join("\n") + "\n",
+			);
+			mockConfig({
+				codingTools: [
+					{
+						id: "codex-perso",
+						name: "Codex perso",
+						command: "codex-perso",
+						family: "codex",
+						sessionsDir,
+					},
+				],
+			});
+			const tool = registry.resolveAgentTool("codex-perso");
+			const provider = registry.getProvider(tool);
+
+			expect(provider.capabilities.attention["attention.waitingForUser"]).toBe(true);
+			expect(typeof provider.getAttentionSignalAsync).toBe("function");
+			await expect(
+				registry.getStructuredAttentionSignalAsync(tool, "codex-custom-1"),
+			).resolves.toEqual({
+				status: "waiting_for_user",
+				evidence: "codex.request_user_input",
+				observedAt: "2026-03-06T09:02:00Z",
+			});
+		} finally {
+			fs.rmSync(sessionsDir, { recursive: true, force: true });
+		}
+	});
 
 		it("accepts a sessionsDir that already points at the projects directory", () => {
 			// Both spellings are natural, so both have to work. When only the
