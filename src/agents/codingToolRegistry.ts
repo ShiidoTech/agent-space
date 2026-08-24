@@ -61,6 +61,8 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
 		getAttentionSignal: (sessionId) =>
 			claudeSessionAdapter.readAttention(sessionId),
+		getAttentionSignalAsync: async (sessionId) =>
+			claudeSessionAdapter.readAttentionAsync(sessionId),
 		sessionAdapter: claudeSessionAdapter,
 	},
 	{
@@ -69,6 +71,8 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
 		getAttentionSignal: (sessionId) =>
 			codexSessionAdapter.readAttention(sessionId),
+		getAttentionSignalAsync: async (sessionId) =>
+			codexSessionAdapter.readAttentionAsync(sessionId),
 		sessionAdapter: codexSessionAdapter,
 	},
 	{

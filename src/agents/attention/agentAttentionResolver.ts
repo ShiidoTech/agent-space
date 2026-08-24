@@ -224,7 +224,10 @@ export class AgentAttentionResolver {
 				source: "provider",
 			};
 		}
-		const providerSignal = this.readProviderSignal(tool, agent.sessionId);
+		const providerSignal = await this.readProviderSignalAsync(
+			tool,
+			agent.sessionId,
+		);
 		if (providerSignal) {
 			const age = describeAge(providerSignal.observedAt);
 			return {
@@ -240,6 +243,19 @@ export class AgentAttentionResolver {
 			reason: unboundReason(agent),
 			source: "fallback",
 		};
+	}
+
+	private async readProviderSignalAsync(
+		tool: import("../../types").CodingTool,
+		sessionId: string | null,
+	): Promise<ProviderAttentionSignal | null> {
+		if (!sessionId) return null;
+		return (
+			(await this.toolRegistry.getStructuredAttentionSignalAsync?.(
+				tool,
+				sessionId,
+			)) ?? null
+		);
 	}
 
 	private readProviderSignal(

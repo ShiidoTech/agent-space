@@ -7,6 +7,7 @@ import {
 	readFirstJsonlLine,
 	readFirstJsonlLineAsync,
 	readIncrementalJsonl,
+	readIncrementalJsonlAsync,
 } from "./incrementalJsonl";
 import type {
 	SessionInfo,
@@ -440,74 +441,100 @@ export class CodexSessionProvider
 		const state = readIncrementalJsonl(
 			filePath,
 			this.attentionCache.get(sessionId),
-			(line, previous) => {
-				const event = JSON.parse(line) as Record<string, unknown>;
-				let signal = previous;
-
-				const payload = event.payload as Record<string, unknown> | undefined;
-				const type = event.type;
-				const eventType = typeof payload?.type === "string" ? payload.type : "";
-				const observedAt =
-					typeof event.timestamp === "string" ? event.timestamp : undefined;
-				if (type === "user_message") {
-					signal = {
-						status: "working",
-						evidence: "codex.user_message",
-						observedAt,
-					};
-				} else if (type === "event_msg" && eventType === "task_started") {
-					signal = {
-						status: "working",
-						evidence: "codex.task_started",
-						observedAt,
-					};
-				} else if (
-					type === "event_msg" &&
-					(eventType === "request_user_input" ||
-						eventType.includes("approval_request"))
-				) {
-					signal = {
-						status: "waiting_for_user",
-						evidence: `codex.${String(eventType)}`,
-						observedAt,
-					};
-				} else if (type === "event_msg" && eventType === "task_complete") {
-					signal = {
-						status: "idle",
-						evidence: "codex.task_complete",
-						observedAt,
-					};
-				} else if (type === "event_msg" && eventType === "turn_aborted") {
-					signal = {
-						status: "idle",
-						evidence: "codex.turn_aborted",
-						observedAt,
-					};
-				} else if (
-					type === "event_msg" &&
-					(eventType === "error" || eventType === "item_failed")
-				) {
-					signal = {
-						status: "failed",
-						evidence: `codex.${String(eventType)}`,
-						observedAt,
-					};
-				} else if (
-					type === "response_item" &&
-					(eventType === "function_call" || eventType === "custom_tool_call")
-				) {
-					signal = {
-						status: "working",
-						evidence: `codex.${String(eventType)}`,
-						observedAt,
-					};
-				}
-				return signal;
-			},
+			(line, previous) => this.parseAttentionLine(line, previous),
 		);
 		if (!state) return undefined;
 		this.attentionCache.set(sessionId, state);
 		return state.value;
+	}
+
+	/**
+	 * Non-blocking twin of {@link readAttention}: identical parsing and cache
+	 * semantics, but session discovery and file reads go through the async
+	 * helpers so background observers never block the Extension Host.
+	 */
+	async readAttentionAsync(
+		sessionId: string,
+	): Promise<ProviderAttentionSignal | undefined> {
+		const filePath = await this.findSessionFileAsync(sessionId);
+		if (!filePath) return undefined;
+
+		const state = await readIncrementalJsonlAsync(
+			filePath,
+			this.attentionCache.get(sessionId),
+			(line, previous) => this.parseAttentionLine(line, previous),
+		);
+		if (!state) return undefined;
+		this.attentionCache.set(sessionId, state);
+		return state.value;
+	}
+
+	private parseAttentionLine(
+		line: string,
+		previous: ProviderAttentionSignal | undefined,
+	): ProviderAttentionSignal | undefined {
+		const event = JSON.parse(line) as Record<string, unknown>;
+		let signal = previous;
+
+		const payload = event.payload as Record<string, unknown> | undefined;
+		const type = event.type;
+		const eventType = typeof payload?.type === "string" ? payload.type : "";
+		const observedAt =
+			typeof event.timestamp === "string" ? event.timestamp : undefined;
+		if (type === "user_message") {
+			signal = {
+				status: "working",
+				evidence: "codex.user_message",
+				observedAt,
+			};
+		} else if (type === "event_msg" && eventType === "task_started") {
+			signal = {
+				status: "working",
+				evidence: "codex.task_started",
+				observedAt,
+			};
+		} else if (
+			type === "event_msg" &&
+			(eventType === "request_user_input" ||
+				eventType.includes("approval_request"))
+		) {
+			signal = {
+				status: "waiting_for_user",
+				evidence: `codex.${String(eventType)}`,
+				observedAt,
+			};
+		} else if (type === "event_msg" && eventType === "task_complete") {
+			signal = {
+				status: "idle",
+				evidence: "codex.task_complete",
+				observedAt,
+			};
+		} else if (type === "event_msg" && eventType === "turn_aborted") {
+			signal = {
+				status: "idle",
+				evidence: "codex.turn_aborted",
+				observedAt,
+			};
+		} else if (
+			type === "event_msg" &&
+			(eventType === "error" || eventType === "item_failed")
+		) {
+			signal = {
+				status: "failed",
+				evidence: `codex.${String(eventType)}`,
+				observedAt,
+			};
+		} else if (
+			type === "response_item" &&
+			(eventType === "function_call" || eventType === "custom_tool_call")
+		) {
+			signal = {
+				status: "working",
+				evidence: `codex.${String(eventType)}`,
+				observedAt,
+			};
+		}
+		return signal;
 	}
 
 	clearCache(sessionId: string): void {

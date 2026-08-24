@@ -191,3 +191,109 @@ function readPrefix(filePath: string): string {
 		if (fd !== undefined) fs.closeSync(fd);
 	}
 }
+
+/**
+ * Async twin of {@link readIncrementalJsonl}: same bounded-tail semantics,
+ * same state shape, same append detection — but every filesystem access goes
+ * through `fs/promises`, so periodic background observers never block the
+ * Extension Host on a synchronous read.
+ */
+export async function readIncrementalJsonlAsync<
+	T,
+>(
+	filePath: string,
+	state: IncrementalJsonlState<T> | undefined,
+	parseLine: (line: string, previous: T | undefined) => T | undefined,
+): Promise<IncrementalJsonlState<T> | undefined> {
+	let stat: fs.Stats;
+	try {
+		stat = await fsp.stat(filePath);
+	} catch {
+		return undefined;
+	}
+
+	if (
+		state &&
+		state.size === stat.size &&
+		state.mtimeMs === stat.mtimeMs &&
+		state.ctimeMs === stat.ctimeMs
+	) {
+		return state;
+	}
+
+	const prefix = await readPrefixAsync(filePath);
+	const canAppend = Boolean(
+		state &&
+			stat.size >= state.offset &&
+			stat.size > state.size &&
+			state.prefix === prefix,
+	);
+	let offset = canAppend
+		? (state?.offset ?? 0)
+		: Math.max(0, stat.size - INITIAL_READ_BYTES);
+	if (canAppend && stat.size - offset > MAX_INCREMENT_BYTES) {
+		offset = Math.max(0, stat.size - MAX_INCREMENT_BYTES);
+	}
+
+	let handle: fsp.FileHandle | undefined;
+	try {
+		handle = await fsp.open(filePath, "r");
+		const length = stat.size - offset;
+		const buffer = Buffer.alloc(length);
+		const { bytesRead } = await handle.read(buffer, 0, length, offset);
+		let content = buffer.toString("utf-8", 0, bytesRead);
+		let value =
+			canAppend && offset === state?.offset ? state?.value : undefined;
+		if (offset > 0 && !canAppend) {
+			const boundary = content.indexOf("\n");
+			content = boundary >= 0 ? content.slice(boundary + 1) : "";
+		}
+		if (canAppend && state?.remainder) content = state.remainder + content;
+
+		const lines = content.split("\n");
+		let remainder = lines.pop() ?? "";
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			try {
+				value = parseLine(line, value);
+			} catch {
+				// Ignore malformed or provider-incompatible rows.
+			}
+		}
+		if (remainder.trim()) {
+			try {
+				value = parseLine(remainder, value);
+				remainder = "";
+			} catch {
+				// Keep an incomplete final row for the next append.
+			}
+		}
+		return {
+			size: stat.size,
+			mtimeMs: stat.mtimeMs,
+			ctimeMs: stat.ctimeMs,
+			prefix,
+			offset: stat.size,
+			remainder,
+			value,
+		};
+	} catch {
+		return undefined;
+	} finally {
+		await handle?.close();
+	}
+}
+
+async function readPrefixAsync(filePath: string): Promise<string> {
+	let handle: fsp.FileHandle | undefined;
+	try {
+		handle = await fsp.open(filePath, "r");
+		const buffer = Buffer.alloc(128);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+		return buffer.toString("utf-8", 0, bytesRead);
+	} catch {
+		return "";
+	} finally {
+		await handle?.close();
+	}
+}
