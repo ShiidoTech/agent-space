@@ -81,9 +81,9 @@ Add unit tests for:
 3. malformed and incomplete data;
 4. the unsupported-capability path returning `unsupported`.
 
-Document any provider behavior that was observed but not implemented. Hermes,
-for example, currently has launch-only support until its session protocol is
-backed by evidence. Claude and Codex currently provide structured turn
+Document any provider behavior that was observed but not implemented. Hermes
+session binding and resume use its terminal breadcrumbs; attention remains
+unsupported. Claude and Codex currently provide structured turn
 boundaries for working/waiting/failed attention states.
 
 ## Project Curation

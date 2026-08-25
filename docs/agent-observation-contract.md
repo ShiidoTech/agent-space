@@ -41,7 +41,7 @@ second card status.
 | Claude | supported | supported | supported | supported | supported | supported | supported |
 | Codex | supported | best-effort | best-effort | supported | supported | supported | supported |
 | OpenCode | supported | best-effort | best-effort | supported | supported | supported | supported |
-| Hermes | supported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| Hermes | supported | supported | unsupported | unsupported | unsupported | unsupported | unsupported |
 | Copilot | supported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
 
 Lifecycle remains useful for every provider because it is established by Agent
