@@ -155,6 +155,24 @@ describe("CodexSessionProvider", () => {
 		]);
 	});
 
+	it("correlates one new Codex session but refuses ambiguous candidates", () => {
+		const cwd = path.join(tmpDir, "shared-worktree");
+		writeSessionFile("2026/03/04/session-a.jsonl", [
+			sessionMeta("session-a", { cwd }),
+		]);
+		const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
+
+		expect(provider.correlateOwnedSession(cwd, new Set())).toBe("session-a");
+
+		writeSessionFile("2026/03/04/session-b.jsonl", [
+			sessionMeta("session-b", { cwd }),
+		]);
+		expect(provider.correlateOwnedSession(cwd, new Set())).toBeUndefined();
+		expect(
+			provider.correlateOwnedSession(cwd, new Set(["session-a"])),
+		).toBe("session-b");
+	});
+
 	describe("findSessionFile", () => {
 		it("finds file in nested directory by sessionId", () => {
 			writeSessionFile("2026/03/04/rollout-1709550000-sess-find.jsonl", [

@@ -200,7 +200,7 @@ Projects can also override branching defaults via a committed `.agentspace/confi
 | Provider | Launch | Session binding | Resume | Session naming | Working | Waiting |
 |---|---:|---:|---:|---:|---:|---:|
 | Claude | yes | yes | yes | yes | yes | only `AskUserQuestion` |
-| Codex | yes | no (fail-closed) | yes* | yes* | yes* | yes* |
+| Codex | yes | yes* (fail-closed) | yes* | yes* | yes* | yes* |
 | OpenCode | yes | no (fail-closed) | yes* | yes* | yes* | yes* |
 | Hermes | yes | yes* | yes* | no evidence | no evidence | no evidence |
 
