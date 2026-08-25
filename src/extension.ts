@@ -7,6 +7,7 @@ import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor"
 import { collectWatchedAgents } from "./agents/attention/agentAttentionCollector";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
+import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
 import {
@@ -352,9 +353,19 @@ export async function activate(
 	// with a genuinely proven provider resume — never with a silent fresh
 	// launch. Agents that cannot be strictly resumed are left untouched and
 	// explicitly reported as blocked on their record.
-	// Provider-backed runtime restoration is intentionally not automatic at
-	// startup. Its synchronous provider stores can block the Extension Host;
-	// restore remains available through the explicit reconnect/resume actions.
+	void restoreAgentRuntimes({
+		projectManager,
+		tmux,
+		toolRegistry,
+	})
+		.then((report) => {
+			if (report.reattached.length > 0 || report.resumed.length > 0) {
+				projectManager.notifyChange();
+			}
+		})
+		.catch((error) => {
+			console.warn(`[RuntimeRestorer] startup restore failed: ${error}`);
+		});
 
 	// Surface undeclared project agents once at startup rather than only when
 	// someone happens to add an agent. An id enabled in .agentspace/config.json

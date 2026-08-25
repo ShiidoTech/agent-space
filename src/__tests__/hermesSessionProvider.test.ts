@@ -45,19 +45,4 @@ describe("HermesSessionProvider", () => {
 		]);
 	});
 
-	it("correlates only one unclaimed session in a worktree", () => {
-		const home = hermesHome();
-		for (const [index, sessionId] of ["session-a", "session-b"].entries()) {
-			fs.writeFileSync(
-				path.join(home, "terminal-sessions", `tmux_pane--${index}`),
-				JSON.stringify({ session_id: sessionId, cwd: "/worktrees/ops" }),
-			);
-		}
-		const provider = new HermesSessionProvider();
-
-		expect(provider.correlateOwnedSession("/worktrees/ops", new Set())).toBeUndefined();
-		expect(
-			provider.correlateOwnedSession("/worktrees/ops", new Set(["session-a"])),
-		).toBe("session-b");
-	});
 });

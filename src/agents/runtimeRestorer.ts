@@ -59,9 +59,9 @@ export interface RuntimeRestoreDeps {
 	toolRegistry: CodingToolRegistry;
 }
 
-export function restoreAgentRuntimes(
+export async function restoreAgentRuntimes(
 	deps: RuntimeRestoreDeps,
-): RuntimeRestoreReport {
+): Promise<RuntimeRestoreReport> {
 	const report: RuntimeRestoreReport = {
 		considered: 0,
 		reattached: [],
@@ -77,7 +77,7 @@ export function restoreAgentRuntimes(
 			const agents = ctx.agentManager.getAgents(feature.id);
 			const ordered = [...agents].sort(byCreatedAt);
 			for (const agent of ordered) {
-				const outcome = restoreAgentRuntime(ctx, feature, agent, deps);
+				const outcome = await restoreAgentRuntime(ctx, feature, agent, deps);
 				if (!outcome) continue;
 				report.considered += 1;
 				report[outcome.kind].push(outcome);
@@ -88,12 +88,12 @@ export function restoreAgentRuntimes(
 	return report;
 }
 
-function restoreAgentRuntime(
+async function restoreAgentRuntime(
 	ctx: ProjectContext,
 	feature: Feature,
 	agent: Agent,
 	deps: RuntimeRestoreDeps,
-): RuntimeRestoreOutcome | undefined {
+): Promise<RuntimeRestoreOutcome | undefined> {
 	const base = {
 		projectId: ctx.project.id,
 		featureId: feature.id,
@@ -140,7 +140,7 @@ function restoreAgentRuntime(
 			"No provider session id is persisted; the agent runtime was not recreated";
 		return persistBlocked(ctx, agent, reason, outcome);
 	}
-	if (!sessionIsProven(deps, tool, agent)) {
+	if (!(await sessionIsProven(deps, tool, agent))) {
 		const reason =
 			"Persisted session id could not be verified in the provider store; refusing an unattributable resume";
 		return persistBlocked(ctx, agent, reason, outcome);
@@ -200,19 +200,20 @@ function supportsResume(deps: RuntimeRestoreDeps, tool: CodingTool): boolean {
  * can only fall back on a previously persisted `bound` verdict — never on an
  * ordering or naming heuristic.
  */
-function sessionIsProven(
+async function sessionIsProven(
 	deps: RuntimeRestoreDeps,
 	tool: CodingTool,
 	agent: Agent,
-): boolean {
+): Promise<boolean> {
 	const adapter = deps.toolRegistry.getProvider(tool).sessionAdapter;
-	if (adapter?.hasSession) {
+	if (adapter?.async?.hasSession) {
 		try {
-			return adapter.hasSession(agent.sessionId as string) === true;
+			return (await adapter.async.hasSession(agent.sessionId as string)) === true;
 		} catch {
 			return false;
 		}
 	}
+	if (adapter?.hasSession) return false;
 	return agent.sessionBinding?.state === "bound";
 }
 

@@ -155,22 +155,23 @@ describe("CodexSessionProvider", () => {
 		]);
 	});
 
-	it("correlates one new Codex session but refuses ambiguous candidates", () => {
+	it("lists candidates without claiming ownership", () => {
 		const cwd = path.join(tmpDir, "shared-worktree");
 		writeSessionFile("2026/03/04/session-a.jsonl", [
 			sessionMeta("session-a", { cwd }),
 		]);
 		const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
 
-		expect(provider.correlateOwnedSession(cwd, new Set())).toBe("session-a");
+		expect(provider.discoverSessionCandidates(cwd, new Set()).map((s) => s.sessionId)).toEqual([
+			"session-a",
+		]);
 
 		writeSessionFile("2026/03/04/session-b.jsonl", [
 			sessionMeta("session-b", { cwd }),
 		]);
-		expect(provider.correlateOwnedSession(cwd, new Set())).toBeUndefined();
-		expect(
-			provider.correlateOwnedSession(cwd, new Set(["session-a"])),
-		).toBe("session-b");
+		expect(provider.discoverSessionCandidates(cwd, new Set(["session-a"])).map((s) => s.sessionId)).toEqual([
+			"session-b",
+		]);
 	});
 
 	describe("findSessionFile", () => {

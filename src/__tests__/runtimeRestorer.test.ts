@@ -147,6 +147,7 @@ function provider(
 			readName: () => null,
 			scanSessions: () => [],
 			hasSession: vi.fn(() => true),
+			async: { hasSession: vi.fn(async () => true) },
 		},
 		...overrides,
 	} as CodingAgentProvider;
@@ -192,20 +193,20 @@ interface RestoreArgs {
 	provider?: CodingAgentProvider;
 }
 
-function runRestore({
+async function runRestore({
 	projectManager,
 	registry,
 	st,
 	provider: prov,
-}: RestoreArgs): {
+}: RestoreArgs): Promise<{
 	report: RuntimeRestoreReport;
 	st: TmuxState;
 	projectManager: ProjectManager;
-} {
+}> {
 	if (prov) {
 		vi.spyOn(registry, "getProvider").mockReturnValue(prov);
 	}
-	const report = restoreAgentRuntimes({
+	const report = await restoreAgentRuntimes({
 		projectManager,
 		tmux: tmux(st),
 		toolRegistry: registry,
@@ -214,12 +215,12 @@ function runRestore({
 }
 
 describe("restoreAgentRuntimes", () => {
-	it("does nothing when tmux is unavailable", () => {
+	it("does nothing when tmux is unavailable", async () => {
 		const { projectManager, ctx, registry, st } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
 		st.available = false;
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,
@@ -229,12 +230,12 @@ describe("restoreAgentRuntimes", () => {
 		expect(execMock).not.toHaveBeenCalled();
 	});
 
-	it("reattaches an agent whose tmux session survived the restart", () => {
+	it("reattaches an agent whose tmux session survived the restart", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
 		st.alive.add("agent-space-f1-a1");
 
-		const { report } = runRestore({ projectManager, registry, st });
+		const { report } = await runRestore({ projectManager, registry, st });
 
 		expect(report.considered).toBe(1);
 		expect(report.reattached).toHaveLength(1);
@@ -245,7 +246,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(stored.restore?.state).toBe("reattached");
 	});
 
-	it("ignores agents that never started and agents that are done", () => {
+	it("ignores agents that never started and agents that are done", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [
 			agentFixture({ id: "a-done", status: "done", hasStarted: true }),
@@ -253,7 +254,7 @@ describe("restoreAgentRuntimes", () => {
 			agentFixture(),
 		]);
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,
@@ -265,11 +266,11 @@ describe("restoreAgentRuntimes", () => {
 		expect(report.resumed[0]?.agentId).toBe("a1");
 	});
 
-	it("resumes with a strictly built provider command when the session is proven", () => {
+	it("resumes with a strictly built provider command when the session is proven", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,
@@ -288,11 +289,11 @@ describe("restoreAgentRuntimes", () => {
 		expect(stored.restore).toMatchObject({ state: "resumed" });
 	});
 
-	it("blocks an agent whose persisted session id no longer exists", () => {
+	it("blocks an agent whose persisted session id no longer exists", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,
@@ -302,6 +303,7 @@ describe("restoreAgentRuntimes", () => {
 					readName: () => null,
 					scanSessions: () => [],
 					hasSession: vi.fn(() => false),
+					async: { hasSession: vi.fn(async () => false) },
 				},
 			}),
 		});
@@ -314,11 +316,11 @@ describe("restoreAgentRuntimes", () => {
 		expect(stored.restore?.state).toBe("blocked");
 	});
 
-	it("blocks an agent with no persisted session id instead of launching fresh", () => {
+	it("blocks an agent with no persisted session id instead of launching fresh", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture({ sessionId: null })]);
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,
@@ -331,11 +333,11 @@ describe("restoreAgentRuntimes", () => {
 		expect(execMock).not.toHaveBeenCalled();
 	});
 
-	it("blocks an agent whose provider cannot resume", () => {
+	it("blocks an agent whose provider cannot resume", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,
@@ -348,7 +350,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(execMock).not.toHaveBeenCalled();
 	});
 
-	it("trusts a previously persisted bound verdict when the provider has no session store", () => {
+	it("trusts a previously persisted bound verdict when the provider has no session store", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [
 			agentFixture({
@@ -364,7 +366,7 @@ describe("restoreAgentRuntimes", () => {
 		const prov = provider() as CodingAgentProvider;
 		delete (prov as { sessionAdapter?: unknown }).sessionAdapter;
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,
@@ -377,7 +379,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(command).toContain("stub --session ses_resume");
 	});
 
-	it("uses a declared resumeCommand template when the tool provides one", () => {
+	it("uses a declared resumeCommand template when the tool provides one", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
 		// Tool-level resumeCommand overrides provider resume args entirely.
@@ -389,7 +391,7 @@ describe("restoreAgentRuntimes", () => {
 			resumeCommand: "{command} --resume {sessionId}",
 		});
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,
@@ -401,19 +403,19 @@ describe("restoreAgentRuntimes", () => {
 		expect(command).toContain("stub --resume ses_resume");
 	});
 
-	it("is idempotent: a second pass reattaches instead of resuming again", () => {
+	it("is idempotent: a second pass reattaches instead of resuming again", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
 		const prov = provider();
 		vi.spyOn(registry, "getProvider").mockReturnValue(prov);
 
-		restoreAgentRuntimes({
+		await restoreAgentRuntimes({
 			projectManager,
 			tmux: tmux(st),
 			toolRegistry: registry,
 		});
 
-		const report = restoreAgentRuntimes({
+		const report = await restoreAgentRuntimes({
 			projectManager,
 			tmux: tmux(st),
 			toolRegistry: registry,
@@ -425,7 +427,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(execMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("blocks when the recreated tmux session does not stay alive", () => {
+	it("blocks when the recreated tmux session does not stay alive", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
 		vi.spyOn(registry, "getProvider").mockReturnValue(provider());
@@ -433,7 +435,7 @@ describe("restoreAgentRuntimes", () => {
 		// never becomes alive.
 		const deadTmux = tmux(st, false);
 
-		const report = restoreAgentRuntimes({
+		const report = await restoreAgentRuntimes({
 			projectManager,
 			tmux: deadTmux,
 			toolRegistry: registry,
@@ -446,12 +448,12 @@ describe("restoreAgentRuntimes", () => {
 		expect(stored.restore?.state).toBe("blocked");
 	});
 
-	it("recovers agents on the base feature (repo root) as well", () => {
+	it("recovers agents on the base feature (repo root) as well", async () => {
 		const { ctx, registry, st, projectManager } = setup([]);
 		const base = ctx.featureManager.getBaseFeature(ctx.project.id);
 		ctx.store.saveAgents(base.id, [agentFixture({ id: "base-agent" })]);
 
-		const { report } = runRestore({
+		const { report } = await runRestore({
 			projectManager,
 			registry,
 			st,

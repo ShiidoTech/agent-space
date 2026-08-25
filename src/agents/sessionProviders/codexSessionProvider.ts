@@ -77,11 +77,6 @@ export class CodexSessionProvider
 				(await this.readTitleFromSessionAsync(sessionId))
 			);
 		},
-		correlateOwnedSession: async (
-			cwd: string,
-			knownSessionIds: ReadonlySet<string>,
-		): Promise<string | undefined> =>
-			this.correlateOwnedSession(cwd, knownSessionIds),
 	};
 
 	private async walkDirAsync(dir: string): Promise<SessionInfo[]> {
@@ -334,19 +329,6 @@ export class CodexSessionProvider
 					!knownSessionIds.has(session.sessionId),
 			)
 			.sort((left, right) => right.created.localeCompare(left.created));
-	}
-
-	/**
-	 * Codex writes a session_meta record containing its exact cwd and start time.
-	 * A single new candidate is safe to attribute; multiple candidates remain
-	 * ambiguous because Codex has no launch token that Agent Space can pass in.
-	 */
-	correlateOwnedSession(
-		cwd: string,
-		knownSessionIds: ReadonlySet<string>,
-	): string | undefined {
-		const candidates = this.discoverSessionCandidates(cwd, knownSessionIds);
-		return candidates.length === 1 ? candidates[0]?.sessionId : undefined;
 	}
 
 	/** True when a rollout file for `sessionId` exists in this Codex home. */

@@ -1,9 +1,13 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import type { ProviderSessionAdapter } from "../providers/types";
 import type { SessionInfo } from "./types";
+
+const execFileAsync = promisify(execFile);
 
 interface HermesBreadcrumb {
 	session_id?: unknown;
@@ -15,15 +19,10 @@ interface HermesBreadcrumb {
 export class HermesSessionProvider implements ProviderSessionAdapter {
 	readonly toolId = "hermes";
 	readonly async = {
-		scanSessions: async (): Promise<SessionInfo[]> => this.scanSessions(),
+		scanSessions: async (): Promise<SessionInfo[]> => this.scanSessionsAsync(),
 		hasSession: async (sessionId: string): Promise<boolean> =>
-			this.hasSession(sessionId),
+			this.hasSessionAsync(sessionId),
 		readName: async (): Promise<string | null> => null,
-		correlateOwnedSession: async (
-			cwd: string,
-			knownSessionIds: ReadonlySet<string>,
-		): Promise<string | undefined> =>
-			this.correlateOwnedSession(cwd, knownSessionIds),
 	};
 
 	scanSessions(): SessionInfo[] {
@@ -68,15 +67,41 @@ export class HermesSessionProvider implements ProviderSessionAdapter {
 		}
 	}
 
-	correlateOwnedSession(
-		cwd: string,
-		knownSessionIds: ReadonlySet<string>,
-	): string | undefined {
-		const candidates = this.scanSessions().filter(
-			(session) =>
-				session.projectPath === cwd && !knownSessionIds.has(session.sessionId),
-		);
-		return candidates.length === 1 ? candidates[0]?.sessionId : undefined;
+	private async hasSessionAsync(sessionId: string): Promise<boolean> {
+		if (!isSafeSessionId(sessionId)) return false;
+		try {
+			const { stdout } = await execFileAsync(
+				"hermes",
+				[
+					"sessions",
+					"export",
+					"--dry-run",
+					"--session-id",
+					sessionId,
+					"--format",
+					"jsonl",
+					"-",
+				],
+				{ encoding: "utf8", timeout: 5_000 },
+			);
+			return /Would export 1 session/u.test(stdout);
+		} catch {
+			return false;
+		}
+	}
+
+	private async scanSessionsAsync(): Promise<SessionInfo[]> {
+		const sessions = new Map<string, SessionInfo>();
+		for (const breadcrumb of await this.readBreadcrumbsAsync()) {
+			if (!breadcrumb.sessionId || !breadcrumb.projectPath) continue;
+			sessions.set(breadcrumb.sessionId, {
+				sessionId: breadcrumb.sessionId,
+				prompt: "",
+				created: breadcrumb.created,
+				projectPath: breadcrumb.projectPath,
+			});
+		}
+		return [...sessions.values()];
 	}
 
 	private readBreadcrumbs(): Array<{
@@ -104,6 +129,46 @@ export class HermesSessionProvider implements ProviderSessionAdapter {
 			try {
 				const value = JSON.parse(
 					fs.readFileSync(path.join(directory, name), "utf8"),
+				) as HermesBreadcrumb;
+				const sessionId =
+					typeof value.session_id === "string" ? value.session_id : "";
+				const projectPath = typeof value.cwd === "string" ? value.cwd : "";
+				if (!sessionId || !projectPath) continue;
+				const timestamp = typeof value.ts === "number" ? value.ts * 1000 : 0;
+				result.push({
+					sessionId,
+					projectPath,
+					created: timestamp > 0 ? new Date(timestamp).toISOString() : "",
+				});
+			} catch {
+				// A concurrently rewritten breadcrumb is ignored until the next pass.
+			}
+		}
+		return result;
+	}
+
+	private async readBreadcrumbsAsync(): Promise<
+		Array<{ sessionId: string; projectPath: string; created: string }>
+	> {
+		const directory = path.join(
+			process.env.HERMES_HOME || path.join(os.homedir(), ".hermes"),
+			"terminal-sessions",
+		);
+		let names: string[];
+		try {
+			names = await fsp.readdir(directory);
+		} catch {
+			return [];
+		}
+		const result: Array<{
+			sessionId: string;
+			projectPath: string;
+			created: string;
+		}> = [];
+		for (const name of names) {
+			try {
+				const value = JSON.parse(
+					await fsp.readFile(path.join(directory, name), "utf8"),
 				) as HermesBreadcrumb;
 				const sessionId =
 					typeof value.session_id === "string" ? value.session_id : "";
