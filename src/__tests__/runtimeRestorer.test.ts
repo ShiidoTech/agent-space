@@ -37,10 +37,15 @@ vi.mock("vscode", () => ({
 
 vi.mock("../utils/platform", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../utils/platform")>();
-	return { ...actual, exec: vi.fn(() => "") };
+	return {
+		...actual,
+		exec: vi.fn(() => ""),
+		execAsync: vi.fn(async (command: string) => command),
+	};
 });
 
 const execMock = vi.mocked(platform.exec);
+const execAsyncMock = vi.mocked(platform.execAsync);
 
 const tempDirs: string[] = [];
 
@@ -55,6 +60,7 @@ afterEach(() => {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 	execMock.mockClear();
+	execAsyncMock.mockClear();
 	vi.restoreAllMocks();
 });
 
@@ -104,12 +110,18 @@ function tmuxState(): TmuxState {
 
 function tmux(st: TmuxState, spawnMakesAlive = true): TmuxIntegration {
 	return {
-		isAvailable: () => st.available,
+		isAvailable: () => {
+			throw new Error("sync tmux API used by runtime restore");
+		},
+		isAvailableAsync: async () => st.available,
 		sessionName: (label: string, agentId: string) =>
 			`agent-space-${label}-${agentId}`,
 		legacySessionName: (featureId: string, agentId: string) =>
 			`agent-space-${featureId}-${agentId}`,
-		adoptSession: (preferred: string, current: string) =>
+		adoptSession: () => {
+			throw new Error("sync tmux API used by runtime restore");
+		},
+		adoptSessionAsync: async (preferred: string, current: string) =>
 			st.alive.has(preferred) || st.alive.has(current),
 		createCommand: (sessionName: string, innerCommand: string) => {
 			st.created.push(sessionName);
@@ -117,9 +129,15 @@ function tmux(st: TmuxState, spawnMakesAlive = true): TmuxIntegration {
 			return `tmux new-session -d -s ${sessionName} -- ${innerCommand}`;
 		},
 		configureSession: (sessionName: string) => {
+			throw new Error(`sync tmux API used by runtime restore: ${sessionName}`);
+		},
+		configureSessionAsync: async (sessionName: string) => {
 			st.configured.push(sessionName);
 		},
-		isSessionAlive: (sessionName: string) => st.alive.has(sessionName),
+		isSessionAlive: () => {
+			throw new Error("sync tmux API used by runtime restore");
+		},
+		isSessionAliveAsync: async (sessionName: string) => st.alive.has(sessionName),
 	} as unknown as TmuxIntegration;
 }
 
@@ -227,7 +245,7 @@ describe("restoreAgentRuntimes", () => {
 		});
 
 		expect(report.considered).toBe(0);
-		expect(execMock).not.toHaveBeenCalled();
+		expect(execAsyncMock).not.toHaveBeenCalled();
 	});
 
 	it("reattaches an agent whose tmux session survived the restart", async () => {
@@ -240,7 +258,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(report.considered).toBe(1);
 		expect(report.reattached).toHaveLength(1);
 		expect(report.resumed).toHaveLength(0);
-		expect(execMock).not.toHaveBeenCalled();
+		expect(execAsyncMock).not.toHaveBeenCalled();
 		expect(st.created).toHaveLength(0);
 		const stored = ctx.store.loadAgents("f1")[0];
 		expect(stored.restore?.state).toBe("reattached");
@@ -279,8 +297,8 @@ describe("restoreAgentRuntimes", () => {
 
 		expect(report.considered).toBe(1);
 		expect(report.resumed).toHaveLength(1);
-		expect(execMock).toHaveBeenCalledTimes(1);
-		const [command] = execMock.mock.calls[0] ?? [];
+		expect(execAsyncMock).toHaveBeenCalledTimes(1);
+		const [command] = execAsyncMock.mock.calls[0] ?? [];
 		expect(command).toContain("stub --session ses_resume");
 		expect(st.created).toEqual(["agent-space-f1-a1"]);
 		expect(st.configured).toEqual(["agent-space-f1-a1"]);
@@ -311,7 +329,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(report.considered).toBe(1);
 		expect(report.blocked).toHaveLength(1);
 		expect(report.blocked[0]?.reason).toContain("verif");
-		expect(execMock).not.toHaveBeenCalled();
+		expect(execAsyncMock).not.toHaveBeenCalled();
 		const stored = ctx.store.loadAgents("f1")[0];
 		expect(stored.restore?.state).toBe("blocked");
 	});
@@ -330,7 +348,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(report.considered).toBe(1);
 		expect(report.blocked).toHaveLength(1);
 		expect(report.blocked[0]?.reason).toContain("session id");
-		expect(execMock).not.toHaveBeenCalled();
+		expect(execAsyncMock).not.toHaveBeenCalled();
 	});
 
 	it("blocks an agent whose provider cannot resume", async () => {
@@ -347,7 +365,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(report.considered).toBe(1);
 		expect(report.blocked).toHaveLength(1);
 		expect(report.blocked[0]?.reason).toContain("resume capability");
-		expect(execMock).not.toHaveBeenCalled();
+		expect(execAsyncMock).not.toHaveBeenCalled();
 	});
 
 	it("trusts a previously persisted bound verdict when the provider has no session store", async () => {
@@ -375,7 +393,7 @@ describe("restoreAgentRuntimes", () => {
 
 		expect(report.considered).toBe(1);
 		expect(report.resumed).toHaveLength(1);
-		const [command] = execMock.mock.calls[0] ?? [];
+		const [command] = execAsyncMock.mock.calls[0] ?? [];
 		expect(command).toContain("stub --session ses_resume");
 	});
 
@@ -399,7 +417,7 @@ describe("restoreAgentRuntimes", () => {
 		});
 
 		expect(report.resumed).toHaveLength(1);
-		const [command] = execMock.mock.calls[0] ?? [];
+		const [command] = execAsyncMock.mock.calls[0] ?? [];
 		expect(command).toContain("stub --resume ses_resume");
 	});
 
@@ -424,7 +442,7 @@ describe("restoreAgentRuntimes", () => {
 		expect(report.considered).toBe(1);
 		expect(report.reattached).toHaveLength(1);
 		expect(report.resumed).toHaveLength(0);
-		expect(execMock).toHaveBeenCalledTimes(1);
+		expect(execAsyncMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("blocks when the recreated tmux session does not stay alive", async () => {

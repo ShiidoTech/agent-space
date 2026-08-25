@@ -100,7 +100,10 @@ export class AgentManager {
 	 * and must never block the Extension Host or replace the last-known model.
 	 */
 	getAgentsReadModel(featureId: string): Agent[] {
-		return this.loadAgents(featureId).map((agent) => ({ ...agent }));
+		if (!this.agentsByFeature.has(featureId)) {
+			this.agentsByFeature.set(featureId, this.store.loadAgents(featureId));
+		}
+		return this.agentsByFeature.get(featureId)!.map((agent) => ({ ...agent }));
 	}
 
 	getAgent(featureId: string, agentId: string): Agent | undefined {

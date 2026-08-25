@@ -3,7 +3,7 @@ import type {
 	ProjectManager,
 } from "../projects/projectManager";
 import type { Agent, CodingTool, Feature } from "../types";
-import { exec } from "../utils/platform";
+import { execAsync } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import type { TmuxIntegration } from "./tmux";
 
@@ -70,11 +70,11 @@ export async function restoreAgentRuntimes(
 	};
 
 	// No tmux, no runtime to restore — fail closed and stay silent.
-	if (!deps.tmux.isAvailable()) return report;
+	if (!(await deps.tmux.isAvailableAsync())) return report;
 
 	for (const ctx of deps.projectManager.getAllContexts()) {
 		for (const feature of managedFeatures(ctx)) {
-			const agents = ctx.agentManager.getAgents(feature.id);
+			const agents = ctx.agentManager.getAgentsReadModel(feature.id);
 			const ordered = [...agents].sort(byCreatedAt);
 			for (const agent of ordered) {
 				const outcome = await restoreAgentRuntime(ctx, feature, agent, deps);
@@ -117,7 +117,7 @@ async function restoreAgentRuntime(
 		agent.tmuxSession ?? deps.tmux.sessionName(feature.id, agent.id);
 	const legacySessionName = deps.tmux.legacySessionName(feature.id, agent.id);
 
-	if (deps.tmux.adoptSession(sessionName, legacySessionName)) {
+	if (await deps.tmux.adoptSessionAsync(sessionName, legacySessionName)) {
 		// Case A: the runtime survived (VS Code reload with a live tmux), or a
 		// previous restore pass already recreated it. Do not spawn anything.
 		ctx.agentManager.recordRestoreOutcome(agent.id, feature.id, {
@@ -158,8 +158,8 @@ async function restoreAgentRuntime(
 
 	const cwd = agent.worktreePath ?? feature.worktreePath;
 	try {
-		exec(deps.tmux.createCommand(sessionName, resumeCommand), { cwd });
-		deps.tmux.configureSession(sessionName);
+		await execAsync(deps.tmux.createCommand(sessionName, resumeCommand), { cwd });
+		await deps.tmux.configureSessionAsync(sessionName);
 	} catch (error) {
 		console.warn(`[RuntimeRestorer] tmux resume failed: ${error}`);
 		return persistBlocked(
@@ -170,7 +170,7 @@ async function restoreAgentRuntime(
 		);
 	}
 
-	if (!deps.tmux.isSessionAlive(sessionName)) {
+	if (!(await deps.tmux.isSessionAliveAsync(sessionName))) {
 		return persistBlocked(
 			ctx,
 			agent,
