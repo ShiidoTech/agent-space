@@ -100,10 +100,18 @@ export class AgentManager {
 	 * and must never block the Extension Host or replace the last-known model.
 	 */
 	getAgentsReadModel(featureId: string): Agent[] {
-		if (!this.agentsByFeature.has(featureId)) {
-			this.agentsByFeature.set(featureId, this.store.loadAgents(featureId));
-		}
-		return this.agentsByFeature.get(featureId)!.map((agent) => ({ ...agent }));
+		return this.store.loadAgents(featureId).map((agent) => ({ ...agent }));
+	}
+
+	/** Persist startup restore state without populating the normalized cache. */
+	updateAgentStatusReadModel(
+		agentId: string,
+		featureId: string,
+		status: AgentStatus,
+	): void {
+		this.mutateReadModel(featureId, agentId, (agent) => {
+			agent.status = status;
+		});
 	}
 
 	getAgent(featureId: string, agentId: string): Agent | undefined {
@@ -382,6 +390,24 @@ export class AgentManager {
 		this.saveAgents(featureId, agents);
 	}
 
+	recordRestoreOutcomeReadModel(
+		agentId: string,
+		featureId: string,
+		outcome: NonNullable<Agent["restore"]>,
+	): void {
+		this.mutateReadModel(featureId, agentId, (agent) => {
+			const current = agent.restore;
+			if (
+				current &&
+				current.state === outcome.state &&
+				current.reason === outcome.reason
+			) {
+				return;
+			}
+			agent.restore = outcome;
+		});
+	}
+
 	reopenAgent(agentId: string, feature: Feature): Agent | undefined {
 		const agents = this.loadAgents(feature.id);
 		const agent = agents.find((a) => a.id === agentId);
@@ -506,6 +532,20 @@ export class AgentManager {
 	private saveAgents(featureId: string, agents: Agent[]): void {
 		this.agentsByFeature.set(featureId, agents);
 		this.store.saveAgents(featureId, agents);
+	}
+
+	private mutateReadModel(
+		featureId: string,
+		agentId: string,
+		mutate: (agent: Agent) => void,
+	): void {
+		const cached = this.agentsByFeature.get(featureId);
+		const agents = cached ?? this.store.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		if (!agent) return;
+		mutate(agent);
+		if (cached) this.saveAgents(featureId, agents);
+		else this.store.saveAgents(featureId, agents);
 	}
 
 	private normalizeAgentSessions(featureId: string, agents: Agent[]): Agent[] {

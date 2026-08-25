@@ -543,6 +543,49 @@ describe("TerminalController", () => {
 		expect(recordAgentFailure).not.toHaveBeenCalled();
 	});
 
+	it("does not auto-attach a unique Hermes session", () => {
+		const listAttachableSessions = vi.fn().mockReturnValue([
+			{
+				sessionId: "hermes-session",
+				prompt: "Recovered conversation",
+				created: "2026-08-13T05:54:00.000Z",
+				projectPath: "/repo/feature-one",
+			},
+		]);
+		const attachExplicitly = vi.fn().mockReturnValue(true);
+		resolveAgentTool.mockReturnValue({
+			id: "hermes",
+			name: "Hermes",
+			command: "hermes",
+		});
+		buildStrictResumeLaunchCommand.mockReturnValue(undefined);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+			} as never,
+			{ resolveAgentTool, buildLaunchCommand, buildStrictResumeLaunchCommand } as never,
+			{ listAttachableSessions, attachExplicitly } as never,
+		);
+
+		const terminal = controller.createTerminal(
+			{ ...feature },
+			{ ...agent, hasStarted: true, sessionId: null },
+			0,
+			true,
+		);
+
+		expect(terminal).toBeUndefined();
+		expect(listAttachableSessions).not.toHaveBeenCalled();
+		expect(attachExplicitly).not.toHaveBeenCalled();
+	});
+
 	it("stays blocked (never auto-picks) when more than one worktree session is unowned", () => {
 		const listAttachableSessions = vi.fn().mockReturnValue([
 			{

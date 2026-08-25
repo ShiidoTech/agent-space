@@ -120,7 +120,7 @@ async function restoreAgentRuntime(
 	if (await deps.tmux.adoptSessionAsync(sessionName, legacySessionName)) {
 		// Case A: the runtime survived (VS Code reload with a live tmux), or a
 		// previous restore pass already recreated it. Do not spawn anything.
-		ctx.agentManager.recordRestoreOutcome(agent.id, feature.id, {
+		ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, feature.id, {
 			state: "reattached",
 			at: new Date().toISOString(),
 		});
@@ -181,8 +181,8 @@ async function restoreAgentRuntime(
 
 	// The CLI is running again. Reflect that on the record so the UI shows a
 	// live agent; the SessionBinder re-validates the exact bounded session.
-	ctx.agentManager.updateAgentStatus(agent.id, feature.id, "running");
-	ctx.agentManager.recordRestoreOutcome(agent.id, feature.id, {
+	ctx.agentManager.updateAgentStatusReadModel(agent.id, feature.id, "running");
+	ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, feature.id, {
 		state: "resumed",
 		at: new Date().toISOString(),
 	});
@@ -223,7 +223,7 @@ function persistBlocked(
 	reason: string,
 	outcome: (kind: RuntimeRestoreKind, reason?: string) => RuntimeRestoreOutcome,
 ): RuntimeRestoreOutcome {
-	ctx.agentManager.recordRestoreOutcome(agent.id, agent.featureId, {
+	ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, agent.featureId, {
 		state: "blocked",
 		reason,
 		at: new Date().toISOString(),
