@@ -160,6 +160,9 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "preassigned" },
+				})),
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -201,6 +204,9 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "preassigned" },
+				})),
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -236,6 +242,9 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "preassigned" },
+				})),
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -273,6 +282,9 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "preassigned" },
+				})),
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -465,6 +477,9 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "preassigned" },
+				})),
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -516,6 +531,9 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "preassigned" },
+				})),
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -543,7 +561,7 @@ describe("TerminalController", () => {
 		expect(recordAgentFailure).not.toHaveBeenCalled();
 	});
 
-	it("does not auto-attach a unique Hermes session", () => {
+	it("does not auto-attach a unique custom provider-assigned session", () => {
 		const listAttachableSessions = vi.fn().mockReturnValue([
 			{
 				sessionId: "hermes-session",
@@ -554,9 +572,9 @@ describe("TerminalController", () => {
 		]);
 		const attachExplicitly = vi.fn().mockReturnValue(true);
 		resolveAgentTool.mockReturnValue({
-			id: "hermes",
-			name: "Hermes",
-			command: "hermes",
+			id: "codex-perso",
+			name: "Codex perso",
+			command: "codex-perso",
 		});
 		buildStrictResumeLaunchCommand.mockReturnValue(undefined);
 		const controller = new TerminalController(
@@ -570,7 +588,14 @@ describe("TerminalController", () => {
 				isSessionAlive,
 				getPaneStatus,
 			} as never,
-			{ resolveAgentTool, buildLaunchCommand, buildStrictResumeLaunchCommand } as never,
+			{
+				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "provider_assigned" },
+				})),
+				buildLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
 			{ listAttachableSessions, attachExplicitly } as never,
 		);
 
@@ -616,6 +641,9 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "preassigned" },
+				})),
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -671,6 +699,9 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				getProvider: vi.fn(() => ({
+					conversationIdentity: { ownership: "preassigned" },
+				})),
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,

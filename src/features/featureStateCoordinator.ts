@@ -1118,6 +1118,7 @@ export class FeatureStateCoordinator implements Disposable {
 			deliveryHeadSha,
 			activeHeadSha,
 			baseRef,
+			inspectionBranch,
 		);
 		let github = this.githubObservations.get(githubKey);
 		if (!github) {
@@ -1198,6 +1199,7 @@ export class FeatureStateCoordinator implements Disposable {
 				deliveryHeadSha,
 				activeHeadSha,
 				baseRef,
+				activeBranchRef,
 			),
 		].join("\u0000");
 		const githubGeneration =
@@ -1266,6 +1268,7 @@ export class FeatureStateCoordinator implements Disposable {
 		deliveryHeadSha: string | undefined,
 		activeHeadSha: string | undefined,
 		baseRef: string | undefined,
+		activeBranchRef: string,
 	): string {
 		return [
 			ctx.project.repoPath,
@@ -1274,6 +1277,7 @@ export class FeatureStateCoordinator implements Disposable {
 			deliveryHeadSha ?? "",
 			activeHeadSha ?? "",
 			baseRef ?? "",
+			activeBranchRef,
 		].join("\u0000");
 	}
 
