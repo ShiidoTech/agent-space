@@ -921,7 +921,9 @@ export class HomePanel {
 						: "";
 				const deletable =
 					!branch.linkedFeatureId &&
+					inventory.baseRef !== undefined &&
 					branch.ref !== inventory.baseRef &&
+					!PROTECTED_BRANCH_NAMES.has(branch.ref) &&
 					repoPath !== undefined &&
 					branch.worktreePath !== repoPath;
 				const deleteTitle =
@@ -2485,6 +2487,17 @@ interface GitStats {
 }
 
 // -- Inline SVG Icons (small, self-contained) ---------------------
+const PROTECTED_BRANCH_NAMES = new Set([
+	"main",
+	"master",
+	"develop",
+	"dev",
+	"production",
+	"prod",
+	"release",
+	"staging",
+]);
+
 const ICON_REFRESH = `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13.451 5.609l-.579-.921-1.017.641c-.597-.58-1.345-.99-2.162-1.18a5.03 5.03 0 0 0-2.441.077 4.975 4.975 0 0 0-2.108 1.299A5.007 5.007 0 0 0 3.986 8.1a4.947 4.947 0 0 0 .424 2.32 5.028 5.028 0 0 0 1.541 1.86 5.067 5.067 0 0 0 2.21.996 4.997 4.997 0 0 0 2.44-.079c.729-.224 1.393-.612 1.938-1.137l-.726-.726a3.98 3.98 0 0 1-1.535.892 3.98 3.98 0 0 1-1.935.062 4.037 4.037 0 0 1-1.758-.793A3.996 3.996 0 0 1 5.36 9.974a3.935 3.935 0 0 1-.337-1.842A3.985 3.985 0 0 1 5.723 6.3a3.955 3.955 0 0 1 1.674-1.032 3.998 3.998 0 0 1 1.94-.061c.65.133 1.248.436 1.723.875l-1.06.667.596.921L13.452 5.61z"/></svg>`;
 const ICON_PLUS = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>`;
 const ICON_FOLDER = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M14.5 3H7.71l-.85-.85L6.51 2h-5l-.5.5v11l.5.5h13l.5-.5v-10L14.5 3zm-.51 8.49V13h-12V7h12v4.49zm0-5.49h-12V3h4.29l.85.85.36.15H14v2z"/></svg>`;

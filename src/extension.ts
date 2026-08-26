@@ -2093,16 +2093,25 @@ export async function activate(
 				}
 
 				if (hasLoss) {
-					// Irreversible loss requires typing the exact branch name.
-					const typed = await vscode.window.showInputBox({
-						prompt: `This deletion is irreversible. Type "${branchRef}" to confirm.`,
-						placeHolder: branchRef,
-						validateInput: (value) =>
-							value.trim() === branchRef
-								? undefined
-								: `Type exactly "${branchRef}" to confirm.`,
+					// Irreversible loss requires explicit confirmation.
+					const lossItems = [
+						{
+							label: "$(warning) Delete irrevocably",
+							description: branchRef,
+							alwaysShow: true,
+						},
+						{ label: "Cancel", description: "Keep branch and worktree" },
+					];
+					const lossChoice = await vscode.window.showQuickPick(lossItems, {
+						title: `Deletion of "${branchRef}" is irreversible`,
+						placeHolder: "Select 'Delete irrevocably' to confirm or cancel",
+						matchOnDescription: false,
 					});
-					if (typed?.trim() !== branchRef) return;
+					if (
+						!lossChoice ||
+						lossChoice.label !== "$(warning) Delete irrevocably"
+					)
+						return;
 				}
 
 				const outcome = await deleteWorktreeBranch(ctx.gitClient, {

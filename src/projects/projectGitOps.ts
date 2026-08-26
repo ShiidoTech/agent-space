@@ -8,6 +8,17 @@ import {
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import type { ProjectReferenceBranchHealth } from "./referenceBranchHealth";
 
+const PROTECTED_BRANCH_NAMES = new Set([
+	"main",
+	"master",
+	"develop",
+	"dev",
+	"production",
+	"prod",
+	"release",
+	"staging",
+]);
+
 export type BaseBranchUpdateResult =
 	| { readonly status: "updated"; readonly method: "fast_forward" | "merge" }
 	| { readonly status: "already_current" }
@@ -398,6 +409,11 @@ export async function assessWorktreeBranchDeletion(
 	if (baseBranch && branchRef === baseBranch) {
 		return structuralBlock(
 			`Branch ${branchRef} is the project's base branch and cannot be deleted.`,
+		);
+	}
+	if (PROTECTED_BRANCH_NAMES.has(branchRef)) {
+		return structuralBlock(
+			`Branch "${branchRef}" is a well-known protected branch and cannot be deleted.`,
 		);
 	}
 	if (path.resolve(worktreePath) === path.resolve(repoRoot)) {
