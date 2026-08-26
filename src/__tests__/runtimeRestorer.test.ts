@@ -137,7 +137,8 @@ function tmux(st: TmuxState, spawnMakesAlive = true): TmuxIntegration {
 		isSessionAlive: () => {
 			throw new Error("sync tmux API used by runtime restore");
 		},
-		isSessionAliveAsync: async (sessionName: string) => st.alive.has(sessionName),
+		isSessionAliveAsync: async (sessionName: string) =>
+			st.alive.has(sessionName),
 	} as unknown as TmuxIntegration;
 }
 

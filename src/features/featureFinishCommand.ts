@@ -143,7 +143,7 @@ export async function runFeatureFinish(
 				if (!snapshot) {
 					progress.report({ message: "Checking integration…" });
 					await deps.featureStateCoordinator.reconcile();
-					 snapshot = deps.featureStateCoordinator.getSnapshot(feature.id);
+					snapshot = deps.featureStateCoordinator.getSnapshot(feature.id);
 				}
 				if (snapshot?.integration.status === "unknown") {
 					progress.report({ message: "Refreshing integration evidence…" });
@@ -194,28 +194,28 @@ export async function runFeatureFinish(
 									status: "blocked",
 									message: `Removed worktree residue at ${residue.worktreePath}. Run Finish Feature again to remove the Agent Space record.`,
 								};
-} else {
-							const reason = removal?.reason ?? "unknown error";
-							const suggestedCommand = removal?.suggestedCommand;
-							const message = suggestedCommand
-								? `Could not remove worktree residue: ${reason}\n\nRemove it with:\n${suggestedCommand}`
-								: `Could not remove worktree residue: ${reason}`;
-							const actions = [
-								...(suggestedCommand && deps.openTerminalWithCommand
-									? ["Run command in terminal"]
-									: []),
-								...(suggestedCommand && ui.copyToClipboard
-									? ["Copy command"]
-									: []),
-							];
-							const action = await ui.showErrorMessage(message, ...actions);
-							if (action === "Run command in terminal" && suggestedCommand) {
-								deps.openTerminalWithCommand?.(suggestedCommand);
-												} else if (action === "Copy command" && suggestedCommand) {
-													void ui.copyToClipboard?.(suggestedCommand);
-												}
-												return { status: "blocked", message };
-										}
+							} else {
+								const reason = removal?.reason ?? "unknown error";
+								const suggestedCommand = removal?.suggestedCommand;
+								const message = suggestedCommand
+									? `Could not remove worktree residue: ${reason}\n\nRemove it with:\n${suggestedCommand}`
+									: `Could not remove worktree residue: ${reason}`;
+								const actions = [
+									...(suggestedCommand && deps.openTerminalWithCommand
+										? ["Run command in terminal"]
+										: []),
+									...(suggestedCommand && ui.copyToClipboard
+										? ["Copy command"]
+										: []),
+								];
+								const action = await ui.showErrorMessage(message, ...actions);
+								if (action === "Run command in terminal" && suggestedCommand) {
+									deps.openTerminalWithCommand?.(suggestedCommand);
+								} else if (action === "Copy command" && suggestedCommand) {
+									void ui.copyToClipboard?.(suggestedCommand);
+								}
+								return { status: "blocked", message };
+							}
 						}
 					}
 					const message = `Cannot finish "${feature.name}" because safety is unknown:\n\n${assessment.reasons.join("\n\n")}\n\nNo worktree, session or metadata was removed.`;
@@ -271,11 +271,9 @@ export async function runFeatureFinish(
 				progress.report({ message: "Checking worktree safety…" });
 				let current: FeatureFinishAssessment;
 				try {
-					current = await (deps.assess ?? assessFeatureFinish)(
-						ctx,
-						feature,
-						{ integration: snapshot.integration },
-					);
+					current = await (deps.assess ?? assessFeatureFinish)(ctx, feature, {
+						integration: snapshot.integration,
+					});
 				} catch (error) {
 					const message = `Feature "${feature.name}" could not be reassessed after stopping sessions: ${messageOf(error)}. No worktree or metadata was removed.`;
 					void ui.showErrorMessage(message);
@@ -298,15 +296,18 @@ export async function runFeatureFinish(
 					progress.report({ message: "Removing worktrees…" });
 					try {
 						const featureRemoval =
-							await ctx.featureManager.removeFeatureWorktreeForFinish(feature.id, {
-								force: featureRemovalPlan.force,
-								...(featureRemovalPlan.acceptedPullRequestHeadSha
-									? {
-											acceptedPullRequestHeadSha:
-												featureRemovalPlan.acceptedPullRequestHeadSha,
-										}
-									: {}),
-							});
+							await ctx.featureManager.removeFeatureWorktreeForFinish(
+								feature.id,
+								{
+									force: featureRemovalPlan.force,
+									...(featureRemovalPlan.acceptedPullRequestHeadSha
+										? {
+												acceptedPullRequestHeadSha:
+													featureRemovalPlan.acceptedPullRequestHeadSha,
+											}
+										: {}),
+								},
+							);
 						if (!featureRemoval.deleted) {
 							const message = `Feature "${feature.name}" was not finished:\n\n${featureRemoval.reasons.join("\n")}\n\nAll Agent Space records were preserved.`;
 							void ui.showErrorMessage(message);

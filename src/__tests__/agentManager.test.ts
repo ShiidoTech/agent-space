@@ -346,8 +346,9 @@ describe("AgentManager", () => {
 				await manager.removeAgentWorktreeForFinish(agent.id, "f1", false),
 			).toMatchObject({ removed: false });
 			expect(
-				mockExecFile.mock.calls.some(([file, args]) =>
-					file === "git" && Array.isArray(args) && args.includes("--force"),
+				mockExecFile.mock.calls.some(
+					([file, args]) =>
+						file === "git" && Array.isArray(args) && args.includes("--force"),
 				),
 			).toBe(false);
 			expect(manager.getAgents("f1")).toHaveLength(1);
@@ -486,7 +487,10 @@ describe("AgentManager", () => {
 			const agents = manager.getAgentsReadModel(feature.id);
 
 			expect(mockExecSync).not.toHaveBeenCalled();
-			expect(agents[0]).toMatchObject({ id: agent.id, sessionId: "ses_startup" });
+			expect(agents[0]).toMatchObject({
+				id: agent.id,
+				sessionId: "ses_startup",
+			});
 		});
 
 		it("collapses repeated observation of the same agent within one window to a single provider read", () => {

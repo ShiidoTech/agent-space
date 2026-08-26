@@ -1,4 +1,7 @@
-import type { AgentAttentionAlert, AttentionWatchedAgent } from "./agentAttentionNotifier";
+import type {
+	AgentAttentionAlert,
+	AttentionWatchedAgent,
+} from "./agentAttentionNotifier";
 import { AgentAttentionNotifier } from "./agentAttentionNotifier";
 
 export interface AgentAttentionMonitorDeps {

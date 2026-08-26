@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import type { AgentFocusService } from "../agents/agentFocusService";
+import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import {
 	type AgentCardPresentation,
 	presentAgentCard,
@@ -10,11 +10,11 @@ import { TERMINAL_COLOR_HEX } from "../constants/colors";
 import {
 	ICON_ADD_AGENT,
 	ICON_ADD_SERVICE,
+	ICON_BRAND,
 	ICON_CHEVRON_DOWN,
 	ICON_CHEVRON_RIGHT,
 	ICON_DELETE,
 	ICON_GIT,
-	ICON_BRAND,
 	ICON_RESTART,
 	ICON_STOP,
 } from "../constants/icons";
@@ -618,8 +618,12 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	): { label: string; tone: string; detail?: string } | undefined {
 		return presentSidebarFeatureSummary(
 			snapshot,
-			this.featureStateCoordinator.hasFeatureDeepObservation(snapshot.feature.id),
-			this.featureStateCoordinator.getProjectReferenceHealth(snapshot.projectId),
+			this.featureStateCoordinator.hasFeatureDeepObservation(
+				snapshot.feature.id,
+			),
+			this.featureStateCoordinator.getProjectReferenceHealth(
+				snapshot.projectId,
+			),
 		);
 	}
 

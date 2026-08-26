@@ -151,7 +151,9 @@ export async function assessFeatureFinish(
 		await check(
 			"agent",
 			agent.worktreePath,
-			registered ? branch : ctx.agentManager.getAgentBranchName(feature, agent.id),
+			registered
+				? branch
+				: ctx.agentManager.getAgentBranchName(feature, agent.id),
 			activeFeatureBranch ?? feature.branch,
 			agent.id,
 		);
@@ -216,7 +218,8 @@ async function resolveFeatureRetentionBranch(
 			.split(/\r?\n/u)
 			.map((ref) => ref.trim())
 			.filter((ref) => ref.length > 0 && candidates.has(ref));
-		if (declaredBranch && available.includes(declaredBranch)) return declaredBranch;
+		if (declaredBranch && available.includes(declaredBranch))
+			return declaredBranch;
 		const derived = available.filter((ref) => ref !== declaredBranch);
 		return derived.length === 1 ? derived[0] : undefined;
 	}
@@ -230,7 +233,8 @@ async function resolveFeatureRetentionBranch(
 			resolved.push(candidate);
 		}
 	}
-	if (declaredBranch && resolved.includes(declaredBranch)) return declaredBranch;
+	if (declaredBranch && resolved.includes(declaredBranch))
+		return declaredBranch;
 	return resolved.length === 1 ? resolved[0] : undefined;
 }
 
@@ -272,9 +276,12 @@ async function observeRegisteredBranch(
 	// If both refs resolve to the same commit, the declared branch is observed
 	// without guessing; otherwise the result remains unknown.
 	if (declaredBranch) {
-		const head = await ctx.gitClient.read(["rev-parse", "--verify", "HEAD^{commit}"], {
-			cwd: worktreePath,
-		});
+		const head = await ctx.gitClient.read(
+			["rev-parse", "--verify", "HEAD^{commit}"],
+			{
+				cwd: worktreePath,
+			},
+		);
 		const declared = await ctx.gitClient.read(
 			["rev-parse", "--verify", `${declaredBranch}^{commit}`],
 			{ cwd: ctx.project.repoPath },
@@ -453,10 +460,7 @@ export function parseRegisteredWorktreeBranches(
 }
 
 function isSafeBranchName(value: string): boolean {
-	return (
-		/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value) &&
-		!value.includes("..")
-	);
+	return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(value) && !value.includes("..");
 }
 
 export type SessionStopVerification =

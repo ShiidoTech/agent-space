@@ -162,16 +162,20 @@ describe("CodexSessionProvider", () => {
 		]);
 		const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
 
-		expect(provider.discoverSessionCandidates(cwd, new Set()).map((s) => s.sessionId)).toEqual([
-			"session-a",
-		]);
+		expect(
+			provider
+				.discoverSessionCandidates(cwd, new Set())
+				.map((s) => s.sessionId),
+		).toEqual(["session-a"]);
 
 		writeSessionFile("2026/03/04/session-b.jsonl", [
 			sessionMeta("session-b", { cwd }),
 		]);
-		expect(provider.discoverSessionCandidates(cwd, new Set(["session-a"])).map((s) => s.sessionId)).toEqual([
-			"session-b",
-		]);
+		expect(
+			provider
+				.discoverSessionCandidates(cwd, new Set(["session-a"]))
+				.map((s) => s.sessionId),
+		).toEqual(["session-b"]);
 	});
 
 	describe("findSessionFile", () => {
@@ -502,9 +506,12 @@ describe("CodexSessionProvider", () => {
 				path.join(profileDir, "session_index.jsonl"),
 				`${JSON.stringify({ id: "sess-noname", thread_name: "" })}\n`,
 			);
-			fs.mkdirSync(path.dirname(path.join(sessionsDir, "2026/03/04/rollout-noname.jsonl")), {
-				recursive: true,
-			});
+			fs.mkdirSync(
+				path.dirname(path.join(sessionsDir, "2026/03/04/rollout-noname.jsonl")),
+				{
+					recursive: true,
+				},
+			);
 			fs.writeFileSync(
 				path.join(sessionsDir, "2026/03/04/rollout-noname.jsonl"),
 				[
@@ -516,9 +523,9 @@ describe("CodexSessionProvider", () => {
 				].join("\n"),
 			);
 
-			expect(new CodexSessionProvider(sessionsDir).readName("sess-noname")).toBe(
-				"Provision the staging database",
-			);
+			expect(
+				new CodexSessionProvider(sessionsDir).readName("sess-noname"),
+			).toBe("Provision the staging database");
 		});
 	});
 });

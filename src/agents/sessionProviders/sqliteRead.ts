@@ -7,6 +7,40 @@ const execFileAsync = promisify(execFile);
 /** Cap aligned across the sync and async CLI paths (truncated JSON fails parse -> []). */
 const CLI_MAX_BUFFER = 4 * 1024 * 1024;
 
+/** How long a failed db-path resolution is cached before retrying (ms). */
+const DB_PATH_RETRY_TTL = 60_000;
+
+// ---------------------------------------------------------------------------
+// Fallback observability — one-shot events
+// ---------------------------------------------------------------------------
+
+export type FallbackEventKind =
+	| "sqlite_module_unavailable"
+	| "db_missing"
+	| "open_failed"
+	| "query_failed";
+
+export type FallbackReporter = (kind: FallbackEventKind) => void;
+
+let fallbackReporter: FallbackReporter | null = null;
+const reportedKinds = new Set<FallbackEventKind>();
+
+/** Register a one-shot reporter for fallback events. */
+export function setFallbackReporter(reporter: FallbackReporter): void {
+	fallbackReporter = reporter;
+}
+
+/** Reset one-shot state so the same event can fire again.  Test-only. */
+export function resetFallbackReporting(): void {
+	reportedKinds.clear();
+}
+
+function reportFallback(kind: FallbackEventKind): void {
+	if (reportedKinds.has(kind)) return;
+	reportedKinds.add(kind);
+	if (fallbackReporter) fallbackReporter(kind);
+}
+
 export interface SqliteRow {
 	[column: string]: unknown;
 }
@@ -54,6 +88,7 @@ export function loadSqlite():
 		};
 	} catch {
 		sqliteModule = undefined;
+		reportFallback("sqlite_module_unavailable");
 	}
 	return sqliteModule;
 }
@@ -81,14 +116,23 @@ export class SqliteReadOnlyDb {
 
 	private open(): SqliteDatabaseLike | null {
 		if (this.db) return this.db;
-		if (!this.dbPath) return null;
+		if (!this.dbPath) {
+			reportFallback("db_missing");
+			return null;
+		}
 
 		const sqlite =
 			this.sqliteOverride !== undefined
 				? (this.sqliteOverride ?? undefined)
 				: loadSqlite();
-		if (!sqlite) return null;
-		if (!existsSync(this.dbPath)) return null;
+		if (!sqlite) {
+			reportFallback("sqlite_module_unavailable");
+			return null;
+		}
+		if (!existsSync(this.dbPath)) {
+			reportFallback("db_missing");
+			return null;
+		}
 
 		try {
 			this.db = new sqlite.DatabaseSync(this.dbPath, { readOnly: true });
@@ -98,6 +142,7 @@ export class SqliteReadOnlyDb {
 			return this.db;
 		} catch {
 			// Transient (locked/compacted file): fall back and retry next time.
+			reportFallback("open_failed");
 			try {
 				this.db?.close();
 			} catch {
@@ -124,6 +169,7 @@ export class SqliteReadOnlyDb {
 				return [];
 			}
 		}
+		reportFallback("query_failed");
 		return [];
 	}
 
@@ -143,6 +189,7 @@ export class SqliteReadOnlyDb {
 				return [];
 			}
 		}
+		reportFallback("query_failed");
 		return [];
 	}
 
@@ -175,15 +222,23 @@ function interpolate(sql: string, params: unknown[]): string {
 	});
 }
 
-let cachedOpenCodeDbPath: string | undefined | null = null;
-
 /**
- * Resolve the OpenCode SQLite database path through `opencode db path` exactly
- * once. The CLI is the source of truth for the location, but the result is
- * cached so no read path ever re-runs it.
+ * Resolve the OpenCode SQLite database path through `opencode db path`.
+ * A successful result is cached for the process lifetime.  A failed attempt is
+ * cached for {@link DB_PATH_RETRY_TTL} ms so the extension can recover if
+ * opencode is installed after the extension host starts.
  */
+let cachedOpenCodeDbPath: string | undefined | null = null;
+let lastDbPathFailureAt = 0;
+
 export function resolveOpenCodeDbPath(): string | undefined {
 	if (cachedOpenCodeDbPath !== null) return cachedOpenCodeDbPath;
+	if (
+		lastDbPathFailureAt > 0 &&
+		Date.now() - lastDbPathFailureAt < DB_PATH_RETRY_TTL
+	) {
+		return undefined;
+	}
 	try {
 		const raw = execFileSync("opencode", ["db", "path"], {
 			encoding: "utf-8",
@@ -192,8 +247,10 @@ export function resolveOpenCodeDbPath(): string | undefined {
 			stdio: ["ignore", "pipe", "pipe"],
 		}).trim();
 		cachedOpenCodeDbPath = raw || undefined;
+		lastDbPathFailureAt = 0;
 	} catch {
 		cachedOpenCodeDbPath = undefined;
+		lastDbPathFailureAt = Date.now();
 	}
 	return cachedOpenCodeDbPath;
 }

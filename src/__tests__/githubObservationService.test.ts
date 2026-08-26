@@ -22,7 +22,11 @@ describe("GitHubObservationService invalidation", () => {
 						urlKind: "https" as const,
 					},
 				},
-				auth: { state: "authenticated" as const, source: "env" as const, token: "test" },
+				auth: {
+					state: "authenticated" as const,
+					source: "env" as const,
+					token: "test",
+				},
 			}),
 			observe: async () => {
 				const call = ++calls;

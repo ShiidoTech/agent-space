@@ -1,22 +1,22 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
-import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { AgentFocusService } from "./agents/agentFocusService";
-import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor";
 import { collectWatchedAgents } from "./agents/attention/agentAttentionCollector";
+import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor";
+import { CodingToolRegistry } from "./agents/codingToolRegistry";
+import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
-import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
+import { configureAgentSpaceDiagnostics } from "./diagnostics/agentSpaceDiagnostics";
 import {
 	classifyLiveTmuxSession,
 	findCleanupCandidates,
 	shouldCleanupSession,
 } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
-import { configureAgentSpaceDiagnostics } from "./diagnostics/agentSpaceDiagnostics";
 import { runFeatureFinish } from "./features/featureFinishCommand";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
@@ -63,7 +63,9 @@ function shortSessionId(sessionId: string): string {
 export async function activate(
 	context: vscode.ExtensionContext,
 ): Promise<void> {
-	const diagnostics = vscode.window.createOutputChannel("Agent Space Diagnostics");
+	const diagnostics = vscode.window.createOutputChannel(
+		"Agent Space Diagnostics",
+	);
 	context.subscriptions.push(diagnostics);
 	configureAgentSpaceDiagnostics((message) => diagnostics.appendLine(message));
 	const prerequisites = new PrerequisiteChecker();
@@ -138,7 +140,10 @@ export async function activate(
 	// evidence and provider attention are fetched after activation/on focus.
 	// Do not await this: activation must not hold the Extension Host hostage to
 	// an active provider observation.
-	setTimeout(() => void featureStateCoordinator.reconcilePresence(), 0).unref?.();
+	setTimeout(
+		() => void featureStateCoordinator.reconcilePresence(),
+		0,
+	).unref?.();
 
 	const defaultToolId = toolRegistry.getDefaultToolId();
 	const availableTools = toolRegistry.getAvailableTools();
@@ -575,8 +580,7 @@ export async function activate(
 	// coalesced and off the change stack.
 	const attentionMonitor = new AgentAttentionMonitor(
 		{
-			collect: () =>
-				collectWatchedAgents(projectManager.getAllContexts()),
+			collect: () => collectWatchedAgents(projectManager.getAllContexts()),
 			onAlert: (alert) => {
 				if (
 					!vscode.workspace
@@ -865,8 +869,7 @@ export async function activate(
 							const provisioned = await provisioning;
 							const reused = provisioned?.reusedExistingBranch;
 							if (reused) {
-								const baseName =
-									ctx.featureManager.getBaseBranchName();
+								const baseName = ctx.featureManager.getBaseBranchName();
 								const relation = reused.relation;
 								const detail =
 									relation.status === "unknown"
@@ -874,7 +877,10 @@ export async function activate(
 										: relation.status === "current"
 											? `Branch ${provisioned.branch} already existed and was reused; it matches ${baseName}.`
 											: `Branch ${provisioned.branch} already existed and was reused; ${relation.status === "diverged" ? `${relation.ahead} ahead and ${relation.behind} behind` : relation.status === "ahead" ? `${relation.ahead} ahead` : `${relation.behind} behind`} ${baseName}.`;
-								if (relation.status === "ahead" || relation.status === "diverged") {
+								if (
+									relation.status === "ahead" ||
+									relation.status === "diverged"
+								) {
 									vscode.window.showWarningMessage(detail);
 								} else {
 									vscode.window.showInformationMessage(detail);
@@ -1389,23 +1395,22 @@ export async function activate(
 								{ forceNewWindow: true },
 							);
 						},
-removeWorktreeResidue: async (worktreePath) => {
-						const result = await ctx.featureManager.removeWorktreeResidue(
-							worktreePath,
-						);
-						return {
-							removed: result.deleted,
-							reason: result.reasons.join(" ") || undefined,
-							suggestedCommand: result.suggestedCommand,
-						};
-					},
-					openTerminalWithCommand: (command) => {
-						const terminal = vscode.window.createTerminal({
-							name: "Agent Space: remove worktree residue",
-						});
-						terminal.show();
-						terminal.sendText(command);
-					},
+						removeWorktreeResidue: async (worktreePath) => {
+							const result =
+								await ctx.featureManager.removeWorktreeResidue(worktreePath);
+							return {
+								removed: result.deleted,
+								reason: result.reasons.join(" ") || undefined,
+								suggestedCommand: result.suggestedCommand,
+							};
+						},
+						openTerminalWithCommand: (command) => {
+							const terminal = vscode.window.createTerminal({
+								name: "Agent Space: remove worktree residue",
+							});
+							terminal.show();
+							terminal.sendText(command);
+						},
 					},
 					{
 						showInformationMessage: (message) =>

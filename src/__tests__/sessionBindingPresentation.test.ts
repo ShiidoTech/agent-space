@@ -22,7 +22,10 @@ describe("presentSessionBinding", () => {
 
 	it("shows no binding badge for a done agent, even if its old binding is persisted", () => {
 		expect(
-			presentSessionBinding(binding("unverified", "Session disappeared"), "done"),
+			presentSessionBinding(
+				binding("unverified", "Session disappeared"),
+				"done",
+			),
 		).toBeNull();
 	});
 

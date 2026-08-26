@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
-	type AttentionWatchedAgent,
 	AgentAttentionNotifier,
+	type AttentionWatchedAgent,
 } from "../agents/attention/agentAttentionNotifier";
 
 function agent(

@@ -911,8 +911,10 @@ describe("SessionNameSyncer", () => {
 		it("serializes overlapping ticks while a pass is in flight", async () => {
 			vi.useFakeTimers();
 			try {
-				const { projectManager, agentManager } =
-					createTestProjectManager(tmpDir, [feature]);
+				const { projectManager, agentManager } = createTestProjectManager(
+					tmpDir,
+					[feature],
+				);
 				const agent = agentManager.createAgent(feature);
 				if (!agent.sessionId) throw new Error("expected session id");
 
@@ -943,13 +945,11 @@ describe("SessionNameSyncer", () => {
 				await vi.advanceTimersByTimeAsync(50);
 				expect(readNameAsyncCalls).toBe(1);
 
-				resolveTitle!("async-in-flight");
+				resolveTitle?.("async-in-flight");
 				await vi.advanceTimersByTimeAsync(0);
 				await vi.runAllTicks();
 
-				expect(agentManager.getAgents("f1")[0]?.name).toBe(
-					"async-in-flight",
-				);
+				expect(agentManager.getAgents("f1")[0]?.name).toBe("async-in-flight");
 				syncer.dispose();
 			} finally {
 				vi.useRealTimers();

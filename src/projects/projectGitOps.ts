@@ -1,4 +1,4 @@
-import { stat, readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import * as path from "node:path";
 import type { GitReader } from "../git/gitClient";
 import {
@@ -519,7 +519,9 @@ export async function assessWorktreeBranchDeletion(
 		deletable: true,
 		reasons: safety.reasons,
 		...(hasDataLoss ? { dataLoss } : {}),
-		...(foreign ? { foreign: { ...(lastActivity ? { lastActivity } : {}) } } : {}),
+		...(foreign
+			? { foreign: { ...(lastActivity ? { lastActivity } : {}) } }
+			: {}),
 	};
 }
 
@@ -547,10 +549,9 @@ async function observeForeignLastActivity(
 		// No gitdir pointer or unreadable index: commit date may still apply.
 	}
 	try {
-		const committed = await git.read(
-			["log", "-1", "--format=%ct", branchRef],
-			{ cwd: repoRoot },
-		);
+		const committed = await git.read(["log", "-1", "--format=%ct", branchRef], {
+			cwd: repoRoot,
+		});
 		if (committed.exitCode === 0 && !committed.error) {
 			const seconds = Number.parseInt(committed.stdout.trim(), 10);
 			if (Number.isSafeInteger(seconds) && seconds > 0) {
@@ -661,12 +662,7 @@ export async function deleteWorktreeBranch(
 		(assessment.dataLoss?.dirtyFiles?.length ?? 0) > 0 &&
 		acknowledged?.dirtyFiles !== undefined;
 	const removal = await git.read(
-		[
-			"worktree",
-			"remove",
-			...(forceRemove ? ["--force"] : []),
-			worktreePath,
-		],
+		["worktree", "remove", ...(forceRemove ? ["--force"] : []), worktreePath],
 		{
 			cwd: repoRoot,
 		},

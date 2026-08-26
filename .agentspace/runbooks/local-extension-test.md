@@ -5,6 +5,7 @@ commands:
   - npm run typecheck
   - npm test -- --run
   - npm run compile
+  - npm run biome
   - npm run package
 ---
 
@@ -27,7 +28,7 @@ before experimenting with any alternative launch or install route.
    run.
 3. Validate the extension:
    `npm run typecheck`, `npm test -- --run`, `npm run compile`,
-   `npm run package`.
+   `npm run biome`, `npm run package`.
 4. `npm run package` is now self-verifying. It compiles, packages with the
    repository-pinned local `@vscode/vsce` (`node_modules/.bin/vsce`, no
    download, no Bun cache path) and then runs
@@ -61,15 +62,15 @@ fallback used and its independent verification; a successful fallback does not
 turn the failed canonical check green.
 
 - `Unable to connect to VS Code server: Error in request` /
-  `connect ECONNREFUSED /run/user/.../vscode-ipc-....sock`: an intermediate
-  theory was that a stale `VSCODE_IPC_HOOK_CLI` needed to be unset. Unsetting it
-  has also produced a misleading exit code `0` while printing that the command
-  was unavailable, so do not treat that workaround or its exit code as proof.
-  The validated fallback on 2026-08-12 was to resolve the active remote CLI
-  with `readlink -f "$(command -v code-insiders)"`, use the sibling
-  `../code-server-insiders` binary to install and list the extension, then
-  verify the installed bundle hash. This path is installation-specific: never
-  hard-code the Insiders commit directory.
+  `connect ECONNREFUSED /run/user/.../vscode-ipc-....sock`: the
+  `VSCODE_IPC_HOOK_CLI` env var points to a stale socket from a previous
+  session. Quick fix: repoint it to the newest socket:
+  `export VSCODE_IPC_HOOK_CLI=$(ls -t /run/user/1000/vscode-ipc-*.sock | head -1)`.
+  If that does not work, the validated fallback on 2026-08-12 was to resolve
+  the active remote CLI with `readlink -f "$(command -v code-insiders)"`, use
+  the sibling `../code-server-insiders` binary to install and list the
+  extension, then verify the installed bundle hash. This path is
+  installation-specific: never hard-code the Insiders commit directory.
 - If `npm run package` fails before `vsce package` runs (e.g. Bun cannot create
   its temporary/cache directory on a read-only filesystem during `bun install`),
   first record the failure. The network-based emergency fallback on 2026-08-12

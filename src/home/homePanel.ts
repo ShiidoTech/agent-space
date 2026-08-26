@@ -1,12 +1,12 @@
 import * as vscode from "vscode";
-import type { CodingToolRegistry } from "../agents/codingToolRegistry";
-import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import type { AgentFocusService } from "../agents/agentFocusService";
+import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import { presentAgentCard } from "../agents/observation/presentAgentCard";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_BRAND } from "../constants/icons";
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import {
 	type FeatureCockpitPresentation,
 	type FeatureCockpitPrimaryAction,
@@ -14,17 +14,17 @@ import {
 } from "../features/featureCockpitPresentation";
 import type { FeatureSnapshot } from "../features/featureSnapshot";
 import type { FeatureStateCoordinator } from "../features/featureStateCoordinator";
+import {
+	hasSharedProjectConfig,
+	loadSharedProjectConfig,
+	type ProjectConfig,
+	projectConfigTemplate,
+	pruneEmptyConfig,
+} from "../projects/projectConfig";
 import type {
 	ProjectContext,
 	ProjectManager,
 } from "../projects/projectManager";
-import {
-	type ProjectConfig,
-	hasSharedProjectConfig,
-	loadSharedProjectConfig,
-	projectConfigTemplate,
-	pruneEmptyConfig,
-} from "../projects/projectConfig";
 import type { GlobalStore } from "../storage/globalStore";
 import type { Agent, Feature, Service } from "../types";
 
@@ -362,10 +362,7 @@ export class HomePanel {
 				run("agentSpace.openProject", message.projectId as string);
 				break;
 			case "showProblems":
-				run(
-					"agentSpace.openProblems",
-					message.projectId as string | undefined,
-				);
+				run("agentSpace.openProblems", message.projectId as string | undefined);
 				break;
 			case "showProjectSettings":
 				run("agentSpace.openProjectSettings", message.projectId as string);
@@ -979,12 +976,16 @@ export class HomePanel {
 		if (relation.status === "current") {
 			return `<span class="project-base-chip" title="Branch ${this.escapeHtml(feature.branch)} already existed and matches the base branch">reused branch</span>`;
 		}
-		const detail = relation.status === "diverged"
-			? `${relation.ahead} ahead &middot; ${relation.behind} behind`
-			: relation.status === "ahead"
-				? `${relation.ahead} ahead`
-				: `${relation.behind} behind`;
-		const tone = relation.status === "diverged" || relation.status === "ahead" ? "error" : "warning";
+		const detail =
+			relation.status === "diverged"
+				? `${relation.ahead} ahead &middot; ${relation.behind} behind`
+				: relation.status === "ahead"
+					? `${relation.ahead} ahead`
+					: `${relation.behind} behind`;
+		const tone =
+			relation.status === "diverged" || relation.status === "ahead"
+				? "error"
+				: "warning";
 		return `<span class="project-base-chip project-base-chip--${tone}" title="Branch ${this.escapeHtml(feature.branch)} already existed when this feature was created; the existing branch was reused and its relation to base is ${detail}">reused &middot; ${detail}</span>`;
 	}
 
@@ -1041,8 +1042,7 @@ export class HomePanel {
 				.join("");
 			const totals = contexts.reduce(
 				(acc, ctx) => {
-					const summary =
-						this.featureStateCoordinator.getProjectSummary(ctx);
+					const summary = this.featureStateCoordinator.getProjectSummary(ctx);
 					acc.activeFeatures += summary.activeFeatureCount;
 					acc.agents += summary.agentsActive;
 					acc.scripts += summary.servicesActive;
@@ -1128,7 +1128,7 @@ export class HomePanel {
 				const isBase = snapshot.feature.id.startsWith("base:");
 				const featureLabel = isBase
 					? `${ctx.project.name} · base`
-					: (snapshot.feature.name || snapshot.feature.branch);
+					: snapshot.feature.name || snapshot.feature.branch;
 				const openTarget = isBase
 					? `showProject('${ctx.project.id}')`
 					: `openFeature('${snapshot.feature.id}')`;

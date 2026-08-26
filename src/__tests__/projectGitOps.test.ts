@@ -9,7 +9,7 @@ vi.mock("node:fs/promises", () => ({
 }));
 
 import { execFile } from "node:child_process";
-import { stat, readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import type { GitReader, GitReadResult } from "../git/gitClient";
 import {
 	assessWorktreeBranchDeletion,

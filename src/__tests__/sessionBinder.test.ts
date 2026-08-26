@@ -288,7 +288,7 @@ describe("SessionBinder", () => {
 		const second = binder.reconcileAllAsync();
 		expect(second).toBe(first);
 
-		resolveScan!(sessionList);
+		resolveScan?.(sessionList);
 		await first;
 
 		expect(scanCount).toBe(1);

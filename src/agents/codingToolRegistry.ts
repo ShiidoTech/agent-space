@@ -18,8 +18,8 @@ import {
 	resolveClaudeProjectsDir,
 } from "./sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
-import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
 import { HermesSessionProvider } from "./sessionProviders/hermesSessionProvider";
+import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
 
 const claudeSessionAdapter = new ClaudeSessionProvider();
 const codexSessionAdapter = new CodexSessionProvider();

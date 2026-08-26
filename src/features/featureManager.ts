@@ -501,10 +501,12 @@ export class FeatureManager {
 		baseBranch: string,
 	): import("../types").ReusedBranchRelation {
 		try {
-			return parseReusedBranchRelation(this.git(
-				`git rev-list --left-right --count "${branch}...${baseBranch}"`,
-				this.repoRoot,
-			));
+			return parseReusedBranchRelation(
+				this.git(
+					`git rev-list --left-right --count "${branch}...${baseBranch}"`,
+					this.repoRoot,
+				),
+			);
 		} catch (error) {
 			return {
 				status: "unknown",
@@ -776,7 +778,12 @@ export class FeatureManager {
 			try {
 				const relationResult = await execFileAsync(
 					"git",
-					["rev-list", "--left-right", "--count", `${expectedBranch}...${baseBranch}`],
+					[
+						"rev-list",
+						"--left-right",
+						"--count",
+						`${expectedBranch}...${baseBranch}`,
+					],
 					{ cwd: this.repoRoot, encoding: "utf8" },
 				);
 				relation = parseReusedBranchRelation(String(relationResult.stdout));
@@ -797,7 +804,11 @@ export class FeatureManager {
 			// previously finished feature). Reuse it instead of failing, and
 			// surface how far behind the base branch it has drifted.
 			const worktreeStep = afterBase.provisioning.steps[1];
-			worktreeStep.label = reusedBranchLabel(expectedBranch, baseBranch, relation);
+			worktreeStep.label = reusedBranchLabel(
+				expectedBranch,
+				baseBranch,
+				relation,
+			);
 		} else {
 			afterBase.createdFromSha = String(baseResult.stdout).trim();
 		}
@@ -825,7 +836,10 @@ export class FeatureManager {
 		);
 		if (branchExists) {
 			completed.reusedExistingBranch = {
-				relation: relation ?? { status: "unknown", reason: "relation_not_observed" },
+				relation: relation ?? {
+					status: "unknown",
+					reason: "relation_not_observed",
+				},
 			};
 		}
 		completed.provisioning.state = "ready";
@@ -937,7 +951,11 @@ export class FeatureManager {
 			const relation = this.reusedBranchRelation(feature.branch, baseBranch);
 			feature.reusedExistingBranch = { relation };
 			feature.createdFromSha = undefined;
-			worktreeStep.label = reusedBranchLabel(feature.branch, baseBranch, relation);
+			worktreeStep.label = reusedBranchLabel(
+				feature.branch,
+				baseBranch,
+				relation,
+			);
 			this.saveAndNotify();
 			execSync(
 				`git worktree add "${feature.worktreePath}" "${feature.branch}"`,
@@ -963,7 +981,12 @@ export class FeatureManager {
 	private async runGit(
 		argv: readonly string[],
 		cwd: string,
-	): Promise<{ stdout: string; stderr: string; exitCode: number | null; error?: Error }> {
+	): Promise<{
+		stdout: string;
+		stderr: string;
+		exitCode: number | null;
+		error?: Error;
+	}> {
 		try {
 			const { stdout, stderr } = await execFileAsync("git", [...argv], {
 				cwd,
@@ -993,7 +1016,10 @@ export class FeatureManager {
 	 */
 	async getDeletionSafety(feature: Feature) {
 		const branches = await this.reconcileFeatureBranchesAsync(feature);
-		const checkedOutBranch = await this.resolveDeletionBranch(feature, branches);
+		const checkedOutBranch = await this.resolveDeletionBranch(
+			feature,
+			branches,
+		);
 		return checkWorktreeDeletionSafety({
 			repoRoot: this.repoRoot,
 			worktreeBase: this.worktreeBase,
@@ -1090,8 +1116,15 @@ export class FeatureManager {
 		);
 		const branch = symbolic.stdout.trim();
 		if (symbolic.exitCode === 0 && !symbolic.error && branch) {
-			const link = feature.branchLinks?.find((candidate) => candidate.ref === branch);
-			return { status: "known", ref: branch, linked: Boolean(link), ...(link ? { role: link.role } : {}) };
+			const link = feature.branchLinks?.find(
+				(candidate) => candidate.ref === branch,
+			);
+			return {
+				status: "known",
+				ref: branch,
+				linked: Boolean(link),
+				...(link ? { role: link.role } : {}),
+			};
 		}
 		const head = await this.runGit(
 			["rev-parse", "--verify", "HEAD^{commit}"],
@@ -1103,7 +1136,8 @@ export class FeatureManager {
 		}
 		return {
 			status: "unknown",
-			reason: symbolic.error?.message ?? "The worktree branch could not be observed.",
+			reason:
+				symbolic.error?.message ?? "The worktree branch could not be observed.",
 		};
 	}
 
@@ -1111,13 +1145,30 @@ export class FeatureManager {
 		feature: Feature,
 		checkout: FeatureBranchCheckoutObservation,
 	): Promise<{ primary: string; continuation: string } | undefined> {
-		if (checkout.status !== "known" || checkout.ref !== feature.branch) return undefined;
-		const transition = await this.recentCheckoutIntoAsync(feature, checkout.ref);
-		if (!transition || !branchMatchesFeatureName(transition.from, feature.name) || branchMatchesFeatureName(checkout.ref, feature.name)) return undefined;
+		if (checkout.status !== "known" || checkout.ref !== feature.branch)
+			return undefined;
+		const transition = await this.recentCheckoutIntoAsync(
+			feature,
+			checkout.ref,
+		);
+		if (
+			!transition ||
+			!branchMatchesFeatureName(transition.from, feature.name) ||
+			branchMatchesFeatureName(checkout.ref, feature.name)
+		)
+			return undefined;
 		const previousSha = await this.resolveBranchAsync(transition.from);
 		const currentSha = await this.resolveBranchAsync(checkout.ref);
-		const previousUpstreamSha = await this.resolveUpstreamAsync(transition.from);
-		if (!previousSha || !currentSha || previousUpstreamSha !== previousSha || !(await this.isAncestorAsync(previousSha, currentSha))) return undefined;
+		const previousUpstreamSha = await this.resolveUpstreamAsync(
+			transition.from,
+		);
+		if (
+			!previousSha ||
+			!currentSha ||
+			previousUpstreamSha !== previousSha ||
+			!(await this.isAncestorAsync(previousSha, currentSha))
+		)
+			return undefined;
 		return { primary: transition.from, continuation: checkout.ref };
 	}
 
@@ -1127,12 +1178,19 @@ export class FeatureManager {
 		links: readonly FeatureBranchLink[],
 	): Promise<boolean> {
 		const transition = await this.recentCheckoutIntoAsync(feature, checkoutRef);
-		if (!transition || !links.some((link) => link.ref === transition.from)) return false;
-		const primary = feature.primaryBranchRef ?? links.find((link) => link.role === "primary")?.ref;
+		if (!transition || !links.some((link) => link.ref === transition.from))
+			return false;
+		const primary =
+			feature.primaryBranchRef ??
+			links.find((link) => link.role === "primary")?.ref;
 		if (!primary) return false;
 		const primarySha = await this.resolveBranchAsync(primary);
 		const checkoutSha = await this.resolveBranchAsync(checkoutRef);
-		return Boolean(primarySha && checkoutSha && (await this.isAncestorAsync(primarySha, checkoutSha)));
+		return Boolean(
+			primarySha &&
+				checkoutSha &&
+				(await this.isAncestorAsync(primarySha, checkoutSha)),
+		);
 	}
 
 	private async recentCheckoutIntoAsync(
@@ -1145,34 +1203,53 @@ export class FeatureManager {
 		);
 		if (observed.exitCode !== 0 || observed.error) return undefined;
 		for (const message of observed.stdout.split(/\r?\n/u)) {
-			const match = /^checkout: moving from (.+) to (.+)$/u.exec(message.trim());
-			if (!match || match[2] !== toRef || !isSafeBranchName(match[1]) || !isSafeBranchName(match[2])) continue;
+			const match = /^checkout: moving from (.+) to (.+)$/u.exec(
+				message.trim(),
+			);
+			if (
+				!match ||
+				match[2] !== toRef ||
+				!isSafeBranchName(match[1]) ||
+				!isSafeBranchName(match[2])
+			)
+				continue;
 			return { from: match[1], to: match[2] };
 		}
 		return undefined;
 	}
 
-	private async resolveBranchAsync(branch: string): Promise<string | undefined> {
+	private async resolveBranchAsync(
+		branch: string,
+	): Promise<string | undefined> {
 		if (!isSafeBranchName(branch)) return undefined;
 		const observed = await this.runGit(
 			["rev-parse", "--verify", `refs/heads/${branch}^{commit}`],
 			this.repoRoot,
 		);
 		const sha = observed.stdout.trim();
-		return observed.exitCode === 0 && isCommitSha(sha) ? sha.toLowerCase() : undefined;
+		return observed.exitCode === 0 && isCommitSha(sha)
+			? sha.toLowerCase()
+			: undefined;
 	}
 
-	private async resolveUpstreamAsync(branch: string): Promise<string | undefined> {
+	private async resolveUpstreamAsync(
+		branch: string,
+	): Promise<string | undefined> {
 		if (!isSafeBranchName(branch)) return undefined;
 		const observed = await this.runGit(
 			["rev-parse", "--verify", `${branch}@{upstream}^{commit}`],
 			this.repoRoot,
 		);
 		const sha = observed.stdout.trim();
-		return observed.exitCode === 0 && isCommitSha(sha) ? sha.toLowerCase() : undefined;
+		return observed.exitCode === 0 && isCommitSha(sha)
+			? sha.toLowerCase()
+			: undefined;
 	}
 
-	private async isAncestorAsync(ancestorSha: string, descendantSha: string): Promise<boolean> {
+	private async isAncestorAsync(
+		ancestorSha: string,
+		descendantSha: string,
+	): Promise<boolean> {
 		const observed = await this.runGit(
 			["merge-base", "--is-ancestor", ancestorSha, descendantSha],
 			this.repoRoot,
@@ -1290,7 +1367,9 @@ export class FeatureManager {
 					this.repoRoot,
 				);
 				if (removal.exitCode !== 0 || removal.error) {
-					throw new Error(removal.stderr.trim() || "git worktree remove failed");
+					throw new Error(
+						removal.stderr.trim() || "git worktree remove failed",
+					);
 				}
 			} catch {
 				// Worktree may already be gone — but if it is still on disk,
@@ -1323,7 +1402,9 @@ export class FeatureManager {
 	}
 
 	/** Remove an explicitly reviewed directory that Git no longer registers. */
-	async removeWorktreeResidue(worktreePath: string): Promise<FeatureDeleteResult> {
+	async removeWorktreeResidue(
+		worktreePath: string,
+	): Promise<FeatureDeleteResult> {
 		if (!isWorktreePathSafe(worktreePath, this.worktreeBase)) {
 			return {
 				deleted: false,
@@ -1341,14 +1422,20 @@ export class FeatureManager {
 			}
 			inventory = observed.stdout;
 		} catch {
-			return { deleted: false, reasons: ["Git worktree inventory is unavailable."] };
+			return {
+				deleted: false,
+				reasons: ["Git worktree inventory is unavailable."],
+			};
 		}
 		const registered = inventory
 			.split(/\r?\n/u)
 			.filter((line) => line.startsWith("worktree "))
 			.map((line) => path.resolve(line.slice("worktree ".length)));
 		if (registered.includes(path.resolve(worktreePath))) {
-			return { deleted: false, reasons: ["The path is registered by Git again."] };
+			return {
+				deleted: false,
+				reasons: ["The path is registered by Git again."],
+			};
 		}
 		try {
 			await fs.promises.rm(worktreePath, { recursive: true, force: false });
@@ -1444,9 +1531,11 @@ function parseReusedBranchRelation(
 	) {
 		return { status: "unknown", reason: "invalid_relation_counts" };
 	}
-	if (normalizedAhead === 0 && behind === 0) return { status: "current", ahead: 0, behind: 0 };
+	if (normalizedAhead === 0 && behind === 0)
+		return { status: "current", ahead: 0, behind: 0 };
 	if (normalizedAhead === 0) return { status: "behind", ahead: 0, behind };
-	if (behind === 0) return { status: "ahead", ahead: normalizedAhead, behind: 0 };
+	if (behind === 0)
+		return { status: "ahead", ahead: normalizedAhead, behind: 0 };
 	return { status: "diverged", ahead: normalizedAhead, behind };
 }
 
@@ -1462,7 +1551,12 @@ function reusedBranchLabel(
 	return `Reusing existing branch ${branch} (${formatRelation(relation)} ${base})`;
 }
 
-function formatRelation(relation: Exclude<import("../types").ReusedBranchRelation, { status: "current" } | { status: "unknown" }>): string {
+function formatRelation(
+	relation: Exclude<
+		import("../types").ReusedBranchRelation,
+		{ status: "current" } | { status: "unknown" }
+	>,
+): string {
 	if (relation.status === "behind") return `${relation.behind} commits behind`;
 	if (relation.status === "ahead") return `${relation.ahead} commits ahead`;
 	return `${relation.ahead} commits ahead, ${relation.behind} behind`;

@@ -18,7 +18,7 @@ project.
 - **Package manager:** `bun` for the lockfile, `npm` scripts from `package.json`
   for the workflow. Do not introduce a competing lockfile.
 - **Mandatory checks before opening a PR:** `npm run typecheck`,
-  `npm test -- --run`, `npm run compile`.
+  `npm test -- --run`, `npm run compile`, `npm run biome`.
 - **Canonical packaging command is `npm run package`** (wraps `vsce package`).
   Do not invoke `vsce` directly in the default path.
 - **Local delivery is mandatory for implementation work:** after the mandatory
@@ -35,6 +35,8 @@ project.
 ## Operational knowledge
 
 - Local install/verify workflow: `.agentspace/runbooks/local-extension-test.md`.
+- Provider session stores (schemas, readonly invariant, smoke test):
+  `.agentspace/runbooks/provider-session-stores.md`.
 - Prefer the repository's runbooks over reconstructing shell commands from
   memory; a workflow already exercised by the project is not something a fresh
   agent should rediscover.

@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { Disposable } from "vscode";
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
 import {
 	type GitObservation,
@@ -35,7 +36,6 @@ import {
 } from "../projects/referenceBranchHealth";
 import type { Agent, Feature, Service } from "../types";
 import { evaluateAttention } from "./attentionEvaluator";
-import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import {
 	createFeatureSnapshot,
 	type FeatureDeliveryObservation,
@@ -357,7 +357,8 @@ export class FeatureStateCoordinator implements Disposable {
 		for (const remote of this.referenceBranchRemotes.values())
 			remote.invalidate();
 		const projectIds = new Set<string>();
-		for (const snapshot of this.snapshots.values()) projectIds.add(snapshot.projectId);
+		for (const snapshot of this.snapshots.values())
+			projectIds.add(snapshot.projectId);
 		for (const id of projectIds) this.beginProjectObservation(id);
 	}
 
@@ -501,9 +502,7 @@ export class FeatureStateCoordinator implements Disposable {
 					const ctx = this.projectManager?.getContext(projectId);
 					if (!ctx || this.disposed) return;
 					const startedAt = Date.now();
-					agentSpaceDiagnostic(
-						`reconcile started scope=project:${projectId}`,
-					);
+					agentSpaceDiagnostic(`reconcile started scope=project:${projectId}`);
 					const generation = this.beginProjectObservation(projectId);
 					await this.refreshProjectRepositoryFacts(ctx, generation);
 					await this.reconcilePresence(projectId);
@@ -511,13 +510,8 @@ export class FeatureStateCoordinator implements Disposable {
 					// observation is still the current one. A mutation that arrived
 					// during the observation bumped the project generation, so a
 					// stale pass cannot revive a project invalidated mid-flight.
-					if (
-						this.isProjectObservationCurrent(projectId, generation)
-					) {
-						this.projectRepositoryObservedAt.set(
-							projectId,
-							Date.now(),
-						);
+					if (this.isProjectObservationCurrent(projectId, generation)) {
+						this.projectRepositoryObservedAt.set(projectId, Date.now());
 					}
 					agentSpaceDiagnostic(
 						`reconcile completed in ${Date.now() - startedAt}ms scope=project:${projectId}`,
@@ -573,16 +567,11 @@ export class FeatureStateCoordinator implements Disposable {
 					// follow-up pass works on the current read-model (a reload or
 					// mutation of features.json while the previous pass was in
 					// flight must be observed, not the stale capture).
-					const ctx =
-						this.projectManager?.findContextByFeatureId(featureId);
-					const resolved = this.projectManager?.resolveFeature(
-						featureId,
-					);
+					const ctx = this.projectManager?.findContextByFeatureId(featureId);
+					const resolved = this.projectManager?.resolveFeature(featureId);
 					if (!ctx || !resolved || this.disposed) return;
 					const startedAt = Date.now();
-					agentSpaceDiagnostic(
-						`reconcile started scope=feature:${featureId}`,
-					);
+					agentSpaceDiagnostic(`reconcile started scope=feature:${featureId}`);
 					// Capture the deep generation before any await: a mutation that
 					// lands while the shared repository reads below are in flight
 					// must supersede this pass, even though it hasn't reached
@@ -592,12 +581,8 @@ export class FeatureStateCoordinator implements Disposable {
 					const gen = this.beginDeepObservation(featureId);
 					const baseRef = await observeBaseRef(ctx);
 					const projectObservation =
-						await ctx.featureGitInspector.observeProject(
-							ctx.project.repoPath,
-						);
-					const tmuxSessions = this.observeTmuxRuntime(
-						this.projectManager!,
-					);
+						await ctx.featureGitInspector.observeProject(ctx.project.repoPath);
+					const tmuxSessions = this.observeTmuxRuntime(this.projectManager!);
 					const source: FeatureSnapshotSource = { status: "known" };
 					const isBaseFeature =
 						resolved.feature.id === `base:${ctx.project.id}`;
@@ -610,12 +595,7 @@ export class FeatureStateCoordinator implements Disposable {
 						projectObservation,
 						source,
 					);
-					this.commitDeep(
-						gen,
-						ctx.project.id,
-						resolved.feature,
-						snapshot,
-					);
+					this.commitDeep(gen, ctx.project.id, resolved.feature, snapshot);
 					agentSpaceDiagnostic(
 						`reconcile completed in ${Date.now() - startedAt}ms scope=feature:${featureId}`,
 					);
@@ -651,11 +631,7 @@ export class FeatureStateCoordinator implements Disposable {
 			: manager.getAllContexts();
 		for (const ctx of contexts) {
 			if (this.disposed) return;
-			const { features } = this.discoverProjectFeatures(
-				ctx,
-				undefined,
-				true,
-			);
+			const { features } = this.discoverProjectFeatures(ctx, undefined, true);
 			const seenIds = new Set(features.map((feature) => feature.id));
 			for (const snapshot of this.getProjectSnapshots(ctx.project.id)) {
 				if (seenIds.has(snapshot.feature.id)) continue;
@@ -682,8 +658,10 @@ export class FeatureStateCoordinator implements Disposable {
 							agent.tmuxSession,
 						),
 					),
-					serviceTmux: runtimeMap(services, tmuxSessions, (service) =>
-						service.tmuxSession,
+					serviceTmux: runtimeMap(
+						services,
+						tmuxSessions,
+						(service) => service.tmuxSession,
 					),
 				});
 				const gen = this.beginRuntimeObservation(feature.id);
@@ -808,11 +786,7 @@ export class FeatureStateCoordinator implements Disposable {
 					remoteName: normalizedReference.remoteName,
 				})
 				.then((health) =>
-					this.acceptReferenceHealth(
-						projectGeneration,
-						ctx.project.id,
-						health,
-					),
+					this.acceptReferenceHealth(projectGeneration, ctx.project.id, health),
 				)
 				.catch(() => undefined);
 		}
@@ -912,16 +886,13 @@ export class FeatureStateCoordinator implements Disposable {
 			this.featureDeepObservedAt.delete(featureId);
 		}
 		this.projectRepositoryObservedAt.delete(projectId);
-		this.referenceBranchRemotes.get(
-			this.projectManager?.getContext(projectId)?.project.repoPath ?? "",
-		)?.invalidate();
+		this.referenceBranchRemotes
+			.get(this.projectManager?.getContext(projectId)?.project.repoPath ?? "")
+			?.invalidate();
 	}
 
 	/** Whether the given project generation is still the current one. */
-	private isProjectObservationCurrent(
-		projectId: string,
-		gen: number,
-	): boolean {
+	private isProjectObservationCurrent(projectId: string, gen: number): boolean {
 		return this.projectGenerations.get(projectId) === gen;
 	}
 
@@ -1234,7 +1205,9 @@ export class FeatureStateCoordinator implements Disposable {
 				}
 			})
 			.catch((error) =>
-				console.warn(`[agentSpace] deferred GitHub observation failed: ${String(error)}`),
+				console.warn(
+					`[agentSpace] deferred GitHub observation failed: ${String(error)}`,
+				),
 			)
 			.finally(() => {
 				if (this.githubRefreshes.get(key) === refreshToken) {
@@ -1295,7 +1268,7 @@ export class FeatureStateCoordinator implements Disposable {
 	 */
 	private async observeGithub(
 		ctx: ProjectContext,
-		feature: Feature,
+		_feature: Feature,
 		deliveryBranch: string,
 		deliveryHeadSha: string | undefined,
 		activeHeadSha: string | undefined,
@@ -1438,7 +1411,8 @@ function inspectionBranchRef(
 				path.resolve(worktree.path) === path.resolve(feature.worktreePath) &&
 				worktree.branchRef,
 		);
-		if (checkout?.branchRef) return checkout.branchRef.replace(/^refs\/heads\//u, "");
+		if (checkout?.branchRef)
+			return checkout.branchRef.replace(/^refs\/heads\//u, "");
 	}
 	return feature.branch;
 }

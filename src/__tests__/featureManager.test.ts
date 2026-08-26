@@ -64,7 +64,8 @@ describe("FeatureManager", () => {
 			if (argv[0] === "rev-parse") {
 				const ref = argv[2] ?? "";
 				if (ref.includes("HEAD^{commit}")) return { stdout: featureSha };
-				if (ref.includes(`${activeBranch}^{commit}`)) return { stdout: featureSha };
+				if (ref.includes(`${activeBranch}^{commit}`))
+					return { stdout: featureSha };
 				if (ref.includes("^{commit}")) return { stdout: baseSha };
 				return {};
 			}
@@ -89,12 +90,15 @@ describe("FeatureManager", () => {
 			if (argv[0] === "rev-parse") {
 				const ref = argv[2] ?? "";
 				if (ref.includes("HEAD^{commit}")) return { stdout: featureSha };
-				if (ref.includes(`${activeBranch}^{commit}`)) return { stdout: featureSha };
+				if (ref.includes(`${activeBranch}^{commit}`))
+					return { stdout: featureSha };
 				if (ref.includes("^{commit}")) return { stdout: baseSha };
 				return {};
 			}
 			if (argv[0] === "merge-base") {
-				return { error: Object.assign(new Error("not ancestor"), { status: 1 }) };
+				return {
+					error: Object.assign(new Error("not ancestor"), { status: 1 }),
+				};
 			}
 			if (argv[0] === "rev-list") return { stdout: "1" };
 			if (argv[0] === "worktree" && argv[1] === "remove") {
@@ -282,7 +286,10 @@ describe("FeatureManager", () => {
 				_file: string,
 				args: readonly string[],
 				_options: unknown,
-				callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
 			) => {
 				if (args[0] === "rev-parse" && args[1] === "--verify") {
 					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
@@ -295,7 +302,10 @@ describe("FeatureManager", () => {
 				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
 			}) as never);
 
-			const feature = asyncManager.createFeatureRecord("malformed-relation", "shared");
+			const feature = asyncManager.createFeatureRecord(
+				"malformed-relation",
+				"shared",
+			);
 			const ready = await asyncManager.provisionFeature(feature.id);
 
 			expect(ready?.reusedExistingBranch?.relation).toEqual({
@@ -305,8 +315,18 @@ describe("FeatureManager", () => {
 		});
 
 		it.each([
-			["ahead-only", "2 0", { status: "ahead", ahead: 2, behind: 0 }, "2 commits ahead"],
-			["diverged", "2 3", { status: "diverged", ahead: 2, behind: 3 }, "2 commits ahead, 3 behind"],
+			[
+				"ahead-only",
+				"2 0",
+				{ status: "ahead", ahead: 2, behind: 0 },
+				"2 commits ahead",
+			],
+			[
+				"diverged",
+				"2 3",
+				{ status: "diverged", ahead: 2, behind: 3 },
+				"2 commits ahead, 3 behind",
+			],
 		] as const)("exposes the complete %s relation", async (_name, counts, relation, label) => {
 			const asyncManager = new FeatureManager(
 				store,
@@ -318,7 +338,10 @@ describe("FeatureManager", () => {
 				_file: string,
 				args: readonly string[],
 				_options: unknown,
-				callback: (error: Error | null, result?: { stdout: string; stderr: string }) => void,
+				callback: (
+					error: Error | null,
+					result?: { stdout: string; stderr: string },
+				) => void,
 			) => {
 				if (args[0] === "rev-parse" && args[1] === "--verify") {
 					callback(null, { stdout: `${featureSha}\n`, stderr: "" });
@@ -331,7 +354,10 @@ describe("FeatureManager", () => {
 				callback(null, { stdout: `${baseSha}\n`, stderr: "" });
 			}) as never);
 
-			const feature = asyncManager.createFeatureRecord(`reuse-${_name}`, "shared");
+			const feature = asyncManager.createFeatureRecord(
+				`reuse-${_name}`,
+				"shared",
+			);
 			const ready = await asyncManager.provisionFeature(feature.id);
 			expect(ready?.reusedExistingBranch).toEqual({ relation });
 			expect(ready?.provisioning?.steps[1].label).toContain(label);
@@ -341,14 +367,15 @@ describe("FeatureManager", () => {
 			mockExecSync.mockImplementation((command: string) => {
 				const value = String(command);
 				if (value.includes("rev-parse --verify")) return `${featureSha}\n`;
-				if (value.includes("rev-list") && value.includes("--count")) return "0 2\n";
+				if (value.includes("rev-list") && value.includes("--count"))
+					return "0 2\n";
 				return "";
 			});
 			const feature = manager.createFeature("reuse-sync", "shared");
 
 			expect(feature.reusedExistingBranch).toEqual({
-			relation: { status: "behind", ahead: 0, behind: 2 },
-		});
+				relation: { status: "behind", ahead: 0, behind: 2 },
+			});
 			expect(feature.createdFromSha).toBeUndefined();
 			expect(feature.provisioning?.steps[1].label).toBe(
 				"Reusing existing branch feat/reuse-sync (2 commits behind main)",
@@ -360,7 +387,7 @@ describe("FeatureManager", () => {
 				expect.any(Object),
 			);
 			expect(mockExecSync).not.toHaveBeenCalledWith(
-				expect.stringContaining("-b \"feat/reuse-sync\""),
+				expect.stringContaining('-b "feat/reuse-sync"'),
 				expect.any(Object),
 			);
 		});
@@ -804,7 +831,7 @@ describe("FeatureManager", () => {
 		});
 	});
 
-		describe("removeWorktreeResidue", () => {
+	describe("removeWorktreeResidue", () => {
 		it("refuses a path outside worktreeBase", async () => {
 			const outside = fs.mkdtempSync(path.join(os.tmpdir(), "fm-outside-"));
 			try {
@@ -850,33 +877,34 @@ describe("FeatureManager", () => {
 			expect(fs.existsSync(residue)).toBe(false);
 		});
 
-		it.runIf(
-			typeof process.getuid === "function" && process.getuid() !== 0,
-		)("suggests a sudo command when removal is permission-blocked", async () => {
-			const localManager = new FeatureManager(store, tmpDir, tmpDir, {
-				baseBranch: "main",
-			});
-			const residue = path.join(tmpDir, "blocked");
-			const sub = path.join(residue, "sub");
-			fs.mkdirSync(sub, { recursive: true });
-			fs.writeFileSync(path.join(sub, "blocked.txt"), "x");
-			fs.chmodSync(sub, 0o300);
-			mockExecFileGit(() => ({
-				stdout: `worktree ${path.join(tmpDir, "other")}\n`,
-			}));
+		it.runIf(typeof process.getuid === "function" && process.getuid() !== 0)(
+			"suggests a sudo command when removal is permission-blocked",
+			async () => {
+				const localManager = new FeatureManager(store, tmpDir, tmpDir, {
+					baseBranch: "main",
+				});
+				const residue = path.join(tmpDir, "blocked");
+				const sub = path.join(residue, "sub");
+				fs.mkdirSync(sub, { recursive: true });
+				fs.writeFileSync(path.join(sub, "blocked.txt"), "x");
+				fs.chmodSync(sub, 0o300);
+				mockExecFileGit(() => ({
+					stdout: `worktree ${path.join(tmpDir, "other")}\n`,
+				}));
 
-			try {
-				const result = await localManager.removeWorktreeResidue(residue);
+				try {
+					const result = await localManager.removeWorktreeResidue(residue);
 
-				expect(result.deleted).toBe(false);
-				expect(result.reasons.join("\n")).toContain("EACCES");
-				expect(result.reasons.join("\n")).toContain("another user");
-				expect(result.suggestedCommand).toBe(`sudo rm -rf '${residue}'`);
-				expect(fs.existsSync(residue)).toBe(true);
-			} finally {
-				fs.chmodSync(sub, 0o700);
-			}
-		});
+					expect(result.deleted).toBe(false);
+					expect(result.reasons.join("\n")).toContain("EACCES");
+					expect(result.reasons.join("\n")).toContain("another user");
+					expect(result.suggestedCommand).toBe(`sudo rm -rf '${residue}'`);
+					expect(fs.existsSync(residue)).toBe(true);
+				} finally {
+					fs.chmodSync(sub, 0o700);
+				}
+			},
+		);
 	});
 
 	describe("getFeatures / getFeature", () => {

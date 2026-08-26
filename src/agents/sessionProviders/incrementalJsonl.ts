@@ -198,9 +198,7 @@ function readPrefix(filePath: string): string {
  * through `fs/promises`, so periodic background observers never block the
  * Extension Host on a synchronous read.
  */
-export async function readIncrementalJsonlAsync<
-	T,
->(
+export async function readIncrementalJsonlAsync<T>(
 	filePath: string,
 	state: IncrementalJsonlState<T> | undefined,
 	parseLine: (line: string, previous: T | undefined) => T | undefined,

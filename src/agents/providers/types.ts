@@ -1,9 +1,9 @@
 import type { AgentAttentionStatus } from "../../types";
 import type {
+	AsyncSessionObservationAdapter,
 	SessionInfo,
 	SessionRenameAdapter,
 } from "../sessionProviders/types";
-import type { AsyncSessionObservationAdapter } from "../sessionProviders/types";
 
 export type ProviderCapability =
 	| "launch"
@@ -95,7 +95,9 @@ export interface CodingAgentProvider {
 	readonly launchArgs?: (sessionId?: string | null) => string[];
 	readonly resumeArgs?: (sessionId?: string | null) => string[];
 	getAttentionSignal?(sessionId: string): ProviderAttentionSignal | undefined;
-	getAttentionSignalAsync?(sessionId: string): Promise<ProviderAttentionSignal | undefined>;
+	getAttentionSignalAsync?(
+		sessionId: string,
+	): Promise<ProviderAttentionSignal | undefined>;
 	readonly sessionAdapter?: ProviderSessionAdapter;
 }
 

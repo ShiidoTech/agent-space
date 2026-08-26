@@ -1,7 +1,7 @@
+import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import type { GitWorktreeObservation } from "./featureGitObservations";
 import type { GitReader, GitReadResult } from "./gitClient";
 import { defaultGitClient } from "./gitClient";
-import { isWorktreePathSafe } from "../utils/worktreeGuard";
 
 /**
  * Relation of one worktree branch to the project base branch, computed from
@@ -110,18 +110,18 @@ export class WorktreeBranchObserver {
 				prunable: worktree.prunable,
 				baseRelation,
 				workingTree,
-			...(request.featureBranches?.has(ref)
-				? { linkedFeatureId: request.featureBranches.get(ref) }
-				: {}),
-			...(request.worktreeBase !== undefined
-				? {
-						outsideBase: !isWorktreePathSafe(
-							worktree.path,
-							request.worktreeBase,
-						),
-					}
-				: {}),
-		});
+				...(request.featureBranches?.has(ref)
+					? { linkedFeatureId: request.featureBranches.get(ref) }
+					: {}),
+				...(request.worktreeBase !== undefined
+					? {
+							outsideBase: !isWorktreePathSafe(
+								worktree.path,
+								request.worktreeBase,
+							),
+						}
+					: {}),
+			});
 		}
 
 		return {

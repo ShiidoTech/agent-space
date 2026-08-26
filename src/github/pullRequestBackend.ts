@@ -206,7 +206,11 @@ function requestJson(
 			},
 		);
 		request.setTimeout(GITHUB_REQUEST_TIMEOUT_MS, () =>
-			request.destroy(new Error(`GitHub request timed out after ${GITHUB_REQUEST_TIMEOUT_MS}ms`)),
+			request.destroy(
+				new Error(
+					`GitHub request timed out after ${GITHUB_REQUEST_TIMEOUT_MS}ms`,
+				),
+			),
 		);
 		request.on("error", reject);
 		request.end();

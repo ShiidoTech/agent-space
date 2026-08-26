@@ -83,8 +83,7 @@ export class AgentManager {
 		const agents = this.loadAgents(featureId);
 		return Promise.all(
 			agents.map(async (agent) => {
-				const attention =
-					await this.attentionResolver.resolveAsync(agent);
+				const attention = await this.attentionResolver.resolveAsync(agent);
 				return {
 					...agent,
 					attentionStatus: attention.status,
@@ -635,16 +634,15 @@ export class AgentManager {
 			// Fail-closed by default: git refuses to remove a worktree that
 			// contains modified/untracked files unless --force is passed.
 			// We never force as the nominal path.
-			await this.execFileAsync("git", [
-				"worktree",
-				"remove",
-				worktreePath,
-				...(force ? ["--force"] : []),
-			], {
-				cwd: this.repoRoot,
-				encoding: "utf8",
-				maxBuffer: 4 * 1024 * 1024,
-			});
+			await this.execFileAsync(
+				"git",
+				["worktree", "remove", worktreePath, ...(force ? ["--force"] : [])],
+				{
+					cwd: this.repoRoot,
+					encoding: "utf8",
+					maxBuffer: 4 * 1024 * 1024,
+				},
+			);
 			return { removed: true, worktreePath };
 		} catch (err) {
 			if (!fs.existsSync(worktreePath)) {

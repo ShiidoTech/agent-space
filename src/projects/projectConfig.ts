@@ -275,7 +275,8 @@ export function hasLocalProjectConfig(repoRoot: string): boolean {
 /** True when `.agentspace/config.json` actually exists (a real shared file). */
 export function hasSharedProjectConfig(repoRoot: string): boolean {
 	return (
-		mtimeOf(path.join(repoRoot, CONFIG_DIR_NAME, CONFIG_FILE_NAME)) !== undefined
+		mtimeOf(path.join(repoRoot, CONFIG_DIR_NAME, CONFIG_FILE_NAME)) !==
+		undefined
 	);
 }
 

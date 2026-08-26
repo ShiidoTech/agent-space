@@ -18,7 +18,12 @@ describe("AgentAttentionResolver.resolveAsync (non-blocking contract)", () => {
 	const tool = { id: "opencode" } as never;
 	const provider = {
 		capabilities: {
-			attention: { working: true, waitingForUser: true, idle: true, failed: true },
+			attention: {
+				working: true,
+				waitingForUser: true,
+				idle: true,
+				failed: true,
+			},
 		},
 	} as never;
 

@@ -158,7 +158,9 @@ async function restoreAgentRuntime(
 
 	const cwd = agent.worktreePath ?? feature.worktreePath;
 	try {
-		await execAsync(deps.tmux.createCommand(sessionName, resumeCommand), { cwd });
+		await execAsync(deps.tmux.createCommand(sessionName, resumeCommand), {
+			cwd,
+		});
 		await deps.tmux.configureSessionAsync(sessionName);
 	} catch (error) {
 		console.warn(`[RuntimeRestorer] tmux resume failed: ${error}`);
@@ -208,7 +210,9 @@ async function sessionIsProven(
 	const adapter = deps.toolRegistry.getProvider(tool).sessionAdapter;
 	if (adapter?.async?.hasSession) {
 		try {
-			return (await adapter.async.hasSession(agent.sessionId as string)) === true;
+			return (
+				(await adapter.async.hasSession(agent.sessionId as string)) === true
+			);
 		} catch {
 			return false;
 		}

@@ -2,8 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
 	test: {
-		include: ["src/**/*.test.ts"],
-		exclude: ["smoke/**"],
+		include: ["smoke/**/*.test.ts"],
 		environment: "node",
 	},
 });

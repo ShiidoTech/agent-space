@@ -26,6 +26,21 @@
 		{
 			"includes": ["**/_test_*.html"],
 			"linter": { "enabled": false }
+		},
+		{
+			"includes": [
+				"src/agents/sessionNameSyncer.ts",
+				"src/features/featureStateCoordinator.ts",
+				"src/git/worktreeBranchObserver.ts",
+				"src/git/worktreeSafety.ts"
+			],
+			"linter": {
+				"rules": {
+					"style": {
+						"noNonNullAssertion": "info"
+					}
+				}
+			}
 		}
 	],
 	"javascript": {

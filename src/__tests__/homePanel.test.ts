@@ -22,8 +22,8 @@ vi.mock("vscode", () => ({
 
 import * as vscode from "vscode";
 import { AgentFocusService } from "../agents/agentFocusService";
-import { HomePanel } from "../home/homePanel";
 import type { FeatureSnapshot } from "../features/featureSnapshot";
+import { HomePanel } from "../home/homePanel";
 import type { Feature } from "../types";
 
 describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
@@ -987,7 +987,11 @@ describe("Home portfolio card (piloting view)", () => {
 				repository: { status: "unknown", reason: "remote_unreadable" },
 				observedAt: "2026-08-12T00:00:00Z",
 			},
-			integration: { status: "unknown", reason: "ancestry_unknown", evidence: {} },
+			integration: {
+				status: "unknown",
+				reason: "ancestry_unknown",
+				evidence: {},
+			},
 			runtime: {
 				agents: { status: "unknown", reason: "not_observed" },
 				services: { status: "unknown", reason: "not_observed" },
@@ -1035,7 +1039,7 @@ describe("Home portfolio card (piloting view)", () => {
 	it("renders one piloting card per project with counters and a scoped action", () => {
 		const html = renderCard([]);
 
-		expect(html).toContain('onclick="showProject(\'p1\')"');
+		expect(html).toContain("onclick=\"showProject('p1')\"");
 		expect(html).toContain(">Agent Space</div>");
 		expect(html).toContain("<strong>2</strong>/4 features");
 		expect(html).toContain("<strong>3</strong> agents");
@@ -1148,7 +1152,9 @@ describe("Home portfolio card (piloting view)", () => {
 			{ attentionCount: 1 },
 		);
 
-		expect(html).toContain('onclick="event.stopPropagation(); showProblems(\'p1\')"');
+		expect(html).toContain(
+			"onclick=\"event.stopPropagation(); showProblems('p1')\"",
+		);
 	});
 });
 
@@ -1231,9 +1237,9 @@ describe("Home problems view (portfolio-wide attention list)", () => {
 	it("lists every problem worst-severity first and links rows to their feature", () => {
 		const html = renderProblems();
 
-		const error = html.indexOf("data-severity=\"error\"");
-		const warning = html.indexOf("data-severity=\"warning\"");
-		const info = html.indexOf("data-severity=\"info\"");
+		const error = html.indexOf('data-severity="error"');
+		const warning = html.indexOf('data-severity="warning"');
+		const info = html.indexOf('data-severity="info"');
 		expect(error).toBeGreaterThan(-1);
 		expect(warning).toBeGreaterThan(error);
 		expect(info).toBeGreaterThan(warning);

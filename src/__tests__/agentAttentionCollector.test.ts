@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-	collectWatchedAgents,
 	type AttentionCollectableContext,
+	collectWatchedAgents,
 } from "../agents/attention/agentAttentionCollector";
 import type { Agent, Feature } from "../types";
 
@@ -45,7 +45,8 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 		const getAgentsAsync = vi.fn(async (featureId: string) =>
 			(agentsByFeature[featureId] ?? []).map((agent) => ({
 				...agent,
-				attentionStatus: agent.status === "running" ? "waiting_for_user" : "idle",
+				attentionStatus:
+					agent.status === "running" ? "waiting_for_user" : "idle",
 				attentionReason: "Asked a question",
 			})),
 		);

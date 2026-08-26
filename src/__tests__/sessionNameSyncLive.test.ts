@@ -89,16 +89,19 @@ describe("live session-name synchronization", () => {
 		expect(ctx.agentManager.getAgents(feature.id)[0]?.name).toBe("Agent 1");
 
 		writeSession(agent.sessionId, "Live title discovered");
-		// The periodic pass reads titles through the providers' async boundary,
-		// so the timers must be advanced asynchronously for the fs reads to land.
-		// Poll in case the in-flight pass needs more event-loop turns to finish.
-		let name = ctx.agentManager.getAgents(feature.id)[0]?.name;
-		for (let i = 0; i < 40 && name !== "Live title discovered"; i++) {
-			await vi.advanceTimersByTimeAsync(50);
-			name = ctx.agentManager.getAgents(feature.id)[0]?.name;
-		}
-
-		expect(name).toBe("Live title discovered");
+		// advanceTimersByTimeAsync flushes microtasks but real fsp.readFile
+		// promises need real event-loop turns.  vi.waitFor polls the assertion
+		// with a short interval until it passes or times out.
+		await vi.waitFor(
+			() => {
+				expect(ctx.agentManager.getAgents(feature.id)[0]?.name).toBe(
+					"Live title discovered",
+				);
+			},
+			{ timeout: 5_000, interval: 50 },
+		);
+		// Drain any remaining fake-timer work so the syncer stops cleanly.
+		await vi.advanceTimersByTimeAsync(0);
 		syncer.dispose();
 	});
 

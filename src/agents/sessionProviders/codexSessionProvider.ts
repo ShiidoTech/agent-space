@@ -65,7 +65,10 @@ export class CodexSessionProvider
 
 	constructor(sessionsDir?: string, sessionIndexPath?: string) {
 		this.sessionsDir = sessionsDir ?? DEFAULT_CODEX_SESSIONS_DIR;
-		this.sessionIndexPath = resolveCodexIndexPath(sessionsDir, sessionIndexPath);
+		this.sessionIndexPath = resolveCodexIndexPath(
+			sessionsDir,
+			sessionIndexPath,
+		);
 	}
 
 	/**

@@ -181,67 +181,65 @@ describe("FeatureManager worktree branch reconciliation", () => {
 		});
 	});
 
-	it.each(["upstream missing", "ancestry missing", "name mismatch"] as const)(
-		"does not guess legacy recovery when %s",
-		(missingProof) => {
-			const prior =
-				missingProof === "name mismatch"
-					? "feat/unrelated"
-					: "feat/audit_and_go";
-			const primarySha = "e".repeat(40);
-			const continuationSha = "f".repeat(40);
-			store.saveFeatures([
-				{
-					id: "audit",
-					name: "audit_and_go",
-					branch: "feat/feature_cockpit",
-					worktreePath: path.join(worktreeBase, "feat-audit_and_go"),
-					status: "active",
-					color: "terminal.ansiGreen",
-					isolation: "shared",
-					createdAt: "2026-08-12T06:06:12.744Z",
-				},
-			]);
-			manager.reload();
-			mockExecSync.mockReset();
-			mockExecSync.mockImplementation((command) => {
-				const value = String(command);
-				if (value.includes("symbolic-ref")) return "feat/feature_cockpit\n";
-				if (value.includes("reflog")) {
-					return `checkout: moving from ${prior} to feat/feature_cockpit\n`;
-				}
-				if (value.includes(`refs/heads/${prior}`)) return primarySha;
-				if (value.includes("refs/heads/feat/feature_cockpit")) {
-					return continuationSha;
-				}
-				if (value.includes("@{upstream}")) {
-					if (missingProof === "upstream missing")
-						throw new Error("no upstream");
-					return primarySha;
-				}
-				if (value.includes("merge-base --is-ancestor")) {
-					if (missingProof === "ancestry missing")
-						throw new Error("not ancestor");
-					return "";
-				}
-				throw new Error(`Unexpected Git command: ${value}`);
-			});
-
-			manager.getFeature("audit");
-
-			expect(store.loadFeatures()[0]).toMatchObject({
+	it.each([
+		"upstream missing",
+		"ancestry missing",
+		"name mismatch",
+	] as const)("does not guess legacy recovery when %s", (missingProof) => {
+		const prior =
+			missingProof === "name mismatch" ? "feat/unrelated" : "feat/audit_and_go";
+		const primarySha = "e".repeat(40);
+		const continuationSha = "f".repeat(40);
+		store.saveFeatures([
+			{
+				id: "audit",
+				name: "audit_and_go",
 				branch: "feat/feature_cockpit",
-				primaryBranchRef: "feat/feature_cockpit",
-				branchLinks: [
-					{
-						ref: "feat/feature_cockpit",
-						role: "primary",
-						source: "legacy_record",
-					},
-				],
-			});
-		},
-	);
+				worktreePath: path.join(worktreeBase, "feat-audit_and_go"),
+				status: "active",
+				color: "terminal.ansiGreen",
+				isolation: "shared",
+				createdAt: "2026-08-12T06:06:12.744Z",
+			},
+		]);
+		manager.reload();
+		mockExecSync.mockReset();
+		mockExecSync.mockImplementation((command) => {
+			const value = String(command);
+			if (value.includes("symbolic-ref")) return "feat/feature_cockpit\n";
+			if (value.includes("reflog")) {
+				return `checkout: moving from ${prior} to feat/feature_cockpit\n`;
+			}
+			if (value.includes(`refs/heads/${prior}`)) return primarySha;
+			if (value.includes("refs/heads/feat/feature_cockpit")) {
+				return continuationSha;
+			}
+			if (value.includes("@{upstream}")) {
+				if (missingProof === "upstream missing") throw new Error("no upstream");
+				return primarySha;
+			}
+			if (value.includes("merge-base --is-ancestor")) {
+				if (missingProof === "ancestry missing")
+					throw new Error("not ancestor");
+				return "";
+			}
+			throw new Error(`Unexpected Git command: ${value}`);
+		});
+
+		manager.getFeature("audit");
+
+		expect(store.loadFeatures()[0]).toMatchObject({
+			branch: "feat/feature_cockpit",
+			primaryBranchRef: "feat/feature_cockpit",
+			branchLinks: [
+				{
+					ref: "feat/feature_cockpit",
+					role: "primary",
+					source: "legacy_record",
+				},
+			],
+		});
+	});
 
 	it("keeps the persisted branch when the worktree branch cannot be resolved", () => {
 		const feature = createEndingFeature();

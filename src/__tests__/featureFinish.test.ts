@@ -126,7 +126,11 @@ describe("Feature Finish", () => {
 				? gitResult("feat/feature_cockpit\n")
 				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
 
-		const assessment = await assessFeatureFinish(ctx, continued, finishEvidence());
+		const assessment = await assessFeatureFinish(
+			ctx,
+			continued,
+			finishEvidence(),
+		);
 
 		expect(assessment.checks[0]).toMatchObject({
 			kind: "feature",
@@ -256,7 +260,11 @@ describe("Feature Finish", () => {
 						"worktree /repo\nbranch refs/heads/main\n\nworktree /worktrees/f1\nbranch refs/heads/feat/f1\n",
 					);
 
-		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
+		const assessment = await assessFeatureFinish(
+			ctx,
+			feature(),
+			finishEvidence(),
+		);
 
 		expect(assessment.safe).toBe(true);
 		expect(deletion).toHaveBeenCalledWith(
@@ -287,15 +295,25 @@ describe("Feature Finish", () => {
 			});
 		const headSha = "3".repeat(40);
 		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
-		ctx.gitClient.read = async (args: readonly string[], options?: { readonly cwd?: string }) => {
-			if (args[0] === "symbolic-ref" || args[0] === "branch") return gitResult("");
+		ctx.gitClient.read = async (
+			args: readonly string[],
+			options?: { readonly cwd?: string },
+		) => {
+			if (args[0] === "symbolic-ref" || args[0] === "branch")
+				return gitResult("");
 			if (args[0] === "rev-parse") {
-				return gitResult(options?.cwd === "/worktrees/f1" ? `${headSha}\n` : `${headSha}\n`);
+				return gitResult(
+					options?.cwd === "/worktrees/f1" ? `${headSha}\n` : `${headSha}\n`,
+				);
 			}
 			return gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
 		};
 
-		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
+		const assessment = await assessFeatureFinish(
+			ctx,
+			feature(),
+			finishEvidence(),
+		);
 
 		expect(assessment.safe).toBe(true);
 		expect(deletion).toHaveBeenCalledWith(
@@ -321,15 +339,27 @@ describe("Feature Finish", () => {
 				reasons: ["branch unknown"],
 			});
 		const ctx = context("worktree /repo\n\nworktree /worktrees/f1\n");
-		ctx.gitClient.read = async (args: readonly string[], options?: { readonly cwd?: string }) => {
-			if (args[0] === "symbolic-ref" || args[0] === "branch") return gitResult("");
+		ctx.gitClient.read = async (
+			args: readonly string[],
+			options?: { readonly cwd?: string },
+		) => {
+			if (args[0] === "symbolic-ref" || args[0] === "branch")
+				return gitResult("");
 			if (args[0] === "rev-parse") {
-				return gitResult(options?.cwd === "/worktrees/f1" ? `${"3".repeat(40)}\n` : `${"4".repeat(40)}\n`);
+				return gitResult(
+					options?.cwd === "/worktrees/f1"
+						? `${"3".repeat(40)}\n`
+						: `${"4".repeat(40)}\n`,
+				);
 			}
 			return gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
 		};
 
-		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
+		const assessment = await assessFeatureFinish(
+			ctx,
+			feature(),
+			finishEvidence(),
+		);
 
 		expect(assessment.safe).toBe(false);
 		expect(deletion).toHaveBeenCalledWith(
@@ -364,7 +394,11 @@ describe("Feature Finish", () => {
 				? { ...gitResult(""), exitCode: null, error: new Error("timeout") }
 				: gitResult("worktree /repo\n\nworktree /worktrees/f1\n");
 
-		const assessment = await assessFeatureFinish(ctx, feature(), finishEvidence());
+		const assessment = await assessFeatureFinish(
+			ctx,
+			feature(),
+			finishEvidence(),
+		);
 
 		expect(assessment.safe).toBe(true);
 		expect(deletion).toHaveBeenCalledWith(
@@ -489,8 +523,10 @@ describe("Feature Finish", () => {
 				return gitResult("worktree /repo\n");
 			},
 		);
-		ctx.gitClient.read = async (args: readonly string[], options?: { readonly cwd?: string }) =>
-			readSync(args, options);
+		ctx.gitClient.read = async (
+			args: readonly string[],
+			options?: { readonly cwd?: string },
+		) => readSync(args, options);
 		const named = {
 			...feature(),
 			name: "feature-player",

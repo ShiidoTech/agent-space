@@ -13,8 +13,11 @@ vi.mock("vscode", () => ({
 }));
 
 import {
+	type FallbackEventKind,
+	resetFallbackReporting,
 	type SqliteModule,
 	SqliteReadOnlyDb,
+	setFallbackReporter,
 } from "../agents/sessionProviders/sqliteRead";
 
 let tmpDir: string;
@@ -24,6 +27,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+	resetFallbackReporting();
 	for (const name of fs.readdirSync(tmpDir)) {
 		try {
 			fs.rmSync(path.join(tmpDir, name));
@@ -102,5 +106,25 @@ describe("CLI parameter rendering", () => {
 		const db = new SqliteReadOnlyDb("/tmp/none.db", cli, null);
 		db.querySync("SELECT * FROM t LIMIT ?", [5]);
 		expect(seen).toEqual(["SELECT * FROM t LIMIT 5"]);
+	});
+});
+
+describe("Fallback observability", () => {
+	it("reports query_failed when both db and cli are absent", () => {
+		const events: FallbackEventKind[] = [];
+		setFallbackReporter((k) => events.push(k));
+		const db = new SqliteReadOnlyDb("/tmp/nonexistent-fallback.db");
+		db.querySync("SELECT 1");
+		expect(events).toContain("query_failed");
+	});
+
+	it("fires each event kind at most once (one-shot)", () => {
+		const events: FallbackEventKind[] = [];
+		setFallbackReporter((k) => events.push(k));
+		const db = new SqliteReadOnlyDb("/tmp/nonexistent-once.db");
+		db.querySync("SELECT 1");
+		db.querySync("SELECT 2");
+		const queryFails = events.filter((k) => k === "query_failed");
+		expect(queryFails).toHaveLength(1);
 	});
 });

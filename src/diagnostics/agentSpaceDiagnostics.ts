@@ -3,7 +3,7 @@ export type AgentSpaceDiagnosticSink = (message: string) => void;
 let sink: AgentSpaceDiagnosticSink = () => {};
 
 export function configureAgentSpaceDiagnostics(
-	 next: AgentSpaceDiagnosticSink,
+	next: AgentSpaceDiagnosticSink,
 ): void {
 	sink = next;
 }

@@ -22,7 +22,9 @@ vi.mock("node:child_process", () => ({
 	execFile: vi.fn(),
 	execSync: vi.fn(),
 }));
+
 import { execSync } from "node:child_process";
+
 const mockExecSync = vi.mocked(execSync);
 
 afterEach(() => vi.useRealTimers());
@@ -175,7 +177,7 @@ function setup(
 			(featureId: string, agentId: string, persisted?: string) =>
 				persisted ?? `agent-space-${featureId}-${agentId}`,
 		),
-		findContextByFeatureId: vi.fn((featureId: string) => currentContext),
+		findContextByFeatureId: vi.fn((_featureId: string) => currentContext),
 		resolveFeature: vi.fn((featureId: string) => {
 			if (featureId.startsWith("base:")) {
 				return {
@@ -296,16 +298,19 @@ describe("FeatureStateCoordinator", () => {
 		coordinator.start(undefined, 15_000);
 		await coordinator.reconcile();
 		const inspectCallsBeforeTick = fixture.inspect.mock.calls.length;
-		const callsWithoutConsumer =
-			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length;
+		const callsWithoutConsumer = vi.mocked(
+			fixture.context.agentManager.getAgentsReadModel,
+		).mock.calls.length;
 		await vi.advanceTimersByTimeAsync(15_000);
-			expect(vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length).toBe(
-			callsWithoutConsumer,
-		);
+		expect(
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls
+				.length,
+		).toBe(callsWithoutConsumer);
 		const consumer = coordinator.acquireConsumer(15_000);
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(
-			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length,
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls
+				.length,
 		).toBeGreaterThan(callsWithoutConsumer);
 		// The recurring timer only drives the lightweight presence lane — it
 		// must never perform a deep Git inspection.
@@ -320,34 +325,40 @@ describe("FeatureStateCoordinator", () => {
 		const coordinator = new FeatureStateCoordinator(fixture.manager);
 		coordinator.start(undefined, 15_000);
 		await coordinator.reconcile();
-		const initialCalls =
-			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length;
+		const initialCalls = vi.mocked(
+			fixture.context.agentManager.getAgentsReadModel,
+		).mock.calls.length;
 
 		const sidebar = coordinator.acquireConsumer(15_000);
 		const home = coordinator.acquireConsumer(15_000);
 		await vi.advanceTimersByTimeAsync(15_000);
-		const visibleCalls =
-			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length;
+		const visibleCalls = vi.mocked(
+			fixture.context.agentManager.getAgentsReadModel,
+		).mock.calls.length;
 		expect(visibleCalls).toBeGreaterThan(initialCalls);
 
 		sidebar.dispose();
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(
-			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length,
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls
+				.length,
 		).toBeGreaterThan(visibleCalls);
 
 		home.dispose();
-		const hiddenCalls =
-			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length;
+		const hiddenCalls = vi.mocked(
+			fixture.context.agentManager.getAgentsReadModel,
+		).mock.calls.length;
 		await vi.advanceTimersByTimeAsync(30_000);
-		expect(vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length).toBe(
-			hiddenCalls,
-		);
+		expect(
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls
+				.length,
+		).toBe(hiddenCalls);
 
 		const sidebarVisibleAgain = coordinator.acquireConsumer(15_000);
 		await vi.advanceTimersByTimeAsync(15_000);
 		expect(
-			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls.length,
+			vi.mocked(fixture.context.agentManager.getAgentsReadModel).mock.calls
+				.length,
 		).toBeGreaterThan(hiddenCalls);
 		sidebarVisibleAgain.dispose();
 		coordinator.dispose();
@@ -812,11 +823,11 @@ describe("FeatureStateCoordinator", () => {
 		await coordinator.reconcileFeature("f1");
 		await vi.waitFor(() =>
 			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
-			resolution: {
-				outcome: "selected",
-				pull: { state: "merged" },
-			},
-		}),
+				resolution: {
+					outcome: "selected",
+					pull: { state: "merged" },
+				},
+			}),
 		);
 		expect(listPullRequests.mock.calls.length).toBeGreaterThan(1);
 		expect(coordinator.getSnapshot("f1")?.delivery).toMatchObject({
@@ -871,21 +882,23 @@ describe("FeatureStateCoordinator", () => {
 				},
 			],
 		};
-		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
-			if (featureBranch === "dev/improvements") {
-				return {
-					...git(active),
-					feature: known({ ref: "dev/improvements", sha: activeSha }),
-					head: known({ ref: "dev/improvements", sha: activeSha }),
-					featureInBase: known({
-						ancestor: { ref: "dev/improvements", sha: activeSha },
-						descendant: { ref: "main", sha: "3".repeat(40) },
-						isAncestor: false,
-					}),
-				};
-			}
-			return git(featureBranch === "main" ? baseFeature() : feature());
-		});
+		const inspect = vi.fn(
+			async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "dev/improvements") {
+					return {
+						...git(active),
+						feature: known({ ref: "dev/improvements", sha: activeSha }),
+						head: known({ ref: "dev/improvements", sha: activeSha }),
+						featureInBase: known({
+							ancestor: { ref: "dev/improvements", sha: activeSha },
+							descendant: { ref: "main", sha: "3".repeat(40) },
+							isAncestor: false,
+						}),
+					};
+				}
+				return git(featureBranch === "main" ? baseFeature() : feature());
+			},
+		);
 		const fixture = setup(inspect);
 		fixture.setFeatures([active]);
 		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
@@ -989,25 +1002,27 @@ describe("FeatureStateCoordinator", () => {
 			branch: "continuation/one",
 			primaryBranchRef: "fix/1401",
 		};
-		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
-			const observed = { ref: featureBranch, sha: activeSha };
-			return {
-				...git(active),
-				feature: known(observed),
-				head: known(observed),
-				branch: known({
-					expected: featureBranch,
-					actual: featureBranch,
-					detached: false,
-					matchesExpected: true,
-				}),
-				creationPointInFeature: known({
-					ancestor: { ref: "main", sha: "1".repeat(40) },
-					descendant: observed,
-					isAncestor: true,
-				}),
-			};
-		});
+		const inspect = vi.fn(
+			async ({ featureBranch }: { featureBranch: string }) => {
+				const observed = { ref: featureBranch, sha: activeSha };
+				return {
+					...git(active),
+					feature: known(observed),
+					head: known(observed),
+					branch: known({
+						expected: featureBranch,
+						actual: featureBranch,
+						detached: false,
+						matchesExpected: true,
+					}),
+					creationPointInFeature: known({
+						ancestor: { ref: "main", sha: "1".repeat(40) },
+						descendant: observed,
+						isAncestor: true,
+					}),
+				};
+			},
+		);
 		const fixture = setup(inspect);
 		fixture.setFeatures([active]);
 		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
@@ -1026,34 +1041,51 @@ describe("FeatureStateCoordinator", () => {
 		}));
 		const listPullRequests = vi.fn(async ({ head }: { head: string }) => ({
 			status: "ok" as const,
-			pulls: head === active.branch
-				? [{
-						number: head === "continuation/one" ? 1401 : 1402,
-						html_url: "https://github.com/test/pr",
-						state: "closed" as const,
-						merged: true,
-						merged_at: "2026-08-25T12:00:00Z",
-						draft: false,
-						head: { ref: head, sha: activeSha },
-						base: { ref: "main" },
-					}]
-				: [],
+			pulls:
+				head === active.branch
+					? [
+							{
+								number: head === "continuation/one" ? 1401 : 1402,
+								html_url: "https://github.com/test/pr",
+								state: "closed" as const,
+								merged: true,
+								merged_at: "2026-08-25T12:00:00Z",
+								draft: false,
+								head: { ref: head, sha: activeSha },
+								base: { ref: "main" },
+							},
+						]
+					: [],
 		}));
 		const backend = {
-			auth: vi.fn(async () => ({ state: "authenticated" as const, source: "env" as const, token: "test" })),
+			auth: vi.fn(async () => ({
+				state: "authenticated" as const,
+				source: "env" as const,
+				token: "test",
+			})),
 			listPullRequests,
 		} satisfies PullRequestBackend;
 		const coordinator = new FeatureStateCoordinator(fixture.manager, {
 			createGithubBackend: () => backend,
-			referenceBranchRemote: { observe: vi.fn(async () => ({ status: "missing" as const, observedAt: "2026-08-25T00:00:00Z", provenance: { source: "remote_head" as const, ref: "refs/heads/main", backend: "test" } })) },
+			referenceBranchRemote: {
+				observe: vi.fn(async () => ({
+					status: "missing" as const,
+					observedAt: "2026-08-25T00:00:00Z",
+					provenance: {
+						source: "remote_head" as const,
+						ref: "refs/heads/main",
+						backend: "test",
+					},
+				})),
+			},
 		});
 
 		await coordinator.reconcile();
 		await vi.waitFor(() => {
 			const github = coordinator.getSnapshot("f1")?.github;
-			expect(github?.status === "known" ? github.queriedBranch : undefined).toBe(
-				"continuation/one",
-			);
+			expect(
+				github?.status === "known" ? github.queriedBranch : undefined,
+			).toBe("continuation/one");
 		});
 		active = { ...active, branch: "continuation/two" };
 		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
@@ -1061,11 +1093,13 @@ describe("FeatureStateCoordinator", () => {
 		await coordinator.reconcile();
 		await vi.waitFor(() => {
 			const github = coordinator.getSnapshot("f1")?.github;
-			expect(github?.status === "known" ? github.queriedBranch : undefined).toBe(
-				"continuation/two",
-			);
+			expect(
+				github?.status === "known" ? github.queriedBranch : undefined,
+			).toBe("continuation/two");
 		});
-		expect(listPullRequests).toHaveBeenCalledWith(expect.objectContaining({ head: "continuation/two" }));
+		expect(listPullRequests).toHaveBeenCalledWith(
+			expect.objectContaining({ head: "continuation/two" }),
+		);
 	});
 
 	it("ignores a merged PR on the active branch when it is not a proven continuation", async () => {
@@ -1507,7 +1541,11 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 	};
 	function makeContext(projectId: string): ProjectContext {
 		return {
-			project: { id: projectId, name: projectId, repoPath: `/repo-${projectId}` },
+			project: {
+				id: projectId,
+				name: projectId,
+				repoPath: `/repo-${projectId}`,
+			},
 			store: {
 				loadFeatures: vi.fn(() => featuresByProject[projectId]),
 				saveFeatures: vi.fn(),
@@ -1530,7 +1568,11 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 			featureGitInspector: {
 				inspect: inspects[projectId],
 				isCommitAncestor: vi.fn(async (a: string, d: string) =>
-					known({ ancestor: { ref: a, sha: a }, descendant: { ref: d, sha: d }, isAncestor: true }),
+					known({
+						ancestor: { ref: a, sha: a },
+						descendant: { ref: d, sha: d },
+						isAncestor: true,
+					}),
 				),
 				countCommitsAfter: vi.fn(async (a: string, d: string) =>
 					known({ ancestorSha: a, descendantSha: d, count: 1 }),
@@ -1551,7 +1593,10 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 				})),
 			},
 			config: { baseBranch: "main" },
-			agentManager: { getAgents: vi.fn(() => []), getAgentsReadModel: vi.fn(() => []) },
+			agentManager: {
+				getAgents: vi.fn(() => []),
+				getAgentsReadModel: vi.fn(() => []),
+			},
 			serviceManager: { getServices: vi.fn(() => []) },
 		} as unknown as ProjectContext;
 	}
@@ -1588,7 +1633,10 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 			);
 			if (!ctx) return undefined;
 			if (featureId.startsWith("base:")) {
-				return { ctx, feature: ctx.featureManager.getBaseFeature(ctx.project.id) };
+				return {
+					ctx,
+					feature: ctx.featureManager.getBaseFeature(ctx.project.id),
+				};
 			}
 			const found = featuresByProject[ctx.project.id].find(
 				(f) => f.id === featureId,
@@ -1603,7 +1651,9 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 	it("reconcileFeature never inspects an unrelated project", async () => {
 		const inspects = {
 			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) =>
-				git(featureBranch === "main" ? { ...feature("base:p1") } : feature("f1")),
+				git(
+					featureBranch === "main" ? { ...feature("base:p1") } : feature("f1"),
+				),
 			),
 			p2: vi.fn(async () => git(feature("f2"))),
 		};
@@ -1632,7 +1682,9 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		// reconcileProject refreshes repository/worktree facts only — it never
 		// deep-inspects individual features (that stays demand-driven per
 		// reconcileFeature).
-		expect(fixture.contexts.p1.featureGitInspector.observeProject).toHaveBeenCalled();
+		expect(
+			fixture.contexts.p1.featureGitInspector.observeProject,
+		).toHaveBeenCalled();
 		expect(inspects.p1).not.toHaveBeenCalled();
 		expect(inspects.p2).not.toHaveBeenCalled();
 		expect(
@@ -1799,10 +1851,10 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 
 		const first = coordinator.reconcileFeature("f1");
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		const resolveCalls =
-			vi.mocked(fixture.manager.resolveFeature).mock.calls.length;
-		const contextCalls =
-			vi.mocked(fixture.manager.findContextByFeatureId).mock.calls.length;
+		const resolveCalls = vi.mocked(fixture.manager.resolveFeature).mock.calls
+			.length;
+		const contextCalls = vi.mocked(fixture.manager.findContextByFeatureId).mock
+			.calls.length;
 		expect(resolveCalls).toBe(1);
 
 		const second = coordinator.reconcileFeature("f1");
@@ -1811,9 +1863,9 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		// The in-flight guard runs before resolveFeature/findContextByFeatureId
 		// (FeatureManager resolution performs synchronous Git reads), so the
 		// second request coalesced without a single extra resolution.
-		expect(
-			vi.mocked(fixture.manager.resolveFeature).mock.calls.length,
-		).toBe(resolveCalls);
+		expect(vi.mocked(fixture.manager.resolveFeature).mock.calls.length).toBe(
+			resolveCalls,
+		);
 		expect(
 			vi.mocked(fixture.manager.findContextByFeatureId).mock.calls.length,
 		).toBe(contextCalls);
@@ -1822,9 +1874,9 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		await Promise.all([first, second]);
 
 		// The follow-up pass re-resolves on the current read-model exactly once.
-		expect(
-			vi.mocked(fixture.manager.resolveFeature).mock.calls.length,
-		).toBe(resolveCalls + 1);
+		expect(vi.mocked(fixture.manager.resolveFeature).mock.calls.length).toBe(
+			resolveCalls + 1,
+		);
 		expect(coordinator.getSnapshot("f1")).toBeDefined();
 		coordinator.dispose();
 	});
@@ -2039,7 +2091,9 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		expect(inspects.p1).not.toHaveBeenCalled();
 		expect(inspects.p2).not.toHaveBeenCalled();
 		expect(coordinator.getSnapshot("f1")).toBeDefined();
-		expect(coordinator.getSnapshot("f1")?.git.repository.status).toBe("unknown");
+		expect(coordinator.getSnapshot("f1")?.git.repository.status).toBe(
+			"unknown",
+		);
 		coordinator.dispose();
 	});
 
@@ -2270,7 +2324,9 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		const inspects = {
 			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
 				if (featureBranch !== "main") await gate;
-				return git(featureBranch === "main" ? feature("base:p1") : feature("f1"));
+				return git(
+					featureBranch === "main" ? feature("base:p1") : feature("f1"),
+				);
 			}),
 			p2: vi.fn(async () => git(feature("f2"))),
 		};
@@ -2330,7 +2386,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 			},
 			gitClient: { read: vi.fn() },
 			config: { baseBranch: "main" },
-			agentManager: { getAgents: vi.fn(() => []), getAgentsReadModel: vi.fn(() => []) },
+			agentManager: {
+				getAgents: vi.fn(() => []),
+				getAgentsReadModel: vi.fn(() => []),
+			},
 			serviceManager: { getServices: vi.fn(() => []) },
 		} as unknown as ProjectContext;
 	}

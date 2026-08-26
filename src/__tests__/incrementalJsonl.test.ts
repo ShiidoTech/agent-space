@@ -14,7 +14,7 @@ describe("readIncrementalJsonlAsync (parity with sync twin)", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "incr-jsonl-"));
 		dirs.push(dir);
 		const filePath = path.join(dir, "session.jsonl");
-		fs.writeFileSync(filePath, lines.join("\n") + "\n");
+		fs.writeFileSync(filePath, `${lines.join("\n")}\n`);
 		return filePath;
 	}
 

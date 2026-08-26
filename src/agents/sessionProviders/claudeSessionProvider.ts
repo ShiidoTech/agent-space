@@ -819,14 +819,10 @@ export class ClaudeSessionProvider
 		if (event.type === "assistant") {
 			const message = event.message as Record<string, unknown> | undefined;
 			const stopReason = message?.stop_reason ?? event.stop_reason;
-			const content = Array.isArray(message?.content)
-				? message.content
-				: [];
+			const content = Array.isArray(message?.content) ? message.content : [];
 			const asksUser = content.some((item) => {
 				const block = item as Record<string, unknown>;
-				return (
-					block.type === "tool_use" && block.name === "AskUserQuestion"
-				);
+				return block.type === "tool_use" && block.name === "AskUserQuestion";
 			});
 			if (asksUser) {
 				signal = {

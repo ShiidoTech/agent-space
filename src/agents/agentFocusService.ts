@@ -1,4 +1,7 @@
-import type { ProjectContext, ProjectManager } from "../projects/projectManager";
+import type {
+	ProjectContext,
+	ProjectManager,
+} from "../projects/projectManager";
 import type { Agent, Feature } from "../types";
 import type { TerminalController } from "./terminalController";
 
@@ -112,7 +115,11 @@ export class AgentFocusService {
 				}
 			}
 		};
-		const finish = (terminal: Awaited<ReturnType<TerminalController["focusOrCreateTerminalAsync"]>> | undefined): void => {
+		const finish = (
+			terminal:
+				| Awaited<ReturnType<TerminalController["focusOrCreateTerminalAsync"]>>
+				| undefined,
+		): void => {
 			const current = focusSeq === this.focusSequence;
 			if (current && terminal) {
 				terminal.show();

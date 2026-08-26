@@ -124,10 +124,7 @@ export async function checkBranchRetentionSafety(input: {
 
 	if (refsObserved && featureSha && baseSha) {
 		try {
-			await git(
-				["merge-base", "--is-ancestor", featureSha, baseSha],
-				repoRoot,
-			);
+			await git(["merge-base", "--is-ancestor", featureSha, baseSha], repoRoot);
 			integrationObserved = true;
 			unmerged = false;
 		} catch (error) {

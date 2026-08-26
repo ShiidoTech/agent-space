@@ -23,7 +23,9 @@ describe("AgentAttentionMonitor", () => {
 		attentionReason: "Asked a question",
 	};
 
-	let collect: ReturnType<typeof vi.fn<() => Promise<readonly AttentionWatchedAgent[]>>>;
+	let collect: ReturnType<
+		typeof vi.fn<() => Promise<readonly AttentionWatchedAgent[]>>
+	>;
 	let onAlert: ReturnType<typeof vi.fn<(alert: AgentAttentionAlert) => void>>;
 	let onError: ReturnType<typeof vi.fn<(error: unknown) => void>>;
 

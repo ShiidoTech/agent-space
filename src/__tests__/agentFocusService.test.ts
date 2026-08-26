@@ -50,10 +50,7 @@ describe("AgentFocusService (behavioral contract)", () => {
 		});
 	}
 
-	function track(
-		states: string[],
-		settled: number[] = [],
-	): AgentFocusObserver {
+	function track(states: string[], settled: number[] = []): AgentFocusObserver {
 		return {
 			onState: (state) => states.push(state),
 			onSettled: () => settled.push(1),

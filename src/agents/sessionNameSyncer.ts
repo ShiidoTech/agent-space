@@ -118,19 +118,6 @@ export class SessionNameSyncer {
 		}
 	}
 
-	private syncUnnamedAgents(): void {
-		if (!this.projectManager) return;
-
-		for (const ctx of this.projectManager.getAllContexts()) {
-			for (const featureId of this.getManagedFeatureIds(ctx)) {
-				for (const agent of ctx.agentManager.getAgents(featureId)) {
-					if (!this.isUnnamed(agent.name)) continue;
-					this.syncAgent(ctx, featureId, agent);
-				}
-			}
-		}
-	}
-
 	/**
 	 * Periodic title pass, async-only like the binder's periodic reconciliation.
 	 * Titles are read exclusively through the adapters' `async` boundary so the

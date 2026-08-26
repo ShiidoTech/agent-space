@@ -188,8 +188,7 @@ export class AgentAttentionResolver {
 			};
 		}
 
-		let pane: Awaited<ReturnType<TmuxIntegration["getPaneStatusAsync"]>> =
-			null;
+		let pane: Awaited<ReturnType<TmuxIntegration["getPaneStatusAsync"]>> = null;
 		try {
 			pane = (await this.tmux.getPaneStatusAsync?.(sessionName)) ?? null;
 		} catch {

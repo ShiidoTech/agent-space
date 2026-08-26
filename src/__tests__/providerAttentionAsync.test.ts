@@ -39,13 +39,11 @@ describe("provider attention async twins (parity with sync reads)", () => {
 				type: "assistant",
 				timestamp: "2026-03-06T10:02:00Z",
 				message: {
-					content: [
-						{ type: "tool_use", name: "AskUserQuestion" },
-					],
+					content: [{ type: "tool_use", name: "AskUserQuestion" }],
 				},
 			}),
 		];
-		fs.writeFileSync(filePath, lines.join("\n") + "\n");
+		fs.writeFileSync(filePath, `${lines.join("\n")}\n`);
 
 		const provider = new ClaudeSessionProvider(projectsDir);
 		const syncSignal = provider.readAttention("sess-1");
@@ -78,7 +76,7 @@ describe("provider attention async twins (parity with sync reads)", () => {
 				timestamp: "2026-03-06T09:02:00Z",
 			}),
 		];
-		fs.writeFileSync(filePath, lines.join("\n") + "\n");
+		fs.writeFileSync(filePath, `${lines.join("\n")}\n`);
 
 		const provider = new CodexSessionProvider(sessionsDir);
 		const syncSignal = provider.readAttention("codex-sess-1");

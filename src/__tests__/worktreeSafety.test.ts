@@ -23,7 +23,9 @@ type GitResponse = string | Error;
 function mockGitSequence(...responses: GitResponse[]): void {
 	const queue = [...responses];
 	execFileMock.mockImplementation((...args: unknown[]) => {
-		const callback = args[3] as ((error: Error | null, result: unknown) => void) | undefined;
+		const callback = args[3] as
+			| ((error: Error | null, result: unknown) => void)
+			| undefined;
 		const next = queue.shift();
 		if (next instanceof Error) {
 			callback?.(next, null);
@@ -89,7 +91,13 @@ describe("checkWorktreeDeletionSafety", () => {
 	});
 
 	it("is unsafe when the worktree has uncommitted changes", async () => {
-		mockGitSequence(" M src/index.ts\n", `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		mockGitSequence(
+			" M src/index.ts\n",
+			`${featureSha}\n`,
+			`${baseSha}\n`,
+			"",
+			"0\n",
+		);
 
 		const result = await checkWorktreeDeletionSafety({
 			repoRoot,
@@ -134,7 +142,13 @@ describe("checkWorktreeDeletionSafety", () => {
 	});
 
 	it("blocks deletion when git status cannot be observed", async () => {
-		mockGitSequence(gitError(128), `${featureSha}\n`, `${baseSha}\n`, "", "0\n");
+		mockGitSequence(
+			gitError(128),
+			`${featureSha}\n`,
+			`${baseSha}\n`,
+			"",
+			"0\n",
+		);
 
 		const result = await checkWorktreeDeletionSafety({
 			repoRoot,
@@ -298,7 +312,11 @@ describe("checkBranchRetentionSafety", () => {
 				branch: "feature/x",
 				baseBranch: "main",
 			}),
-		).resolves.toMatchObject({ safe: true, forceable: true, localCommitCount: 0 });
+		).resolves.toMatchObject({
+			safe: true,
+			forceable: true,
+			localCommitCount: 0,
+		});
 	});
 
 	it("surfaces retained unique commits as a known force decision", async () => {
@@ -329,6 +347,10 @@ describe("checkBranchRetentionSafety", () => {
 				branch: "feature/missing",
 				baseBranch: "main",
 			}),
-		).resolves.toMatchObject({ safe: false, forceable: false, refsObserved: false });
+		).resolves.toMatchObject({
+			safe: false,
+			forceable: false,
+			refsObserved: false,
+		});
 	});
 });

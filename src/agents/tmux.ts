@@ -173,7 +173,9 @@ export class TmuxIntegration {
 				.toString()
 				.trim();
 			if (!overrides.includes("smcup@")) {
-				await execAsync('tmux set -sa terminal-overrides ",*:smcup@:rmcup@:XM@"');
+				await execAsync(
+					'tmux set -sa terminal-overrides ",*:smcup@:rmcup@:XM@"',
+				);
 			}
 			this.nativeScrollConfigured = true;
 		} catch {
