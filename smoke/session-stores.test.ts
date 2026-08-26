@@ -128,7 +128,13 @@ describe.skipIf(!SMOKE)("session-stores smoke", () => {
 			const { HermesSessionProvider } = await import(
 				"../src/agents/sessionProviders/hermesSessionProvider"
 			);
-			const provider = new HermesSessionProvider();
+			// HERMES_DB_PATH points to the .db file; constructor expects the home dir.
+			const hermesHome =
+				process.env.HERMES_HOME ??
+				(process.env.HERMES_DB_PATH
+					? require("node:path").dirname(process.env.HERMES_DB_PATH)
+					: undefined);
+			const provider = new HermesSessionProvider(hermesHome);
 
 			const sessions = provider.scanSessions();
 			if (sessions.length === 0) {
@@ -154,7 +160,7 @@ describe.skipIf(!SMOKE)("session-stores smoke", () => {
 			const { CodexSessionProvider } = await import(
 				"../src/agents/sessionProviders/codexSessionProvider"
 			);
-			const provider = new CodexSessionProvider();
+			const provider = new CodexSessionProvider(undefined, indexPath);
 
 			const sessions = provider.scanSessions();
 			if (sessions.length === 0) {
