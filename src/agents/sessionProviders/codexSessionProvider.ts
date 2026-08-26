@@ -27,6 +27,28 @@ const DEFAULT_CODEX_SESSION_INDEX_PATH = path.join(
 	"session_index.jsonl",
 );
 
+/**
+ * Locate a Codex `session_index.jsonl` next to the session store. Codex keeps
+ * the index at the profile root, i.e. the parent of the `sessions` directory
+ * (e.g. `~/.codex-perso/session_index.jsonl` for a `codex-perso` profile whose
+ * sessions live in `~/.codex-perso/sessions`). Fall back to a sibling of the
+ * sessions dir, then to the default profile.
+ */
+function resolveCodexIndexPath(
+	sessionsDir?: string,
+	explicit?: string,
+): string {
+	if (explicit) return explicit;
+	if (sessionsDir) {
+		const parent = path.join(path.dirname(sessionsDir), "session_index.jsonl");
+		if (fs.existsSync(parent)) return parent;
+		const sibling = path.join(sessionsDir, "session_index.jsonl");
+		if (fs.existsSync(sibling)) return sibling;
+		return parent;
+	}
+	return DEFAULT_CODEX_SESSION_INDEX_PATH;
+}
+
 export class CodexSessionProvider
 	implements SessionProvider, SessionRenameAdapter, SessionTitleProvider
 {
@@ -43,8 +65,7 @@ export class CodexSessionProvider
 
 	constructor(sessionsDir?: string, sessionIndexPath?: string) {
 		this.sessionsDir = sessionsDir ?? DEFAULT_CODEX_SESSIONS_DIR;
-		this.sessionIndexPath =
-			sessionIndexPath ?? DEFAULT_CODEX_SESSION_INDEX_PATH;
+		this.sessionIndexPath = resolveCodexIndexPath(sessionsDir, sessionIndexPath);
 	}
 
 	/**

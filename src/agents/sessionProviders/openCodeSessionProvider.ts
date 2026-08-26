@@ -1,5 +1,9 @@
-import { execFile, execSync } from "node:child_process";
-import { promisify } from "node:util";
+import {
+	openCodeCliFallback,
+	resolveOpenCodeDbPath,
+	type SqliteModule,
+	SqliteReadOnlyDb,
+} from "./sqliteRead";
 import type {
 	SessionInfo,
 	SessionProvider,
@@ -11,113 +15,164 @@ export interface OpenCodeAttentionSignal {
 	evidence: string;
 }
 
+export interface OpenCodeSessionProviderOptions {
+	/** Explicit SQLite database path. Defaults to the opencode data directory. */
+	dbPath?: string;
+	/** Injected read-only DB (test seam). Skip to use the real `node:sqlite`. */
+	sqliteOverride?: SqliteModule | null;
+}
+
+/**
+ * Real OpenCode schema: message carries no role column — the role lives in
+ * message.data (`$.role`) and the prompt text in part.data
+ * (`$.type = 'text'`, `$.text`). The scalar subquery resolves through
+ * part_message_id_id_idx so no temp b-tree is built.
+ */
+const USER_PROMPT_SQL = `
+	SELECT (
+		SELECT p.data FROM part p
+		WHERE p.session_id = m.session_id AND p.message_id = m.id
+			AND json_extract(p.data, '$.type') = 'text'
+		ORDER BY p.id ASC LIMIT 1
+	) AS part_data
+	FROM message m
+	WHERE m.session_id = ?
+		AND json_extract(m.data, '$.role') = 'user'
+	ORDER BY m.time_created ASC, m.id ASC
+	LIMIT 1`;
+
+const GATE_SQL = `
+	SELECT
+		(SELECT data FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1) AS message_data,
+		(SELECT data FROM part WHERE session_id = ?
+			AND message_id = (SELECT id FROM message WHERE session_id = ? ORDER BY time_created DESC, id DESC LIMIT 1)
+			AND json_extract(data, '$.type') = 'tool'
+			AND json_extract(data, '$.state.status') IN ('pending', 'running')
+			AND json_extract(data, '$.tool') IN ('question', 'plan_exit')
+			ORDER BY time_updated DESC, id DESC LIMIT 1) AS gate_data`;
+
 export class OpenCodeSessionProvider
 	implements SessionProvider, SessionRenameAdapter
 {
 	readonly toolId = "opencode";
-	private readonly execFileAsync = promisify(execFile);
-	readonly async = {
-		scanSessions: async (): Promise<SessionInfo[]> => {
-			const rows = await this.queryAsync(
-				"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
-			);
-			return rows
-				.filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && "id" in r)
-				.map((r) => ({
-					sessionId: String(r.id || ""),
-					prompt: String(r.title || ""),
-					created: epochMsToIso(r.time_created),
-					projectPath: String(r.directory || ""),
-				}));
-		},
-		readName: async (sessionId: string): Promise<string | null> => {
-			if (!isSafeSessionId(sessionId)) return null;
-			const rows = await this.queryAsync(
-				`SELECT title FROM session WHERE id = '${sessionId}'`,
-			);
-			const title = (rows[0] as Record<string, unknown> | undefined)?.title;
-			return typeof title === "string" && title.trim() ? title.trim() : null;
-		},
-		hasSession: async (sessionId: string): Promise<boolean> => {
-			if (!isSafeSessionId(sessionId)) return false;
-			return (await this.queryAsync(
-				`SELECT id FROM session WHERE id = '${sessionId}'`,
-			)).length > 0;
-		},
-	};
+	private readonly sqlite: SqliteReadOnlyDb;
 
-	private async queryAsync(sql: string): Promise<unknown[]> {
-		try {
-			const { stdout } = await this.execFileAsync(
-				"opencode",
-				["db", sql, "--format", "json"],
-				{ encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024 },
-			);
-			const rows: unknown = JSON.parse(stdout);
-			return Array.isArray(rows) ? rows : [];
-		} catch {
-			return [];
-		}
+	constructor(options: OpenCodeSessionProviderOptions = {}) {
+		const dbPath = options.dbPath ?? resolveOpenCodeDbPath();
+		this.sqlite = new SqliteReadOnlyDb(
+			dbPath,
+			openCodeCliFallback(),
+			options.sqliteOverride,
+		);
 	}
 
-	scanSessions(): SessionInfo[] {
-		try {
-			// The window covers every project on the machine, so it has to be wide
-			// enough that a session started in one worktree is still visible after
-			// work happens elsewhere. Binding can take minutes: opencode writes the
-			// session row on the first prompt, not at launch.
-			const raw = execSync(
-				'opencode db "SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200" --format json',
-				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
-			);
-			const rows = JSON.parse(raw);
-			if (!Array.isArray(rows)) return [];
+	readonly async = {
+		scanSessions: async (): Promise<SessionInfo[]> => this.scanSessionsAsync(),
+		readName: async (sessionId: string): Promise<string | null> =>
+			this.readNameAsync(sessionId),
+		hasSession: async (sessionId: string): Promise<boolean> =>
+			this.hasSessionAsync(sessionId),
+	};
 
-			return rows
-				.filter((r: Record<string, unknown>) => r.id)
-				.map((r: Record<string, unknown>) => ({
-					sessionId: String(r.id || ""),
-					prompt: String(r.title || ""),
-					created: epochMsToIso(r.time_created),
-					projectPath: String(r.directory || ""),
-				}));
-		} catch {
-			// opencode CLI not available or query failed
-			return [];
-		}
+	scanSessions(): SessionInfo[] {
+		const rows = this.sqlite.querySync(
+			"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
+		);
+		return rows
+			.filter(
+				(r): r is Record<string, unknown> =>
+					!!r && typeof r === "object" && "id" in r,
+			)
+			.map((r) => ({
+				sessionId: String(r.id || ""),
+				prompt: String(r.title || ""),
+				created: epochMsToIso(r.time_created),
+				projectPath: String(r.directory || ""),
+			}));
+	}
+
+	private async scanSessionsAsync(): Promise<SessionInfo[]> {
+		const rows = await this.sqlite.queryAsync(
+			"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
+		);
+		return rows
+			.filter(
+				(r): r is Record<string, unknown> =>
+					!!r && typeof r === "object" && "id" in r,
+			)
+			.map((r) => ({
+				sessionId: String(r.id || ""),
+				prompt: String(r.title || ""),
+				created: epochMsToIso(r.time_created),
+				projectPath: String(r.directory || ""),
+			}));
 	}
 
 	readName(sessionId: string): string | null {
 		if (!isSafeSessionId(sessionId)) return null;
-
-		try {
-			const raw = execSync(
-				`opencode db "SELECT title FROM session WHERE id = '${sessionId}'" --format json`,
-				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
-			);
-			const rows = JSON.parse(raw);
-			if (!Array.isArray(rows)) return null;
-			const title = rows[0]?.title;
-			if (typeof title !== "string" || !title.trim()) return null;
-			return title.trim();
-		} catch {
-			return null;
-		}
+		const title = this.readTitle(sessionId);
+		if (title) return title;
+		return this.readUserPrompt(sessionId);
 	}
 
-	/** True when opencode still has a session row with this id. */
+	private async readNameAsync(sessionId: string): Promise<string | null> {
+		if (!isSafeSessionId(sessionId)) return null;
+		const title = await this.readTitleAsync(sessionId);
+		if (title) return title;
+		return this.readUserPromptAsync(sessionId);
+	}
+
+	private readTitle(sessionId: string): string | null {
+		const rows = this.sqlite.querySync(
+			"SELECT title FROM session WHERE id = ?",
+			[sessionId],
+		);
+		const title = (rows[0] as Record<string, unknown> | undefined)?.title;
+		return typeof title === "string" && title.trim() ? title.trim() : null;
+	}
+
+	private async readTitleAsync(sessionId: string): Promise<string | null> {
+		const rows = await this.sqlite.queryAsync(
+			"SELECT title FROM session WHERE id = ?",
+			[sessionId],
+		);
+		const title = (rows[0] as Record<string, unknown> | undefined)?.title;
+		return typeof title === "string" && title.trim() ? title.trim() : null;
+	}
+
+	/** Fallback name source: the agent's first user prompt, when the title is still empty. */
+	private readUserPrompt(sessionId: string): string | null {
+		const rows = this.sqlite.querySync(USER_PROMPT_SQL, [sessionId]);
+		return extractPartText(
+			(rows[0] as Record<string, unknown> | undefined)?.part_data,
+		);
+	}
+
+	/** Async mirror of {@link readUserPrompt}: never touches a sync subprocess. */
+	private async readUserPromptAsync(sessionId: string): Promise<string | null> {
+		const rows = await this.sqlite.queryAsync(USER_PROMPT_SQL, [sessionId]);
+		return extractPartText(
+			(rows[0] as Record<string, unknown> | undefined)?.part_data,
+		);
+	}
+
 	hasSession(sessionId: string): boolean {
 		if (!isSafeSessionId(sessionId)) return false;
-		try {
-			const raw = execSync(
-				`opencode db "SELECT id FROM session WHERE id = '${sessionId}'" --format json`,
-				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
-			);
-			const rows = JSON.parse(raw);
-			return Array.isArray(rows) && rows.length > 0;
-		} catch {
-			return false;
-		}
+		return (
+			this.sqlite.querySync("SELECT id FROM session WHERE id = ?", [sessionId])
+				.length > 0
+		);
+	}
+
+	private async hasSessionAsync(sessionId: string): Promise<boolean> {
+		if (!isSafeSessionId(sessionId)) return false;
+		return (
+			(
+				await this.sqlite.queryAsync("SELECT id FROM session WHERE id = ?", [
+					sessionId,
+				])
+			).length > 0
+		);
 	}
 
 	discoverSessionCandidates(
@@ -138,92 +193,80 @@ export class OpenCodeSessionProvider
 	 */
 	readAttention(sessionId: string): OpenCodeAttentionSignal | null {
 		if (!isSafeSessionId(sessionId)) return null;
-
-		try {
-			const raw = execSync(
-				`opencode db "SELECT (SELECT data FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AS message_data, (SELECT data FROM part WHERE session_id = '${sessionId}' AND message_id = (SELECT id FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AND json_extract(data, '$.type') = 'tool' AND json_extract(data, '$.state.status') IN ('pending', 'running') AND json_extract(data, '$.tool') IN ('question', 'plan_exit') ORDER BY time_updated DESC, id DESC LIMIT 1) AS gate_data" --format json`,
-				{ encoding: "utf-8", timeout: 5000, stdio: ["ignore", "pipe", "pipe"] },
-			);
-			const rows = JSON.parse(raw);
-			if (!Array.isArray(rows) || rows.length === 0) return null;
-
-			const row = rows[0] as Record<string, unknown>;
-			const gate = parseJsonRecord(row.gate_data);
-			if (gate) {
-				const tool = typeof gate.tool === "string" ? gate.tool : "question";
-				return {
-					status: "waiting_for_user",
-					evidence: `opencode.${tool}.waiting`,
-				};
-			}
-
-			const message = parseJsonRecord(row.message_data);
-			if (!message) return null;
-			const role = typeof message.role === "string" ? message.role : "";
-			if (role === "user") {
-				return {
-					status: "working",
-					evidence:
-						"OpenCode has received user input and has not completed a response",
-				};
-			}
-			if (role !== "assistant") return null;
-
-			if (message.error) {
-				return {
-					status: "failed",
-					evidence: "opencode.assistant.error",
-				};
-			}
-
-			const time = asRecord(message.time);
-			if (time && time.completed !== undefined && time.completed !== null) {
-				return {
-					status: "idle",
-					evidence: "opencode.assistant.completed",
-				};
-			}
-
-			return {
-				status: "working",
-				evidence: "opencode.assistant.working",
-			};
-		} catch {
-			return null;
-		}
+		const rows = this.sqlite.querySync(GATE_SQL, [
+			sessionId,
+			sessionId,
+			sessionId,
+		]);
+		if (rows.length === 0) return null;
+		return parseAttentionRow(rows[0] as Record<string, unknown>);
 	}
 
 	async readAttentionAsync(
 		sessionId: string,
 	): Promise<OpenCodeAttentionSignal | null> {
 		if (!isSafeSessionId(sessionId)) return null;
-		const rows = await this.queryAsync(
-			`SELECT (SELECT data FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AS message_data, (SELECT data FROM part WHERE session_id = '${sessionId}' AND message_id = (SELECT id FROM message WHERE session_id = '${sessionId}' ORDER BY time_created DESC, id DESC LIMIT 1) AND json_extract(data, '$.type') = 'tool' AND json_extract(data, '$.state.status') IN ('pending', 'running') AND json_extract(data, '$.tool') IN ('question', 'plan_exit') ORDER BY time_updated DESC, id DESC LIMIT 1) AS gate_data`,
-		);
+		const rows = await this.sqlite.queryAsync(GATE_SQL, [
+			sessionId,
+			sessionId,
+			sessionId,
+		]);
 		if (rows.length === 0) return null;
-		const row = rows[0] as Record<string, unknown>;
-		const gate = parseJsonRecord(row.gate_data);
-		if (gate) {
-			const tool = typeof gate.tool === "string" ? gate.tool : "question";
-			return { status: "waiting_for_user", evidence: `opencode.${tool}.waiting` };
-		}
-		const message = parseJsonRecord(row.message_data);
-		if (!message) return null;
-		const role = typeof message.role === "string" ? message.role : "";
-		if (role === "user") {
-			return {
-				status: "working",
-				evidence: "OpenCode has received user input and has not completed a response",
-			};
-		}
-		if (role !== "assistant") return null;
-		const time = parseJsonRecord(message.time);
-		return time?.completed ? { status: "idle", evidence: "opencode.assistant.completed" } : { status: "working", evidence: "opencode.assistant.in_progress" };
+		return parseAttentionRow(rows[0] as Record<string, unknown>);
 	}
+
+	dispose(): void {
+		this.sqlite.dispose();
+	}
+}
+
+function parseAttentionRow(
+	row: Record<string, unknown>,
+): OpenCodeAttentionSignal | null {
+	const gate = parseJsonRecord(row.gate_data);
+	if (gate) {
+		const tool = typeof gate.tool === "string" ? gate.tool : "question";
+		return { status: "waiting_for_user", evidence: `opencode.${tool}.waiting` };
+	}
+
+	const message = parseJsonRecord(row.message_data);
+	if (!message) return null;
+	const role = typeof message.role === "string" ? message.role : "";
+	if (role === "user") {
+		return {
+			status: "working",
+			evidence:
+				"OpenCode has received user input and has not completed a response",
+		};
+	}
+	if (role !== "assistant") return null;
+
+	if (message.error) {
+		return { status: "failed", evidence: "opencode.assistant.error" };
+	}
+
+	const time = asRecord(message.time);
+	if (time && time.completed !== undefined && time.completed !== null) {
+		return { status: "idle", evidence: "opencode.assistant.completed" };
+	}
+
+	return { status: "working", evidence: "opencode.assistant.working" };
 }
 
 function isSafeSessionId(sessionId: string): boolean {
 	return /^[-_a-zA-Z0-9]+$/.test(sessionId);
+}
+
+/**
+ * Extract the prompt text from a real OpenCode `part.data` payload:
+ * `{"type":"text","text":"..."}`. Tolerant to JSON-string or object input.
+ */
+function extractPartText(value: unknown): string | null {
+	const record = parseJsonRecord(value);
+	if (!record) return null;
+	const text = record.text;
+	if (typeof text !== "string" || !text.trim()) return null;
+	return text.trim().slice(0, 200);
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {
@@ -265,14 +308,23 @@ function epochMsToIso(value: unknown): string {
  * Capture this set BEFORE launching: any session present here already existed
  * before the launch and must never be attributed to the new agent.
  */
-export function sessionIdsForDirectory(cwd: string): Set<string> {
-	const provider = new OpenCodeSessionProvider();
-	return new Set(
-		provider
-			.scanSessions()
-			.filter((s) => s.projectPath === cwd && s.sessionId)
-			.map((s) => s.sessionId),
-	);
+export function sessionIdsForDirectory(
+	cwd: string,
+	options: OpenCodeSessionProviderOptions = {},
+): Set<string> {
+	const provider = options.dbPath
+		? new OpenCodeSessionProvider(options)
+		: openCodeSessionAdapter;
+	try {
+		return new Set(
+			provider
+				.scanSessions()
+				.filter((s) => s.projectPath === cwd && s.sessionId)
+				.map((s) => s.sessionId),
+		);
+	} finally {
+		if (provider !== openCodeSessionAdapter) provider.dispose();
+	}
 }
 
 /**
@@ -282,9 +334,19 @@ export function sessionIdsForDirectory(cwd: string): Set<string> {
 export function sessionsForDirectory(
 	cwd: string,
 	knownIds: ReadonlySet<string> = new Set(),
+	options: OpenCodeSessionProviderOptions = {},
 ): SessionInfo[] {
-	const provider = new OpenCodeSessionProvider();
-	return provider
-		.scanSessions()
-		.filter((s) => s.projectPath === cwd && !knownIds.has(s.sessionId));
+	const provider = options.dbPath
+		? new OpenCodeSessionProvider(options)
+		: openCodeSessionAdapter;
+	try {
+		return provider
+			.scanSessions()
+			.filter((s) => s.projectPath === cwd && !knownIds.has(s.sessionId));
+	} finally {
+		if (provider !== openCodeSessionAdapter) provider.dispose();
+	}
 }
+
+/** Shared singleton so the steady-state path reuses one read-only connection. */
+export const openCodeSessionAdapter = new OpenCodeSessionProvider();
