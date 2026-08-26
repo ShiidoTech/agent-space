@@ -1,8 +1,8 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("vscode", () => ({
 	workspace: {
@@ -38,19 +38,19 @@ afterEach(() => {
 	mockExecFileSync.mockReset();
 });
 
-function makeStateDb(home: string, sessions: Array<{ id: string; title: string }>): void {
+function makeStateDb(
+	home: string,
+	sessions: Array<{ id: string; title: string }>,
+): void {
 	const dbPath = path.join(home, "state.db");
 	const db = new DatabaseSync(dbPath, { readOnly: false });
 	db.exec(
 		"CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, cwd TEXT, source TEXT)",
 	);
 	for (const s of sessions) {
-		db.prepare("INSERT INTO sessions(id, title, cwd, source) VALUES(?,?,?,?)").run(
-			s.id,
-			s.title,
-			"/work",
-			"cli",
-		);
+		db.prepare(
+			"INSERT INTO sessions(id, title, cwd, source) VALUES(?,?,?,?)",
+		).run(s.id, s.title, "/work", "cli");
 	}
 	db.close();
 }
@@ -90,7 +90,15 @@ describe("HermesSessionProvider readName", () => {
 		expect(provider.readName("her-fb")).toBe("Exported title");
 		expect(mockExecFileSync).toHaveBeenCalledWith(
 			"hermes",
-			["sessions", "export", "--session-id", "her-fb", "--format", "jsonl", "-"],
+			[
+				"sessions",
+				"export",
+				"--session-id",
+				"her-fb",
+				"--format",
+				"jsonl",
+				"-",
+			],
 			expect.anything(),
 		);
 	});
@@ -113,7 +121,9 @@ describe("HermesSessionProvider readName", () => {
 
 		const provider = new HermesSessionProvider(home);
 		expect(
-			await (provider.async.readName as (id: string) => Promise<string | null>)("her-a"),
+			await (provider.async.readName as (id: string) => Promise<string | null>)(
+				"her-a",
+			),
 		).toBe("Async hermes title");
 		expect(mockExecFile).not.toHaveBeenCalled();
 		expect(mockExecFileSync).not.toHaveBeenCalled();
@@ -124,9 +134,15 @@ describe("HermesSessionProvider readName", () => {
 		fs.mkdirSync(home, { recursive: true });
 		makeBreadcrumb(home, "her-afb", "/work");
 		mockExecFile.mockImplementation((...args: unknown[]) => {
-			const cb = args[args.length - 1] as (err: unknown, value: unknown) => void;
+			const cb = args[args.length - 1] as (
+				err: unknown,
+				value: unknown,
+			) => void;
 			cb(null, {
-				stdout: JSON.stringify({ id: "her-afb", title: "Async exported title" }),
+				stdout: JSON.stringify({
+					id: "her-afb",
+					title: "Async exported title",
+				}),
 				stderr: "",
 			});
 			return {} as never;
@@ -134,8 +150,86 @@ describe("HermesSessionProvider readName", () => {
 
 		const provider = new HermesSessionProvider(home);
 		expect(
-			await (provider.async.readName as (id: string) => Promise<string | null>)("her-afb"),
+			await (provider.async.readName as (id: string) => Promise<string | null>)(
+				"her-afb",
+			),
 		).toBe("Async exported title");
 		expect(mockExecFile).toHaveBeenCalled();
+	});
+});
+
+describe("HermesSessionProvider scanSessions", () => {
+	it("uses the instance home for breadcrumbs and enriches prompts from state.db", () => {
+		const home = path.join(tmpDir, "scan");
+		fs.mkdirSync(home, { recursive: true });
+		makeStateDb(home, [
+			{ id: "her-s1", title: "Titled session" },
+			{ id: "her-s2", title: "   " },
+		]);
+		makeBreadcrumb(home, "her-s1", "/work/a");
+		makeBreadcrumb(home, "her-s2", "/work/b");
+
+		const provider = new HermesSessionProvider(home);
+		const sessions = provider.scanSessions();
+		expect(sessions).toContainEqual({
+			sessionId: "her-s1",
+			prompt: "Titled session",
+			created: new Date(1700000000 * 1000).toISOString(),
+			projectPath: "/work/a",
+		});
+		expect(sessions.find((s) => s.sessionId === "her-s2")?.prompt).toBe("");
+		// No CLI cost for scanning.
+		expect(mockExecFileSync).not.toHaveBeenCalled();
+		expect(mockExecFile).not.toHaveBeenCalled();
+	});
+});
+
+describe("HermesSessionProvider hasSession", () => {
+	it("answers from state.db without spawning the CLI", () => {
+		const home = path.join(tmpDir, "has-db");
+		fs.mkdirSync(home, { recursive: true });
+		makeStateDb(home, [{ id: "her-h1", title: "t" }]);
+
+		const provider = new HermesSessionProvider(home);
+		expect(provider.hasSession("her-h1")).toBe(true);
+		// A readable database is authoritative for negatives too.
+		expect(provider.hasSession("her-missing")).toBe(false);
+		expect(mockExecFileSync).not.toHaveBeenCalled();
+		expect(mockExecFile).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the dry-run export when state.db is unavailable", () => {
+		const home = path.join(tmpDir, "has-nodb");
+		fs.mkdirSync(home, { recursive: true });
+		mockExecFileSync.mockReturnValue("Would export 1 session");
+
+		const provider = new HermesSessionProvider(home);
+		expect(provider.hasSession("her-dry")).toBe(true);
+		expect(mockExecFileSync).toHaveBeenCalledWith(
+			"hermes",
+			[
+				"sessions",
+				"export",
+				"--dry-run",
+				"--session-id",
+				"her-dry",
+				"--format",
+				"jsonl",
+				"-",
+			],
+			expect.anything(),
+		);
+	});
+
+	it("mirrors the SQLite-first contract on the async path", async () => {
+		const home = path.join(tmpDir, "has-async");
+		fs.mkdirSync(home, { recursive: true });
+		makeStateDb(home, [{ id: "her-ha", title: "t" }]);
+
+		const provider = new HermesSessionProvider(home);
+		expect(await provider.async.hasSession("her-ha")).toBe(true);
+		expect(await provider.async.hasSession("her-absent")).toBe(false);
+		expect(mockExecFile).not.toHaveBeenCalled();
+		expect(mockExecFileSync).not.toHaveBeenCalled();
 	});
 });

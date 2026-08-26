@@ -1,8 +1,11 @@
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { execFile, execSync } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+/** Cap aligned across the sync and async CLI paths (truncated JSON fails parse -> []). */
+const CLI_MAX_BUFFER = 4 * 1024 * 1024;
 
 export interface SqliteRow {
 	[column: string]: unknown;
@@ -14,6 +17,7 @@ export interface SqliteStatementLike {
 
 export interface SqliteDatabaseLike {
 	prepare(sql: string): SqliteStatementLike;
+	exec(sql: string): void;
 	close(): void;
 }
 
@@ -45,7 +49,6 @@ export function loadSqlite():
 	if (sqliteModuleChecked) return sqliteModule;
 	sqliteModuleChecked = true;
 	try {
-		// eslint-disable-next-line @typescript-eslint/no-require-imports
 		sqliteModule = require("node:sqlite") as {
 			DatabaseSync: SqliteDatabaseConstructor;
 		};
@@ -71,7 +74,9 @@ export class SqliteReadOnlyDb {
 	constructor(
 		private readonly dbPath: string | undefined,
 		private readonly cli?: SqliteCliFallback,
-		private readonly sqliteOverride?: { DatabaseSync: SqliteDatabaseConstructor } | null,
+		private readonly sqliteOverride?: {
+			DatabaseSync: SqliteDatabaseConstructor;
+		} | null,
 	) {}
 
 	private open(): SqliteDatabaseLike | null {
@@ -80,16 +85,24 @@ export class SqliteReadOnlyDb {
 
 		const sqlite =
 			this.sqliteOverride !== undefined
-				? this.sqliteOverride ?? undefined
+				? (this.sqliteOverride ?? undefined)
 				: loadSqlite();
 		if (!sqlite) return null;
 		if (!existsSync(this.dbPath)) return null;
 
 		try {
 			this.db = new sqlite.DatabaseSync(this.dbPath, { readOnly: true });
+			// Belt and braces: enforce read-only even on runtimes that ignore the
+			// constructor option (unknown options are silently dropped pre-22.x).
+			this.db.exec("PRAGMA query_only = ON");
 			return this.db;
 		} catch {
 			// Transient (locked/compacted file): fall back and retry next time.
+			try {
+				this.db?.close();
+			} catch {
+				// best-effort
+			}
 			this.db = null;
 			return null;
 		}
@@ -172,9 +185,10 @@ let cachedOpenCodeDbPath: string | undefined | null = null;
 export function resolveOpenCodeDbPath(): string | undefined {
 	if (cachedOpenCodeDbPath !== null) return cachedOpenCodeDbPath;
 	try {
-		const raw = execSync("opencode db path", {
+		const raw = execFileSync("opencode", ["db", "path"], {
 			encoding: "utf-8",
 			timeout: 5_000,
+			maxBuffer: CLI_MAX_BUFFER,
 			stdio: ["ignore", "pipe", "pipe"],
 		}).trim();
 		cachedOpenCodeDbPath = raw || undefined;
@@ -184,13 +198,18 @@ export function resolveOpenCodeDbPath(): string | undefined {
 	return cachedOpenCodeDbPath;
 }
 
-/** Build the OpenCode CLI fallback (used only when direct SQLite is unavailable). */
+/**
+ * Build the OpenCode CLI fallback (used only when direct SQLite is unavailable).
+ * Both paths spawn argument vectors (never a shell), so provider-controlled SQL
+ * can never reach an interpreter.
+ */
 export function openCodeCliFallback(): SqliteCliFallback {
 	return {
 		execSync: (sql) => {
-			const raw = execSync(`opencode db "${sql}" --format json`, {
-				encoding: "utf-8",
+			const raw = execFileSync("opencode", ["db", sql, "--format", "json"], {
+				encoding: "utf8",
 				timeout: 5_000,
+				maxBuffer: CLI_MAX_BUFFER,
 				stdio: ["ignore", "pipe", "pipe"],
 			});
 			const rows: unknown = JSON.parse(raw);
@@ -200,7 +219,7 @@ export function openCodeCliFallback(): SqliteCliFallback {
 			const { stdout } = await execFileAsync(
 				"opencode",
 				["db", sql, "--format", "json"],
-				{ encoding: "utf8", timeout: 5_000, maxBuffer: 4 * 1024 * 1024 },
+				{ encoding: "utf8", timeout: 5_000, maxBuffer: CLI_MAX_BUFFER },
 			);
 			const rows: unknown = JSON.parse(stdout);
 			return Array.isArray(rows) ? rows : [];

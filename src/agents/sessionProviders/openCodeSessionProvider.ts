@@ -1,14 +1,14 @@
+import {
+	openCodeCliFallback,
+	resolveOpenCodeDbPath,
+	type SqliteModule,
+	SqliteReadOnlyDb,
+} from "./sqliteRead";
 import type {
 	SessionInfo,
 	SessionProvider,
 	SessionRenameAdapter,
 } from "./types";
-import {
-	SqliteReadOnlyDb,
-	openCodeCliFallback,
-	resolveOpenCodeDbPath,
-	type SqliteModule,
-} from "./sqliteRead";
 
 export interface OpenCodeAttentionSignal {
 	status: "working" | "waiting_for_user" | "idle" | "failed";
@@ -22,10 +22,23 @@ export interface OpenCodeSessionProviderOptions {
 	sqliteOverride?: SqliteModule | null;
 }
 
+/**
+ * Real OpenCode schema: message carries no role column — the role lives in
+ * message.data (`$.role`) and the prompt text in part.data
+ * (`$.type = 'text'`, `$.text`). The scalar subquery resolves through
+ * part_message_id_id_idx so no temp b-tree is built.
+ */
 const USER_PROMPT_SQL = `
-	SELECT data FROM message
-	WHERE session_id = ? AND role = 'user'
-	ORDER BY time_created ASC, id ASC
+	SELECT (
+		SELECT p.data FROM part p
+		WHERE p.session_id = m.session_id AND p.message_id = m.id
+			AND json_extract(p.data, '$.type') = 'text'
+		ORDER BY p.id ASC LIMIT 1
+	) AS part_data
+	FROM message m
+	WHERE m.session_id = ?
+		AND json_extract(m.data, '$.role') = 'user'
+	ORDER BY m.time_created ASC, m.id ASC
 	LIMIT 1`;
 
 const GATE_SQL = `
@@ -66,7 +79,10 @@ export class OpenCodeSessionProvider
 			"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
 		);
 		return rows
-			.filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && "id" in r)
+			.filter(
+				(r): r is Record<string, unknown> =>
+					!!r && typeof r === "object" && "id" in r,
+			)
 			.map((r) => ({
 				sessionId: String(r.id || ""),
 				prompt: String(r.title || ""),
@@ -80,7 +96,10 @@ export class OpenCodeSessionProvider
 			"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
 		);
 		return rows
-			.filter((r): r is Record<string, unknown> => !!r && typeof r === "object" && "id" in r)
+			.filter(
+				(r): r is Record<string, unknown> =>
+					!!r && typeof r === "object" && "id" in r,
+			)
 			.map((r) => ({
 				sessionId: String(r.id || ""),
 				prompt: String(r.title || ""),
@@ -100,7 +119,7 @@ export class OpenCodeSessionProvider
 		if (!isSafeSessionId(sessionId)) return null;
 		const title = await this.readTitleAsync(sessionId);
 		if (title) return title;
-		return this.readUserPrompt(sessionId);
+		return this.readUserPromptAsync(sessionId);
 	}
 
 	private readTitle(sessionId: string): string | null {
@@ -124,10 +143,17 @@ export class OpenCodeSessionProvider
 	/** Fallback name source: the agent's first user prompt, when the title is still empty. */
 	private readUserPrompt(sessionId: string): string | null {
 		const rows = this.sqlite.querySync(USER_PROMPT_SQL, [sessionId]);
-		const text = extractMessageText(
-			(rows[0] as Record<string, unknown> | undefined)?.data,
+		return extractPartText(
+			(rows[0] as Record<string, unknown> | undefined)?.part_data,
 		);
-		return text && text.trim() ? text.trim().slice(0, 200) : null;
+	}
+
+	/** Async mirror of {@link readUserPrompt}: never touches a sync subprocess. */
+	private async readUserPromptAsync(sessionId: string): Promise<string | null> {
+		const rows = await this.sqlite.queryAsync(USER_PROMPT_SQL, [sessionId]);
+		return extractPartText(
+			(rows[0] as Record<string, unknown> | undefined)?.part_data,
+		);
 	}
 
 	hasSession(sessionId: string): boolean {
@@ -167,7 +193,11 @@ export class OpenCodeSessionProvider
 	 */
 	readAttention(sessionId: string): OpenCodeAttentionSignal | null {
 		if (!isSafeSessionId(sessionId)) return null;
-		const rows = this.sqlite.querySync(GATE_SQL, [sessionId, sessionId, sessionId]);
+		const rows = this.sqlite.querySync(GATE_SQL, [
+			sessionId,
+			sessionId,
+			sessionId,
+		]);
 		if (rows.length === 0) return null;
 		return parseAttentionRow(rows[0] as Record<string, unknown>);
 	}
@@ -190,7 +220,9 @@ export class OpenCodeSessionProvider
 	}
 }
 
-function parseAttentionRow(row: Record<string, unknown>): OpenCodeAttentionSignal | null {
+function parseAttentionRow(
+	row: Record<string, unknown>,
+): OpenCodeAttentionSignal | null {
 	const gate = parseJsonRecord(row.gate_data);
 	if (gate) {
 		const tool = typeof gate.tool === "string" ? gate.tool : "question";
@@ -225,31 +257,16 @@ function isSafeSessionId(sessionId: string): boolean {
 	return /^[-_a-zA-Z0-9]+$/.test(sessionId);
 }
 
-function extractMessageText(value: unknown): string | null {
+/**
+ * Extract the prompt text from a real OpenCode `part.data` payload:
+ * `{"type":"text","text":"..."}`. Tolerant to JSON-string or object input.
+ */
+function extractPartText(value: unknown): string | null {
 	const record = parseJsonRecord(value);
 	if (!record) return null;
-	const text = readTextFromParts(record) ?? readTextFromContent(record);
-	return text;
-}
-
-function readTextFromParts(record: Record<string, unknown>): string | null {
-	const parts = Array.isArray(record.parts) ? record.parts : [];
-	const texts = parts
-		.map((part) => {
-			if (part && typeof part === "object" && "text" in part) {
-				const t = (part as { text?: unknown }).text;
-				return typeof t === "string" ? t : null;
-			}
-			return null;
-		})
-		.filter((t): t is string => !!t && t.trim().length > 0);
-	return texts.length > 0 ? texts.join("\n") : null;
-}
-
-function readTextFromContent(record: Record<string, unknown>): string | null {
-	const content = record.content;
-	if (typeof content === "string") return content.trim() || null;
-	return null;
+	const text = record.text;
+	if (typeof text !== "string" || !text.trim()) return null;
+	return text.trim().slice(0, 200);
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | null {
