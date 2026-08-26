@@ -122,6 +122,48 @@ describe("Fallback observability", () => {
 		expect(events).toContain("query_failed");
 	});
 
+	it("reports query_failed when sqlite fails but cli succeeds", () => {
+		const events: FallbackEventKind[] = [];
+		setFallbackReporter((k) => events.push(k));
+		const cli = {
+			execSync: () => [{ ok: true }],
+			execAsync: async () => [{ ok: true }],
+		};
+		// dbPath is undefined → open() returns null, sqlite fails.
+		// cli succeeds → rows returned, but sqliteFailed is true.
+		const db = new SqliteReadOnlyDb(undefined, cli);
+		const rows = db.querySync("SELECT 1");
+		expect(rows).toEqual([{ ok: true }]);
+		expect(events).toContain("query_failed");
+	});
+
+	it("reports query_failed when sqlite query throws but cli succeeds", () => {
+		const events: FallbackEventKind[] = [];
+		setFallbackReporter((k) => events.push(k));
+		const cli = {
+			execSync: () => [{ recovered: true }],
+			execAsync: async () => [{ recovered: true }],
+		};
+		class BrokenDb {
+			prepare() {
+				return {
+					all() {
+						throw new Error("sqlite corrupted");
+					},
+				};
+			}
+			exec() {}
+			close() {}
+		}
+		const override = { DatabaseSync: BrokenDb as never } as SqliteModule;
+		const dbPath = path.join(tmpDir, "broken.db");
+		fs.writeFileSync(dbPath, "");
+		const db = new SqliteReadOnlyDb(dbPath, cli, override);
+		const rows = db.querySync("SELECT 1");
+		expect(rows).toEqual([{ recovered: true }]);
+		expect(events).toContain("query_failed");
+	});
+
 	it("fires each event kind at most once (one-shot)", () => {
 		const events: FallbackEventKind[] = [];
 		setFallbackReporter((k) => events.push(k));

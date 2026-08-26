@@ -11,6 +11,7 @@
  * is spawned.  The CLI fallback is only a compatibility net for unreadable DBs.
  */
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as childProcess from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -128,7 +129,11 @@ describe.skipIf(!SMOKE)("session-stores smoke", () => {
 			const { HermesSessionProvider } = await import(
 				"../src/agents/sessionProviders/hermesSessionProvider"
 			);
-			const provider = new HermesSessionProvider();
+			// HERMES_DB_PATH is authoritative: derive home from the exact db
+			// path the probe validated, so the provider reads the same store.
+			const hermesHome = path.dirname(dbPath);
+			expect(fs.existsSync(path.join(hermesHome, "state.db"))).toBe(true);
+			const provider = new HermesSessionProvider(hermesHome);
 
 			const sessions = provider.scanSessions();
 			if (sessions.length === 0) {
@@ -154,7 +159,11 @@ describe.skipIf(!SMOKE)("session-stores smoke", () => {
 			const { CodexSessionProvider } = await import(
 				"../src/agents/sessionProviders/codexSessionProvider"
 			);
-			const provider = new CodexSessionProvider();
+			// Derive sessionsDir from the overridden index path so both the
+			// probe and the provider read the same Codex profile.
+			const sessionsDir = path.join(path.dirname(indexPath), "sessions");
+			expect(fs.existsSync(indexPath)).toBe(true);
+			const provider = new CodexSessionProvider(sessionsDir, indexPath);
 
 			const sessions = provider.scanSessions();
 			if (sessions.length === 0) {

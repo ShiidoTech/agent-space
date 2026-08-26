@@ -161,16 +161,20 @@ export class SqliteReadOnlyDb {
 
 	querySync(sql: string, params: unknown[] = []): unknown[] {
 		const db = this.open();
+		let sqliteFailed = !db;
 		if (db) {
 			try {
 				return db.prepare(sql).all(...params);
 			} catch {
 				// Fall through to the CLI net below.
+				sqliteFailed = true;
 			}
 		}
 		if (this.cli) {
 			try {
-				return this.cli.execSync(interpolate(sql, params));
+				const rows = this.cli.execSync(interpolate(sql, params));
+				if (sqliteFailed) reportFallback("query_failed");
+				return rows;
 			} catch {
 				return [];
 			}
@@ -181,16 +185,20 @@ export class SqliteReadOnlyDb {
 
 	async queryAsync(sql: string, params: unknown[] = []): Promise<unknown[]> {
 		const db = this.open();
+		let sqliteFailed = !db;
 		if (db) {
 			try {
 				return db.prepare(sql).all(...params);
 			} catch {
 				// Fall through to the CLI net below.
+				sqliteFailed = true;
 			}
 		}
 		if (this.cli) {
 			try {
-				return await this.cli.execAsync(interpolate(sql, params));
+				const rows = await this.cli.execAsync(interpolate(sql, params));
+				if (sqliteFailed) reportFallback("query_failed");
+				return rows;
 			} catch {
 				return [];
 			}
