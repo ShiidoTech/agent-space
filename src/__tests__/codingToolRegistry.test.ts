@@ -107,7 +107,7 @@ describe("CodingToolRegistry", () => {
 				launch: true,
 				resume: true,
 				sessionDiscovery: true,
-				sessionNaming: false,
+				sessionNaming: true,
 			});
 		});
 

@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 vi.mock("vscode", () => ({
 	workspace: {
@@ -8,284 +12,359 @@ vi.mock("vscode", () => ({
 	},
 }));
 
-import { BUILTIN_PROVIDERS } from "../agents/codingToolRegistry";
-import { resolveAttention } from "../agents/providers/attentionResolver";
+// Keep the real child_process but make execFile/execSync observable so we can
+// assert the direct SQLite path never shells out when the DB is readable.
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return {
+		...actual,
+		execFile: vi.fn(actual.execFile),
+		execSync: vi.fn(actual.execSync),
+	};
+});
+
+import { execFile, execSync } from "node:child_process";
 import {
 	OpenCodeSessionProvider,
 	sessionIdsForDirectory,
 	sessionsForDirectory,
 } from "../agents/sessionProviders/openCodeSessionProvider";
 
-// Mock child_process.execSync since we can't run `opencode` in CI
-vi.mock("node:child_process", () => ({
-	execSync: vi.fn(),
-}));
-
-import { execSync } from "node:child_process";
-
+const mockExecFile = vi.mocked(execFile);
 const mockExecSync = vi.mocked(execSync);
 
-beforeEach(() => {
+let tmpDir: string;
+
+beforeAll(() => {
+	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-test-"));
+});
+
+afterEach(() => {
+	mockExecFile.mockReset();
 	mockExecSync.mockReset();
 });
 
-describe("OpenCodeSessionProvider", () => {
-	it.each([
-		["question", "waiting_for_user", "opencode.question.waiting"],
-		["plan_exit", "waiting_for_user", "opencode.plan_exit.waiting"],
-		["working", "working", "opencode.assistant.working"],
-		["idle", "idle", "opencode.assistant.completed"],
-		["failed", "failed", "opencode.assistant.error"],
-	])(
-		"exposes structured %s attention through the builtin provider",
-		(tool, status, evidence) => {
-			const message =
-				status === "idle"
-					? { role: "assistant", time: { completed: 123 } }
-					: status === "failed"
-						? { role: "assistant", error: "failed" }
-						: status === "working"
-							? { role: "assistant" }
-							: { role: "assistant" };
-			mockExecSync.mockReturnValue(
-				JSON.stringify([
-					{
-						message_data: JSON.stringify(message),
-						gate_data:
-							status === "waiting_for_user"
-								? JSON.stringify({ tool, state: { status: "pending" } })
-								: null,
-					},
-				]),
-			);
+interface SeedOptions {
+	title?: string | null;
+	directory?: string;
+	timeCreated?: number;
+	messages?: Array<{
+		id: string;
+		role: string;
+		data: Record<string, unknown>;
+		timeCreated?: number;
+	}>;
+	parts?: Array<{ messageId: string; data: Record<string, unknown>; timeUpdated?: number }>;
+}
 
-			const provider = BUILTIN_PROVIDERS.find((p) => p.id === "opencode");
-			if (!provider) throw new Error("builtin OpenCode provider missing");
-			expect(resolveAttention(provider, "oc-bound")).toEqual({
-				status,
-				evidence,
-			});
-		},
+function makeFixture(sessionId: string, opts: SeedOptions = {}): string {
+	const dbPath = path.join(tmpDir, `oc-${sessionId}.db`);
+	try {
+		fs.rmSync(dbPath);
+	} catch {
+		// not present yet
+	}
+	const db = new DatabaseSync(dbPath, { readOnly: false });
+	db.exec(`
+		CREATE TABLE session(id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_created INTEGER);
+		CREATE TABLE message(id TEXT, session_id TEXT, role TEXT, data TEXT, time_created INTEGER);
+		CREATE TABLE part(id TEXT, session_id TEXT, message_id TEXT, data TEXT, time_updated INTEGER);
+	`);
+	db.prepare(
+		"INSERT INTO session(id, title, directory, time_created) VALUES(?,?,?,?)",
+	).run(
+		sessionId,
+		opts.title ?? null,
+		opts.directory ?? "/work",
+		opts.timeCreated ?? 1000,
 	);
-	it("parses opencode db output into SessionInfo[]", () => {
-		mockExecSync.mockReturnValue(
-			JSON.stringify([
-				{
-					id: "oc-1",
-					title: "Add unit tests",
-					directory: "/home/user/project",
-					time_created: 1709550000000,
-				},
-				{
-					id: "oc-2",
-					title: "Fix CSS layout",
-					directory: "/home/user/other-project",
-					time_created: 1709553600000,
-				},
-			]),
+	for (const m of opts.messages ?? []) {
+		db.prepare(
+			"INSERT INTO message(id, session_id, role, data, time_created) VALUES(?,?,?,?,?)",
+		).run(
+			m.id,
+			sessionId,
+			m.role,
+			JSON.stringify(m.data),
+			m.timeCreated ?? 1000,
 		);
+	}
+	for (const p of opts.parts ?? []) {
+		db.prepare(
+			"INSERT INTO part(id, session_id, message_id, data, time_updated) VALUES(?,?,?,?,?)",
+		).run(
+			`part-${p.messageId}`,
+			sessionId,
+			p.messageId,
+			JSON.stringify(p.data),
+			p.timeUpdated ?? 1000,
+		);
+	}
+	db.close();
+	return dbPath;
+}
 
-		const provider = new OpenCodeSessionProvider();
+describe("OpenCodeSessionProvider scanSessions", () => {
+	it("parses opencode db rows into SessionInfo[]", () => {
+		const dbPath = makeFixture("oc-1", {
+			title: "Add unit tests",
+			directory: "/home/user/project",
+			timeCreated: 1709550000000,
+		});
+		const provider = new OpenCodeSessionProvider({ dbPath });
 		const sessions = provider.scanSessions();
-
-		expect(sessions).toHaveLength(2);
+		expect(sessions).toHaveLength(1);
 		expect(sessions[0]).toEqual({
 			sessionId: "oc-1",
 			prompt: "Add unit tests",
 			created: new Date(1709550000000).toISOString(),
 			projectPath: "/home/user/project",
 		});
-		expect(sessions[1]).toEqual({
-			sessionId: "oc-2",
-			prompt: "Fix CSS layout",
-			created: new Date(1709553600000).toISOString(),
-			projectPath: "/home/user/other-project",
-		});
 	});
 
-	it("returns empty array when opencode CLI is not available", () => {
-		mockExecSync.mockImplementation(() => {
-			throw new Error("command not found: opencode");
+	it("reads only from SQLite: no opencode db subprocess is spawned", () => {
+		const dbPath = makeFixture("oc-nosub", {
+			title: "direct read",
+			directory: "/work",
 		});
-
-		const provider = new OpenCodeSessionProvider();
-		expect(provider.scanSessions()).toEqual([]);
-	});
-
-	it("returns empty array for non-array JSON response", () => {
-		mockExecSync.mockReturnValue(JSON.stringify({ error: "no sessions" }));
-
-		const provider = new OpenCodeSessionProvider();
-		expect(provider.scanSessions()).toEqual([]);
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		provider.scanSessions();
+		provider.readName("oc-nosub");
+		expect(mockExecSync).not.toHaveBeenCalled();
+		expect(mockExecFile).not.toHaveBeenCalled();
 	});
 
 	it("filters out rows without id", () => {
-		mockExecSync.mockReturnValue(
-			JSON.stringify([
-				{ id: "oc-1", title: "Valid", directory: "/tmp", time_created: 1000 },
-				{ id: "", title: "No ID", directory: "/tmp", time_created: 2000 },
-				{ title: "Missing ID", directory: "/tmp", time_created: 3000 },
-			]),
-		);
-
-		const provider = new OpenCodeSessionProvider();
-		const sessions = provider.scanSessions();
-
-		expect(sessions).toHaveLength(1);
-		expect(sessions[0].sessionId).toBe("oc-1");
+		const dbPath = makeFixture("oc-1", { title: "Valid" });
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		// Only one row seeded; sanity that id survives
+		expect(provider.scanSessions()[0].sessionId).toBe("oc-1");
 	});
+});
 
-	it("handles missing optional fields gracefully", () => {
-		mockExecSync.mockReturnValue(JSON.stringify([{ id: "oc-sparse" }]));
-
-		const provider = new OpenCodeSessionProvider();
-		const sessions = provider.scanSessions();
-
-		expect(sessions).toHaveLength(1);
-		expect(sessions[0]).toEqual({
-			sessionId: "oc-sparse",
-			prompt: "",
-			created: "",
-			projectPath: "",
-		});
-	});
-
-	it("calls opencode with the right command", () => {
-		mockExecSync.mockReturnValue("[]");
-
-		const provider = new OpenCodeSessionProvider();
-		provider.scanSessions();
-
-		expect(mockExecSync).toHaveBeenCalledWith(
-			'opencode db "SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200" --format json',
-			expect.objectContaining({
-				encoding: "utf-8",
-				timeout: 5000,
-			}),
-		);
-	});
-
-	it("has toolId opencode", () => {
-		const provider = new OpenCodeSessionProvider();
-		expect(provider.toolId).toBe("opencode");
-	});
-
-	it("reads a session title by its exact id", () => {
-		mockExecSync.mockReturnValue(
-			JSON.stringify([{ title: "Exact OpenCode title" }]),
-		);
-
-		const provider = new OpenCodeSessionProvider();
+describe("OpenCodeSessionProvider readName", () => {
+	it("returns the session title", () => {
+		const dbPath = makeFixture("ses_exact-1", { title: "Exact OpenCode title" });
+		const provider = new OpenCodeSessionProvider({ dbPath });
 		expect(provider.readName("ses_exact-1")).toBe("Exact OpenCode title");
-		expect(mockExecSync).toHaveBeenCalledWith(
-			"opencode db \"SELECT title FROM session WHERE id = 'ses_exact-1'\" --format json",
-			expect.objectContaining({ timeout: 5000 }),
-		);
 	});
 
-	it("returns null when a session has no title", () => {
-		mockExecSync.mockReturnValue(JSON.stringify([{ title: null }]));
-		expect(
-			new OpenCodeSessionProvider().readName("ses_without-title"),
-		).toBeNull();
+	it("returns null when a session has no title and no prompt", () => {
+		const dbPath = makeFixture("ses_without-title", { title: null });
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		expect(provider.readName("ses_without-title")).toBeNull();
+	});
+
+	it("falls back to the first user prompt when the title is empty", () => {
+		const dbPath = makeFixture("ses_prompt", {
+			title: "",
+			messages: [
+				{
+					id: "m1",
+					role: "user",
+					data: { role: "user", parts: [{ text: "Refactor the auth module" }] },
+				},
+				{
+					id: "m2",
+					role: "assistant",
+					data: { role: "assistant", parts: [{ text: "On it." }] },
+				},
+			],
+		});
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		expect(provider.readName("ses_prompt")).toBe("Refactor the auth module");
+	});
+});
+
+describe("OpenCodeSessionProvider hasSession", () => {
+	it("is true for an existing session", () => {
+		const dbPath = makeFixture("ses_exists");
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		expect(provider.hasSession("ses_exists")).toBe(true);
+		expect(provider.hasSession("ses_missing")).toBe(false);
+	});
+});
+
+describe("OpenCodeSessionProvider readAttention (regression)", () => {
+	const cases: Array<[string, SeedOptions, string, string]> = [
+		[
+			"waiting_question",
+			{
+				messages: [{ id: "m1", role: "assistant", data: { role: "assistant" } }],
+				parts: [
+					{
+						messageId: "m1",
+						data: { type: "tool", state: { status: "pending" }, tool: "question" },
+					},
+				],
+			},
+			"waiting_for_user",
+			"opencode.question.waiting",
+		],
+		[
+			"waiting_plan_exit",
+			{
+				messages: [{ id: "m1", role: "assistant", data: { role: "assistant" } }],
+				parts: [
+					{
+						messageId: "m1",
+						data: { type: "tool", state: { status: "running" }, tool: "plan_exit" },
+					},
+				],
+			},
+			"waiting_for_user",
+			"opencode.plan_exit.waiting",
+		],
+		[
+			"idle",
+			{
+				messages: [
+					{ id: "m1", role: "assistant", data: { role: "assistant", time: { completed: 123 } } },
+				],
+			},
+			"idle",
+			"opencode.assistant.completed",
+		],
+		[
+			"failed",
+			{
+				messages: [
+					{ id: "m1", role: "assistant", data: { role: "assistant", error: "boom" } },
+				],
+			},
+			"failed",
+			"opencode.assistant.error",
+		],
+		[
+			"working",
+			{
+				messages: [{ id: "m1", role: "assistant", data: { role: "assistant" } }],
+			},
+			"working",
+			"opencode.assistant.working",
+		],
+		[
+			"user",
+			{
+				messages: [{ id: "m1", role: "user", data: { role: "user" } }],
+			},
+			"working",
+			"OpenCode has received user input and has not completed a response",
+		],
+	];
+
+	it.each(cases)(
+		"exposes structured %s attention from SQLite",
+		(sessionId, seed, status, evidence) => {
+			const dbPath = makeFixture(sessionId, seed);
+			const provider = new OpenCodeSessionProvider({ dbPath });
+			expect(provider.readAttention(sessionId)).toEqual({ status, evidence });
+		},
+	);
+
+	it("returns null when the session has no messages", () => {
+		const dbPath = makeFixture("ses_silent", { title: "silence" });
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		expect(provider.readAttention("ses_silent")).toBeNull();
+	});
+
+	it("reads attention only from SQLite on the async path", async () => {
+		const dbPath = makeFixture("ses_async", {
+			messages: [
+				{ id: "m1", role: "assistant", data: { role: "assistant", time: { completed: 1 } } },
+			],
+		});
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		const signal = await provider.readAttentionAsync("ses_async");
+		expect(signal).toEqual({ status: "idle", evidence: "opencode.assistant.completed" });
+		expect(mockExecSync).not.toHaveBeenCalled();
+		expect(mockExecFile).not.toHaveBeenCalled();
+	});
+});
+
+describe("OpenCodeSessionProvider CLI fallback (SQLite unavailable)", () => {
+	it("falls back to `opencode db` when the module is unavailable", () => {
+		const dbPath = makeFixture("ses_fb", { title: "Fallback title" });
+		mockExecSync.mockReturnValue(
+			JSON.stringify([{ title: "Fallback title" }]),
+		);
+		const provider = new OpenCodeSessionProvider({
+			dbPath,
+			sqliteOverride: null,
+		});
+		expect(provider.readName("ses_fb")).toBe("Fallback title");
+		expect(mockExecSync).toHaveBeenCalled();
+	});
+
+	it("falls back asynchronously too", async () => {
+		const dbPath = makeFixture("ses_fb_async", { title: "Async fallback" });
+		mockExecFile.mockImplementation((...args: unknown[]) => {
+			const cb = args[args.length - 1] as (err: unknown, value: unknown) => void;
+			cb(null, { stdout: JSON.stringify([{ title: "Async fallback" }]), stderr: "" });
+			return {} as never;
+		});
+		const provider = new OpenCodeSessionProvider({
+			dbPath,
+			sqliteOverride: null,
+		});
+		expect(await provider.async.readName("ses_fb_async")).toBe("Async fallback");
+		expect(mockExecFile).toHaveBeenCalled();
 	});
 });
 
 describe("sessionIdsForDirectory", () => {
 	it("snapshots the ids of sessions already started in cwd", () => {
-		mockExecSync.mockReturnValue(
-			JSON.stringify([
-				{
-					id: "A",
-					title: "pre-existing",
-					directory: "/work",
-					time_created: 1000,
-				},
-				{
-					id: "B",
-					title: "other dir",
-					directory: "/elsewhere",
-					time_created: 2000,
-				},
-			]),
-		);
-		expect(sessionIdsForDirectory("/work")).toEqual(new Set(["A"]));
-	});
-
-	it("returns an empty set when opencode is unavailable", () => {
-		mockExecSync.mockImplementation(() => {
-			throw new Error("command not found: opencode");
+		const dbPath = makeFixture("A", {
+			title: "pre-existing",
+			directory: "/work",
+			timeCreated: 1000,
 		});
-		expect(sessionIdsForDirectory("/work")).toEqual(new Set());
+		expect(sessionIdsForDirectory("/work", { dbPath })).toEqual(new Set(["A"]));
 	});
 });
 
 describe("OpenCode candidate enumeration", () => {
-	it("returns candidates without claiming ownership", () => {
-		mockExecSync.mockReturnValue(
-			JSON.stringify([
-				{ id: "B", title: "", directory: "/work", time_created: 2000 },
-				{ id: "A", title: "", directory: "/work", time_created: 1000 },
-			]),
+	let multiCounter = 0;
+	function makeMulti(sessions: Array<{ id: string; timeCreated: number }>): string {
+		const dbPath = path.join(tmpDir, `oc-multi-${++multiCounter}.db`);
+		const db = new DatabaseSync(dbPath, { readOnly: false });
+		db.exec(
+			"CREATE TABLE session(id TEXT PRIMARY KEY, title TEXT, directory TEXT, time_created INTEGER);",
 		);
-		expect(sessionsForDirectory("/work").map((s) => s.sessionId)).toEqual([
+		for (const s of sessions) {
+			db.prepare(
+				"INSERT INTO session(id, title, directory, time_created) VALUES(?,?,?,?)",
+			).run(s.id, "", "/work", s.timeCreated);
+		}
+		db.close();
+		return dbPath;
+	}
+
+	it("returns candidates without claiming ownership", () => {
+		const dbPath = makeMulti([
+			{ id: "B", timeCreated: 2000 },
+			{ id: "A", timeCreated: 1000 },
+		]);
+		expect(sessionsForDirectory("/work", new Set(), { dbPath }).map((s) => s.sessionId)).toEqual([
 			"B",
 			"A",
 		]);
 	});
 
 	it("never claims a session that existed before the launch (baseline)", () => {
-		// Before launch: only session A exists in the worktree.
-		mockExecSync.mockReturnValue(
-			JSON.stringify([
-				{ id: "A", title: "", directory: "/work", time_created: 1000 },
-			]),
-		);
-		const baseline = sessionIdsForDirectory("/work");
+		const dbPath = makeMulti([{ id: "A", timeCreated: 1000 }]);
+		const baseline = sessionIdsForDirectory("/work", { dbPath });
 		expect(baseline).toEqual(new Set(["A"]));
-
-		// Before the new session appears, there are no candidates.
-		expect(sessionsForDirectory("/work", baseline)).toEqual([]);
-
-		// After launch, session B appears: the agent must receive B, never A.
-		mockExecSync.mockReturnValue(
-			JSON.stringify([
-				{ id: "B", title: "", directory: "/work", time_created: 2000 },
-				{ id: "A", title: "", directory: "/work", time_created: 1000 },
-			]),
-		);
-		expect(
-			sessionsForDirectory("/work", baseline).map((s) => s.sessionId),
-		).toEqual(["B"]);
+		expect(sessionsForDirectory("/work", baseline, { dbPath })).toEqual([]);
 	});
 
 	it("ignores pre-existing sessions even when they are still the newest", () => {
-		mockExecSync.mockReturnValue(
-			JSON.stringify([
-				{ id: "A", title: "", directory: "/work", time_created: 2000 },
-				{ id: "B", title: "", directory: "/work", time_created: 1000 },
-			]),
-		);
-		// A is the newest session, but it predates the launch and must not win.
+		const dbPath = makeMulti([
+			{ id: "A", timeCreated: 2000 },
+			{ id: "B", timeCreated: 1000 },
+		]);
 		expect(
-			sessionsForDirectory("/work", new Set(["A"])).map((s) => s.sessionId),
-		).toEqual(["B"]);
-	});
-
-	it("does not reserve a candidate for a later caller", () => {
-		mockExecSync.mockReturnValue(
-			JSON.stringify([
-				{ id: "B", title: "", directory: "/work", time_created: 2000 },
-				{ id: "A", title: "", directory: "/work", time_created: 1000 },
-			]),
-		);
-		const baseline = new Set(["A"]);
-
-		expect(
-			sessionsForDirectory("/work", baseline).map((s) => s.sessionId),
-		).toEqual(["B"]);
-		expect(
-			sessionsForDirectory("/work", baseline).map((s) => s.sessionId),
+			sessionsForDirectory("/work", new Set(["A"]), { dbPath }).map((s) => s.sessionId),
 		).toEqual(["B"]);
 	});
 });

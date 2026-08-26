@@ -108,7 +108,7 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 			launch: true,
 			resume: true,
 			sessionDiscovery: true,
-			sessionNaming: false,
+			sessionNaming: true,
 			attention: NO_ATTENTION_CAPABILITIES,
 		},
 		resumeArgs: (sessionId) => (sessionId ? ["--resume", sessionId] : []),

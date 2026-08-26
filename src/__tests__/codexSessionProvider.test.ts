@@ -474,4 +474,51 @@ describe("CodexSessionProvider", () => {
 			});
 		});
 	});
+
+	describe("custom sessionsDir (codex-perso) index resolution", () => {
+		it("resolves session_index.jsonl at the profile root (parent of sessions)", () => {
+			const profileDir = path.join(tmpDir, "codex-perso");
+			const sessionsDir = path.join(profileDir, "sessions");
+			fs.mkdirSync(sessionsDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(profileDir, "session_index.jsonl"),
+				`${JSON.stringify({ id: "sess-perso", thread_name: "Custom profile name" })}\n`,
+			);
+			writeSessionFile(
+				path.join("sessions", "2026/03/04/rollout-perso.jsonl"),
+				[sessionMeta("sess-perso")],
+			);
+
+			expect(new CodexSessionProvider(sessionsDir).readName("sess-perso")).toBe(
+				"Custom profile name",
+			);
+		});
+
+		it("falls back to the first user message when thread_name is absent", () => {
+			const profileDir = path.join(tmpDir, "codex-perso-2");
+			const sessionsDir = path.join(profileDir, "sessions");
+			fs.mkdirSync(sessionsDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(profileDir, "session_index.jsonl"),
+				`${JSON.stringify({ id: "sess-noname", thread_name: "" })}\n`,
+			);
+			fs.mkdirSync(path.dirname(path.join(sessionsDir, "2026/03/04/rollout-noname.jsonl")), {
+				recursive: true,
+			});
+			fs.writeFileSync(
+				path.join(sessionsDir, "2026/03/04/rollout-noname.jsonl"),
+				[
+					sessionMeta("sess-noname"),
+					JSON.stringify({
+						type: "user_message",
+						message: "Provision the staging database",
+					}),
+				].join("\n"),
+			);
+
+			expect(new CodexSessionProvider(sessionsDir).readName("sess-noname")).toBe(
+				"Provision the staging database",
+			);
+		});
+	});
 });
