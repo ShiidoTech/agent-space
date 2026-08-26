@@ -981,6 +981,93 @@ describe("FeatureStateCoordinator", () => {
 		).toBe(false);
 	});
 
+	it("does not reuse GitHub evidence when the active branch changes at the same SHA", async () => {
+		const activeSha = "7".repeat(40);
+		const deliverySha = "8".repeat(40);
+		let active = {
+			...feature(),
+			branch: "continuation/one",
+			primaryBranchRef: "fix/1401",
+		};
+		const inspect = vi.fn(async ({ featureBranch }: { featureBranch: string }) => {
+			const observed = { ref: featureBranch, sha: activeSha };
+			return {
+				...git(active),
+				feature: known(observed),
+				head: known(observed),
+				branch: known({
+					expected: featureBranch,
+					actual: featureBranch,
+					detached: false,
+					matchesExpected: true,
+				}),
+				creationPointInFeature: known({
+					ancestor: { ref: "main", sha: "1".repeat(40) },
+					descendant: observed,
+					isAncestor: true,
+				}),
+			};
+		});
+		const fixture = setup(inspect);
+		fixture.setFeatures([active]);
+		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
+		fixture.context.gitClient.read = vi.fn(async (args: readonly string[]) => ({
+			argv: [],
+			cwd: "/repo",
+			exitCode: 0,
+			signal: null,
+			stdout:
+				args[0] === "config"
+					? "remote.origin.url https://github.com/test/repo.git\n"
+					: args[0] === "rev-parse"
+						? `${deliverySha}\n`
+						: "main\n",
+			stderr: "",
+		}));
+		const listPullRequests = vi.fn(async ({ head }: { head: string }) => ({
+			status: "ok" as const,
+			pulls: head === active.branch
+				? [{
+						number: head === "continuation/one" ? 1401 : 1402,
+						html_url: "https://github.com/test/pr",
+						state: "closed" as const,
+						merged: true,
+						merged_at: "2026-08-25T12:00:00Z",
+						draft: false,
+						head: { ref: head, sha: activeSha },
+						base: { ref: "main" },
+					}]
+				: [],
+		}));
+		const backend = {
+			auth: vi.fn(async () => ({ state: "authenticated" as const, source: "env" as const, token: "test" })),
+			listPullRequests,
+		} satisfies PullRequestBackend;
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			createGithubBackend: () => backend,
+			referenceBranchRemote: { observe: vi.fn(async () => ({ status: "missing" as const, observedAt: "2026-08-25T00:00:00Z", provenance: { source: "remote_head" as const, ref: "refs/heads/main", backend: "test" } })) },
+		});
+
+		await coordinator.reconcile();
+		await vi.waitFor(() => {
+			const github = coordinator.getSnapshot("f1")?.github;
+			expect(github?.status === "known" ? github.queriedBranch : undefined).toBe(
+				"continuation/one",
+			);
+		});
+		active = { ...active, branch: "continuation/two" };
+		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
+		fixture.setFeatures([active]);
+		await coordinator.reconcile();
+		await vi.waitFor(() => {
+			const github = coordinator.getSnapshot("f1")?.github;
+			expect(github?.status === "known" ? github.queriedBranch : undefined).toBe(
+				"continuation/two",
+			);
+		});
+		expect(listPullRequests).toHaveBeenCalledWith(expect.objectContaining({ head: "continuation/two" }));
+	});
+
 	it("ignores a merged PR on the active branch when it is not a proven continuation", async () => {
 		const readResult = (stdout: string) => ({
 			argv: [],
