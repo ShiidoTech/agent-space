@@ -15,6 +15,8 @@ vi.mock("vscode", () => ({
 import {
 	type FallbackEventKind,
 	resetFallbackReporting,
+	resetOpenCodeDbPathCache,
+	resolveOpenCodeDbPath,
 	type SqliteModule,
 	SqliteReadOnlyDb,
 	setFallbackReporter,
@@ -28,6 +30,8 @@ beforeAll(() => {
 
 afterEach(() => {
 	resetFallbackReporting();
+	resetOpenCodeDbPathCache();
+	vi.useRealTimers();
 	for (const name of fs.readdirSync(tmpDir)) {
 		try {
 			fs.rmSync(path.join(tmpDir, name));
@@ -126,5 +130,68 @@ describe("Fallback observability", () => {
 		db.querySync("SELECT 2");
 		const queryFails = events.filter((k) => k === "query_failed");
 		expect(queryFails).toHaveLength(1);
+	});
+});
+
+describe("resolveOpenCodeDbPath retry TTL", () => {
+	it("returns undefined immediately on failure and caches for 60s", () => {
+		vi.useFakeTimers();
+		const mockExec = vi.fn(() => {
+			throw new Error("opencode not found");
+		});
+
+		// First call: fails, caches the failure.
+		const result1 = resolveOpenCodeDbPath(mockExec as never);
+		expect(result1).toBeUndefined();
+		expect(mockExec).toHaveBeenCalledTimes(1);
+
+		// Second call within TTL: returns cached failure, no re-exec.
+		const result2 = resolveOpenCodeDbPath(mockExec as never);
+		expect(result2).toBeUndefined();
+		expect(mockExec).toHaveBeenCalledTimes(1);
+
+		// Advance past TTL: retries.
+		vi.advanceTimersByTime(60_001);
+		const result3 = resolveOpenCodeDbPath(mockExec as never);
+		expect(result3).toBeUndefined();
+		expect(mockExec).toHaveBeenCalledTimes(2);
+	});
+
+	it("returns resolved path on success and never retries", () => {
+		const mockExec = vi
+			.fn()
+			.mockReturnValue("/home/user/.local/share/opencode/opencode.db\n");
+
+		const result1 = resolveOpenCodeDbPath(mockExec as never);
+		expect(result1).toBe("/home/user/.local/share/opencode/opencode.db");
+
+		// Second call: returns cached success.
+		const result2 = resolveOpenCodeDbPath(mockExec as never);
+		expect(result2).toBe("/home/user/.local/share/opencode/opencode.db");
+		expect(mockExec).toHaveBeenCalledTimes(1);
+	});
+
+	it("recovers after TTL window expires", () => {
+		vi.useFakeTimers();
+		const mockExec = vi
+			.fn()
+			.mockImplementationOnce(() => {
+				throw new Error("not found");
+			})
+			.mockReturnValueOnce("/tmp/opencode.db");
+
+		// First attempt: fails.
+		expect(resolveOpenCodeDbPath(mockExec as never)).toBeUndefined();
+
+		// Within TTL: still returns cached failure.
+		vi.advanceTimersByTime(30_000);
+		expect(resolveOpenCodeDbPath(mockExec as never)).toBeUndefined();
+		expect(mockExec).toHaveBeenCalledTimes(1);
+
+		// After TTL: retries and succeeds.
+		vi.advanceTimersByTime(30_001);
+		const result = resolveOpenCodeDbPath(mockExec as never);
+		expect(result).toBe("/tmp/opencode.db");
+		expect(mockExec).toHaveBeenCalledTimes(2);
 	});
 });

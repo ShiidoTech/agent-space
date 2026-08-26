@@ -35,6 +35,12 @@ export function resetFallbackReporting(): void {
 	reportedKinds.clear();
 }
 
+/** Reset the OpenCode DB path cache.  Test-only. */
+export function resetOpenCodeDbPathCache(): void {
+	cachedOpenCodeDbPath = undefined;
+	lastDbPathFailureAt = 0;
+}
+
 function reportFallback(kind: FallbackEventKind): void {
 	if (reportedKinds.has(kind)) return;
 	reportedKinds.add(kind);
@@ -227,12 +233,19 @@ function interpolate(sql: string, params: unknown[]): string {
  * A successful result is cached for the process lifetime.  A failed attempt is
  * cached for {@link DB_PATH_RETRY_TTL} ms so the extension can recover if
  * opencode is installed after the extension host starts.
+ *
+ * Triple-state cache:
+ * - `undefined` = never tried or failure cached (fall through to TTL check / execFileSync)
+ * - `string`    = success cached (return immediately, never retry)
  */
-let cachedOpenCodeDbPath: string | undefined | null = null;
+let cachedOpenCodeDbPath: string | undefined;
 let lastDbPathFailureAt = 0;
 
-export function resolveOpenCodeDbPath(): string | undefined {
-	if (cachedOpenCodeDbPath !== null) return cachedOpenCodeDbPath;
+/** @internal Visible for testing only. */
+export function resolveOpenCodeDbPath(
+	execFn: typeof execFileSync = execFileSync,
+): string | undefined {
+	if (cachedOpenCodeDbPath !== undefined) return cachedOpenCodeDbPath;
 	if (
 		lastDbPathFailureAt > 0 &&
 		Date.now() - lastDbPathFailureAt < DB_PATH_RETRY_TTL
@@ -240,7 +253,7 @@ export function resolveOpenCodeDbPath(): string | undefined {
 		return undefined;
 	}
 	try {
-		const raw = execFileSync("opencode", ["db", "path"], {
+		const raw = execFn("opencode", ["db", "path"], {
 			encoding: "utf-8",
 			timeout: 5_000,
 			maxBuffer: CLI_MAX_BUFFER,
@@ -251,6 +264,7 @@ export function resolveOpenCodeDbPath(): string | undefined {
 	} catch {
 		cachedOpenCodeDbPath = undefined;
 		lastDbPathFailureAt = Date.now();
+		return undefined;
 	}
 	return cachedOpenCodeDbPath;
 }

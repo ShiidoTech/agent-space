@@ -10,7 +10,10 @@ import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
 import { TerminalController } from "./agents/terminalController";
 import { TmuxIntegration } from "./agents/tmux";
-import { configureAgentSpaceDiagnostics } from "./diagnostics/agentSpaceDiagnostics";
+import {
+	configureAgentSpaceDiagnostics,
+	configureSqliteFallbackDiagnostics,
+} from "./diagnostics/agentSpaceDiagnostics";
 import {
 	classifyLiveTmuxSession,
 	findCleanupCandidates,
@@ -68,6 +71,7 @@ export async function activate(
 	);
 	context.subscriptions.push(diagnostics);
 	configureAgentSpaceDiagnostics((message) => diagnostics.appendLine(message));
+	configureSqliteFallbackDiagnostics();
 	const prerequisites = new PrerequisiteChecker();
 	const { ok, missing } = prerequisites.checkRequired();
 	if (!ok) {

@@ -6,9 +6,13 @@
  * Validates the actual OpenCode / Hermes / Codex stores present on the
  * developer machine against the schema contract Agent Space depends on.
  * No real prompt content is ever logged — only structural assertions.
+ *
+ * When the DB is readable, the SQLite path is used directly: zero subprocess
+ * is spawned.  The CLI fallback is only a compatibility net for unreadable DBs.
  */
 import * as fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import * as childProcess from "node:child_process";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const SMOKE = process.env.AGENTSPACE_SMOKE === "1";
 
@@ -30,15 +34,15 @@ describe.skipIf(!SMOKE)("session-stores smoke", () => {
 	});
 
 	describe("OpenCode", () => {
-		const dbPath =
+		const canonicalDbPath =
 			process.env.OPENCODE_DB_PATH ||
 			`${process.env.HOME}/.local/share/opencode/opencode.db`;
 
-		skipUnless(dbExists(dbPath), "OpenCode store");
+		skipUnless(dbExists(canonicalDbPath), "OpenCode store");
 
 		it("schema has expected tables and columns", async () => {
 			const { DatabaseSync } = await import("node:sqlite");
-			const db = new DatabaseSync(dbPath, { readOnly: true });
+			const db = new DatabaseSync(canonicalDbPath, { readOnly: true });
 
 			const tables = db
 				.prepare("SELECT name FROM sqlite_master WHERE type='table'")
@@ -67,11 +71,13 @@ describe.skipIf(!SMOKE)("session-stores smoke", () => {
 			db.close();
 		});
 
-		it("readName resolves real sessions", async () => {
+		it("readName resolves real sessions with zero subprocess", async () => {
+			const spy = vi.spyOn(childProcess, "execFileSync");
+
 			const { OpenCodeSessionProvider } = await import(
 				"../src/agents/sessionProviders/openCodeSessionProvider"
 			);
-			const provider = new OpenCodeSessionProvider({ dbPath });
+			const provider = new OpenCodeSessionProvider({ dbPath: canonicalDbPath });
 
 			const sessions = provider.scanSessions();
 			expect(sessions.length).toBeGreaterThan(0);
@@ -84,6 +90,10 @@ describe.skipIf(!SMOKE)("session-stores smoke", () => {
 				expect(typeof name).toBe("string");
 				expect(name.length).toBeGreaterThan(0);
 			}
+
+			// DB is readable => no subprocess was spawned.
+			expect(spy).not.toHaveBeenCalled();
+			spy.mockRestore();
 		});
 	});
 

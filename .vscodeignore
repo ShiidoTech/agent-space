@@ -6,6 +6,7 @@
 .worktrees/**
 .codegraph/**
 .claude/**
+.github/**
 node_modules/**
 src/**
 scripts/**
@@ -19,6 +20,7 @@ pnpm-lock.yaml
 pnpm-workspace.yaml
 tsconfig.json
 vitest.config.ts
+smoke/**
 media/webview/_test_*.html
 dist/**/*.map
 *.vsix
