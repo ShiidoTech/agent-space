@@ -19,10 +19,12 @@ import {
 } from "./sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
 import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
+import { HermesSessionProvider } from "./sessionProviders/hermesSessionProvider";
 
 const claudeSessionAdapter = new ClaudeSessionProvider();
 const codexSessionAdapter = new CodexSessionProvider();
 const openCodeSessionAdapter = new OpenCodeSessionProvider();
+const hermesSessionAdapter = new HermesSessionProvider();
 
 /**
  * How long a raw provider attention read is trusted before it is re-fetched.
@@ -101,14 +103,16 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	},
 	{
 		id: "hermes",
-		conversationIdentity: { ownership: "unsupported" },
+		conversationIdentity: { ownership: "provider_assigned" },
 		capabilities: {
 			launch: true,
-			resume: false,
-			sessionDiscovery: false,
+			resume: true,
+			sessionDiscovery: true,
 			sessionNaming: false,
 			attention: NO_ATTENTION_CAPABILITIES,
 		},
+		resumeArgs: (sessionId) => (sessionId ? ["--resume", sessionId] : []),
+		sessionAdapter: hermesSessionAdapter,
 	},
 ];
 

@@ -99,14 +99,14 @@ describe("CodingToolRegistry", () => {
 	});
 
 	describe("provider capabilities", () => {
-		it("declares Hermes as launch-only until structured support is proven", () => {
+		it("declares Hermes as resumable through terminal breadcrumbs", () => {
 			const hermes = BUILTIN_PROVIDERS.find(
 				(provider) => provider.id === "hermes",
 			);
 			expect(hermes?.capabilities).toMatchObject({
 				launch: true,
-				resume: false,
-				sessionDiscovery: false,
+				resume: true,
+				sessionDiscovery: true,
 				sessionNaming: false,
 			});
 		});
@@ -556,6 +556,15 @@ describe("CodingToolRegistry", () => {
 	});
 
 	describe("buildResumeLaunchCommand", () => {
+		it("resumes Hermes with its persisted session id", () => {
+			const registry = new CodingToolRegistry();
+			const tool = registry.resolveAgentTool("hermes");
+
+			expect(registry.buildStrictResumeLaunchCommand(tool, "hermes-session")).toBe(
+				"hermes --resume hermes-session",
+			);
+		});
+
 		it("returns claude --resume <id> when claude tool has sessionId", () => {
 			const tool = registry.resolveAgentTool("claude");
 			expect(registry.buildResumeLaunchCommand(tool, "sess-123")).toBe(

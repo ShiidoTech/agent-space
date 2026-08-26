@@ -70,6 +70,15 @@ export class TmuxIntegration {
 		return commandExists("tmux");
 	}
 
+	async isAvailableAsync(): Promise<boolean> {
+		try {
+			await execFileAsync("tmux", ["-V"]);
+			return true;
+		} catch {
+			return false;
+		}
+	}
+
 	isSessionAlive(sessionName: string): boolean {
 		try {
 			execFile("tmux", ["has-session", "-t", sessionName]);
@@ -142,6 +151,33 @@ export class TmuxIntegration {
 			this.ensureNativeScroll();
 		} catch {
 			// Session may not exist
+		}
+	}
+
+	async configureSessionAsync(sessionName: string): Promise<void> {
+		try {
+			await Promise.all([
+				execAsync(`tmux set-option -t "${sessionName}" status off`),
+				execAsync(`tmux set-option -t "${sessionName}" mouse on`),
+			]);
+			await this.ensureNativeScrollAsync();
+		} catch {
+			// Session may not exist
+		}
+	}
+
+	private async ensureNativeScrollAsync(): Promise<void> {
+		if (this.nativeScrollConfigured) return;
+		try {
+			const overrides = (await execAsync("tmux show -sv terminal-overrides"))
+				.toString()
+				.trim();
+			if (!overrides.includes("smcup@")) {
+				await execAsync('tmux set -sa terminal-overrides ",*:smcup@:rmcup@:XM@"');
+			}
+			this.nativeScrollConfigured = true;
+		} catch {
+			// Ignore — server may not be ready
 		}
 	}
 

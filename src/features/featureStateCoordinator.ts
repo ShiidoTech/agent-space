@@ -1118,6 +1118,7 @@ export class FeatureStateCoordinator implements Disposable {
 			deliveryHeadSha,
 			activeHeadSha,
 			baseRef,
+			inspectionBranch,
 		);
 		let github = this.githubObservations.get(githubKey);
 		if (!github) {
@@ -1135,6 +1136,7 @@ export class FeatureStateCoordinator implements Disposable {
 			activeHeadSha,
 			activeIsContinuation,
 			baseRef,
+			inspectionBranch,
 		);
 		const delivered = withDeliveredVia(delivery, feature, github, git.feature);
 		const mergedHead =
@@ -1187,6 +1189,7 @@ export class FeatureStateCoordinator implements Disposable {
 		activeHeadSha: string | undefined,
 		activeIsContinuation: boolean,
 		baseRef: string | undefined,
+		activeBranchRef: string,
 	): void {
 		const key = [
 			this.githubObservationKey(
@@ -1196,6 +1199,7 @@ export class FeatureStateCoordinator implements Disposable {
 				deliveryHeadSha,
 				activeHeadSha,
 				baseRef,
+				activeBranchRef,
 			),
 		].join("\u0000");
 		const githubGeneration =
@@ -1212,6 +1216,7 @@ export class FeatureStateCoordinator implements Disposable {
 			activeHeadSha,
 			activeIsContinuation,
 			baseRef,
+			activeBranchRef,
 		)
 			.then((observation) => {
 				if (
@@ -1263,6 +1268,7 @@ export class FeatureStateCoordinator implements Disposable {
 		deliveryHeadSha: string | undefined,
 		activeHeadSha: string | undefined,
 		baseRef: string | undefined,
+		activeBranchRef: string,
 	): string {
 		return [
 			ctx.project.repoPath,
@@ -1271,6 +1277,7 @@ export class FeatureStateCoordinator implements Disposable {
 			deliveryHeadSha ?? "",
 			activeHeadSha ?? "",
 			baseRef ?? "",
+			activeBranchRef,
 		].join("\u0000");
 	}
 
@@ -1294,6 +1301,7 @@ export class FeatureStateCoordinator implements Disposable {
 		activeHeadSha: string | undefined,
 		activeIsContinuation: boolean,
 		baseRef: string | undefined,
+		activeBranchRef: string,
 	): Promise<GitHubObservation> {
 		const candidates: Array<{
 			branch: string;
@@ -1306,7 +1314,7 @@ export class FeatureStateCoordinator implements Disposable {
 		};
 		push(deliveryBranch, deliveryHeadSha);
 		if (activeIsContinuation) {
-			push(feature.branch, activeHeadSha);
+			push(activeBranchRef, activeHeadSha);
 		}
 		const observations = await Promise.all(
 			candidates.map((candidate) =>

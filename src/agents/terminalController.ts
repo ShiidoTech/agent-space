@@ -743,6 +743,13 @@ export class TerminalController implements vscode.Disposable {
 		tool: CodingTool,
 	): string | undefined {
 		if (!this.sessionBinder) return undefined;
+		// A provider-assigned id is not owned by this agent merely because it is
+		// the only session currently visible in the worktree. Only preassigned
+		// identities may use this legacy convenience path.
+		const provider = this.toolRegistry.getProvider(tool);
+		if (provider.conversationIdentity.ownership === "provider_assigned") {
+			return undefined;
+		}
 		const candidates = this.sessionBinder.listAttachableSessions(
 			feature.id,
 			agent.id,

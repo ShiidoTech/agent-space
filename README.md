@@ -200,9 +200,9 @@ Projects can also override branching defaults via a committed `.agentspace/confi
 | Provider | Launch | Session binding | Resume | Session naming | Working | Waiting |
 |---|---:|---:|---:|---:|---:|---:|
 | Claude | yes | yes | yes | yes | yes | only `AskUserQuestion` |
-| Codex | yes | no (fail-closed) | yes* | yes* | yes* | yes* |
+| Codex | yes | yes* (fail-closed) | yes* | yes* | yes* | yes* |
 | OpenCode | yes | no (fail-closed) | yes* | yes* | yes* | yes* |
-| Hermes | yes | no | no evidence | no evidence | no evidence | no evidence |
+| Hermes | yes | yes* | yes* | no evidence | no evidence | no evidence |
 
 The matrix only claims behavior covered by structured adapter tests. An
 unsupported attention capability is displayed as `Running` with an informational

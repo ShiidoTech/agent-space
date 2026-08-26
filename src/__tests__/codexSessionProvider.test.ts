@@ -155,6 +155,25 @@ describe("CodexSessionProvider", () => {
 		]);
 	});
 
+	it("lists candidates without claiming ownership", () => {
+		const cwd = path.join(tmpDir, "shared-worktree");
+		writeSessionFile("2026/03/04/session-a.jsonl", [
+			sessionMeta("session-a", { cwd }),
+		]);
+		const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
+
+		expect(provider.discoverSessionCandidates(cwd, new Set()).map((s) => s.sessionId)).toEqual([
+			"session-a",
+		]);
+
+		writeSessionFile("2026/03/04/session-b.jsonl", [
+			sessionMeta("session-b", { cwd }),
+		]);
+		expect(provider.discoverSessionCandidates(cwd, new Set(["session-a"])).map((s) => s.sessionId)).toEqual([
+			"session-b",
+		]);
+	});
+
 	describe("findSessionFile", () => {
 		it("finds file in nested directory by sessionId", () => {
 			writeSessionFile("2026/03/04/rollout-1709550000-sess-find.jsonl", [

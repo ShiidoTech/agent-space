@@ -3,7 +3,7 @@ import type {
 	ProjectManager,
 } from "../projects/projectManager";
 import type { Agent, CodingTool, Feature } from "../types";
-import { exec } from "../utils/platform";
+import { execAsync } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import type { TmuxIntegration } from "./tmux";
 
@@ -59,9 +59,9 @@ export interface RuntimeRestoreDeps {
 	toolRegistry: CodingToolRegistry;
 }
 
-export function restoreAgentRuntimes(
+export async function restoreAgentRuntimes(
 	deps: RuntimeRestoreDeps,
-): RuntimeRestoreReport {
+): Promise<RuntimeRestoreReport> {
 	const report: RuntimeRestoreReport = {
 		considered: 0,
 		reattached: [],
@@ -70,14 +70,14 @@ export function restoreAgentRuntimes(
 	};
 
 	// No tmux, no runtime to restore — fail closed and stay silent.
-	if (!deps.tmux.isAvailable()) return report;
+	if (!(await deps.tmux.isAvailableAsync())) return report;
 
 	for (const ctx of deps.projectManager.getAllContexts()) {
 		for (const feature of managedFeatures(ctx)) {
-			const agents = ctx.agentManager.getAgents(feature.id);
+			const agents = ctx.agentManager.getAgentsReadModel(feature.id);
 			const ordered = [...agents].sort(byCreatedAt);
 			for (const agent of ordered) {
-				const outcome = restoreAgentRuntime(ctx, feature, agent, deps);
+				const outcome = await restoreAgentRuntime(ctx, feature, agent, deps);
 				if (!outcome) continue;
 				report.considered += 1;
 				report[outcome.kind].push(outcome);
@@ -88,12 +88,12 @@ export function restoreAgentRuntimes(
 	return report;
 }
 
-function restoreAgentRuntime(
+async function restoreAgentRuntime(
 	ctx: ProjectContext,
 	feature: Feature,
 	agent: Agent,
 	deps: RuntimeRestoreDeps,
-): RuntimeRestoreOutcome | undefined {
+): Promise<RuntimeRestoreOutcome | undefined> {
 	const base = {
 		projectId: ctx.project.id,
 		featureId: feature.id,
@@ -117,10 +117,10 @@ function restoreAgentRuntime(
 		agent.tmuxSession ?? deps.tmux.sessionName(feature.id, agent.id);
 	const legacySessionName = deps.tmux.legacySessionName(feature.id, agent.id);
 
-	if (deps.tmux.adoptSession(sessionName, legacySessionName)) {
+	if (await deps.tmux.adoptSessionAsync(sessionName, legacySessionName)) {
 		// Case A: the runtime survived (VS Code reload with a live tmux), or a
 		// previous restore pass already recreated it. Do not spawn anything.
-		ctx.agentManager.recordRestoreOutcome(agent.id, feature.id, {
+		ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, feature.id, {
 			state: "reattached",
 			at: new Date().toISOString(),
 		});
@@ -140,7 +140,7 @@ function restoreAgentRuntime(
 			"No provider session id is persisted; the agent runtime was not recreated";
 		return persistBlocked(ctx, agent, reason, outcome);
 	}
-	if (!sessionIsProven(deps, tool, agent)) {
+	if (!(await sessionIsProven(deps, tool, agent))) {
 		const reason =
 			"Persisted session id could not be verified in the provider store; refusing an unattributable resume";
 		return persistBlocked(ctx, agent, reason, outcome);
@@ -158,8 +158,8 @@ function restoreAgentRuntime(
 
 	const cwd = agent.worktreePath ?? feature.worktreePath;
 	try {
-		exec(deps.tmux.createCommand(sessionName, resumeCommand), { cwd });
-		deps.tmux.configureSession(sessionName);
+		await execAsync(deps.tmux.createCommand(sessionName, resumeCommand), { cwd });
+		await deps.tmux.configureSessionAsync(sessionName);
 	} catch (error) {
 		console.warn(`[RuntimeRestorer] tmux resume failed: ${error}`);
 		return persistBlocked(
@@ -170,7 +170,7 @@ function restoreAgentRuntime(
 		);
 	}
 
-	if (!deps.tmux.isSessionAlive(sessionName)) {
+	if (!(await deps.tmux.isSessionAliveAsync(sessionName))) {
 		return persistBlocked(
 			ctx,
 			agent,
@@ -181,8 +181,8 @@ function restoreAgentRuntime(
 
 	// The CLI is running again. Reflect that on the record so the UI shows a
 	// live agent; the SessionBinder re-validates the exact bounded session.
-	ctx.agentManager.updateAgentStatus(agent.id, feature.id, "running");
-	ctx.agentManager.recordRestoreOutcome(agent.id, feature.id, {
+	ctx.agentManager.updateAgentStatusReadModel(agent.id, feature.id, "running");
+	ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, feature.id, {
 		state: "resumed",
 		at: new Date().toISOString(),
 	});
@@ -200,19 +200,20 @@ function supportsResume(deps: RuntimeRestoreDeps, tool: CodingTool): boolean {
  * can only fall back on a previously persisted `bound` verdict — never on an
  * ordering or naming heuristic.
  */
-function sessionIsProven(
+async function sessionIsProven(
 	deps: RuntimeRestoreDeps,
 	tool: CodingTool,
 	agent: Agent,
-): boolean {
+): Promise<boolean> {
 	const adapter = deps.toolRegistry.getProvider(tool).sessionAdapter;
-	if (adapter?.hasSession) {
+	if (adapter?.async?.hasSession) {
 		try {
-			return adapter.hasSession(agent.sessionId as string) === true;
+			return (await adapter.async.hasSession(agent.sessionId as string)) === true;
 		} catch {
 			return false;
 		}
 	}
+	if (adapter?.hasSession) return false;
 	return agent.sessionBinding?.state === "bound";
 }
 
@@ -222,7 +223,7 @@ function persistBlocked(
 	reason: string,
 	outcome: (kind: RuntimeRestoreKind, reason?: string) => RuntimeRestoreOutcome,
 ): RuntimeRestoreOutcome {
-	ctx.agentManager.recordRestoreOutcome(agent.id, agent.featureId, {
+	ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, agent.featureId, {
 		state: "blocked",
 		reason,
 		at: new Date().toISOString(),
