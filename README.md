@@ -247,6 +247,15 @@ and OpenCode (`question`, `plan_exit` tools) do expose explicit gates.
 Agent Space never infers state from terminal output, and never reports `idle`
 to stand in for "no evidence".
 
+### Hermes provider setup
+
+Hermes integrates cleanly with Agent Space when its profile stays
+path-agnostic: `terminal.cwd` must be `"."` so Agent Space (not a hardcoded
+path) chooses the feature worktree, and the project should pin its Hermes
+profile deterministically via `providers.hermes.profile`. Full guidance —
+cwd rule, profile resolution, responsibility split, secrets and session
+stores — is in [`docs/providers/hermes-setup.md`](docs/providers/hermes-setup.md).
+
 ## GitHub
 
 - Roadmap: [docs/roadmap.md](docs/roadmap.md)
