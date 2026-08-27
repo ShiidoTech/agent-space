@@ -1878,8 +1878,9 @@ export class HomePanel {
 		const context = this.projectManager.getContext(projectId);
 		const branch = branchRef.trim();
 		if (!context || !branch || PROTECTED_BRANCH_NAMES.has(branch)) return;
+		const sharedConfig = loadSharedProjectConfig(context.project.repoPath);
 		const protectedBranches = [
-			...new Set([...(context.config.protectedBranches ?? []), branch]),
+			...new Set([...(sharedConfig.protectedBranches ?? []), branch]),
 		];
 		this.projectManager.updateProjectConfig(projectId, { protectedBranches });
 	}
