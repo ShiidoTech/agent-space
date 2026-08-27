@@ -45,4 +45,5 @@ project.
   pinned by `providers.hermes.profile` in `.agentspace/config.json`. The repo
   only declares this deterministic name; the actual profile (model, tools,
   SOUL) and its sessions/memory live machine-locally under the Hermes profile
-  home and are never committed.
+  home and are never committed. Global Hermes setup guidance (the `cwd: "."`
+  rule, profile resolution, secrets) is in `docs/providers/hermes-setup.md`.
