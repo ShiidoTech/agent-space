@@ -5,6 +5,14 @@ import type { ProjectConfig } from "../projects/projectConfig";
 import type { Agent } from "../types";
 
 const PROFILES_DIR = "profiles";
+const HERMES_PROFILE_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const RESERVED_HERMES_PROFILE_NAMES = new Set([
+	"hermes",
+	"test",
+	"tmp",
+	"root",
+	"sudo",
+]);
 
 /**
  * Split a Hermes home path into (root, profile) if it points inside a
@@ -87,8 +95,9 @@ export function resolveHermesRootAndProfile(envHermesHome?: string): {
  * - lowercase
  * - "default" (any case) → "default"
  *
- * Then validate: reject empty, path traversal (`..`, `/`, `\`), and shell
- * metacharacters that could break command construction.
+ * Also rejects path traversal, separators and shell metacharacters early.
+ * The exact Hermes identifier contract is enforced by
+ * `validateCanonicalHermesProfile` before persistence or path/command use.
  *
  * Throws on invalid input — callers must catch and surface a clear error.
  */
@@ -106,15 +115,38 @@ export function canonicalizeHermesProfile(profile: string): string {
 			`Invalid Hermes profile name: "${profile}" (path traversal or separator not allowed)`,
 		);
 	}
-	// Shell metacharacters that would break `hermes -p <profile>` when concatenated
-	// into a shell command string. We keep the allowed set restrictive: alphanum,
-	// dash, underscore, dot.
+	// Reject shell metacharacters before command construction.
 	if (!/^[a-z0-9._-]+$/.test(lower)) {
 		throw new Error(
 			`Invalid Hermes profile name: "${profile}" (shell metacharacter not allowed; only alphanumeric, dash, underscore, dot allowed)`,
 		);
 	}
 	return lower;
+}
+
+/**
+ * Mirror Hermes' `validate_profile_name()` contract for the canonical id:
+ * `[a-z0-9][a-z0-9_-]{0,63}`, plus the same reserved names.
+ *
+ * `default` is Hermes' special built-in root profile and is always valid.
+ */
+function validateCanonicalHermesProfile(profile: string): string {
+	if (profile === "default") return profile;
+	if (!HERMES_PROFILE_ID_RE.test(profile)) {
+		throw new Error(
+			`Invalid Hermes profile name: "${profile}" (must match [a-z0-9][a-z0-9_-]{0,63})`,
+		);
+	}
+	if (RESERVED_HERMES_PROFILE_NAMES.has(profile)) {
+		throw new Error(
+			`Invalid Hermes profile name: "${profile}" is reserved by Hermes`,
+		);
+	}
+	return profile;
+}
+
+function resolveValidatedHermesProfile(profile: string): string {
+	return validateCanonicalHermesProfile(canonicalizeHermesProfile(profile));
 }
 
 /**
@@ -130,8 +162,7 @@ export function resolveActiveHermesProfile(envHermesHome?: string): string {
 	try {
 		const name = fs.readFileSync(activePath, "utf8").trim();
 		if (!name) return "default";
-		// The file may contain a non-canonical name; canonicalise for consistency.
-		return canonicalizeHermesProfile(name);
+		return resolveValidatedHermesProfile(name);
 	} catch {
 		return "default";
 	}
@@ -146,20 +177,20 @@ export function resolveActiveHermesProfile(envHermesHome?: string): string {
  * 3. Hermes' own active profile (`hermes profile use`), if any.
  * 4. `"default"` — the base `~/.hermes` home.
  *
- * Always returns a concrete, canonicalised profile so that every Hermes agent
- * is created with an explicit persisted `hermesProfile`, and every subsequent
- * launch/resume goes through `-p <profile>`.
+ * Always returns a concrete, canonicalised and validated profile so that every
+ * Hermes agent is created with an explicit persisted `hermesProfile`, and every
+ * subsequent launch/resume goes through `-p <profile>`.
  */
 export function resolveCreationProfile(
 	projectProfile?: string,
 	envHermesHome?: string,
 ): string {
 	if (projectProfile) {
-		return canonicalizeHermesProfile(projectProfile);
+		return resolveValidatedHermesProfile(projectProfile);
 	}
 	const { hermesHomeProfile } = resolveHermesRootAndProfile(envHermesHome);
 	if (hermesHomeProfile) {
-		return canonicalizeHermesProfile(hermesHomeProfile);
+		return resolveValidatedHermesProfile(hermesHomeProfile);
 	}
 	return resolveActiveHermesProfile(envHermesHome);
 }
@@ -168,12 +199,14 @@ export function resolveCreationProfile(
  * Resolve the filesystem path for a Hermes home directory given a profile.
  *
  * - Named profile `"iqv2"` → `<hermes-root>/profiles/iqv2`
- * - Default / `undefined` / `"default"` → `<hermes-root>` itself
+ * - Explicit `"default"` → `<hermes-root>` itself
+ * - `undefined` → the effective `HERMES_HOME` (including an implicit profile)
  *
  * The root is determined by {@link resolveHermesRootAndProfile} (respects
  * `envHermesHome` / `HERMES_HOME` and platform conventions). The literal name
  * `"default"` refers to Hermes' built-in base profile, which is the root
- * directory itself — never `<hermes-root>/profiles/default`.
+ * directory itself — never `<hermes-root>/profiles/default`, even when the
+ * incoming HERMES_HOME already points at another named profile.
  */
 export function resolveHermesHome(
 	profile?: string,
@@ -181,15 +214,21 @@ export function resolveHermesHome(
 ): string {
 	const { root, hermesHomeProfile } =
 		resolveHermesRootAndProfile(envHermesHome);
-	// If no explicit profile is given, but HERMES_HOME points to a profile
-	// directory, use that profile's directory as the effective home.
-	if (!profile || profile === "default") {
+
+	// No explicit profile means "use the effective HERMES_HOME".
+	if (!profile) {
 		if (hermesHomeProfile) {
-			return path.join(root, PROFILES_DIR, hermesHomeProfile);
+			const implicitProfile = resolveValidatedHermesProfile(hermesHomeProfile);
+			return path.join(root, PROFILES_DIR, implicitProfile);
 		}
 		return root;
 	}
-	return path.join(root, PROFILES_DIR, profile);
+
+	const canonicalProfile = resolveValidatedHermesProfile(profile);
+	if (canonicalProfile === "default") {
+		return root;
+	}
+	return path.join(root, PROFILES_DIR, canonicalProfile);
 }
 
 /**
