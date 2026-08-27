@@ -8,7 +8,7 @@ import {
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import type { ProjectReferenceBranchHealth } from "./referenceBranchHealth";
 
-const PROTECTED_BRANCH_NAMES = new Set([
+export const PROTECTED_BRANCH_NAMES: ReadonlySet<string> = new Set([
 	"main",
 	"master",
 	"develop",
@@ -404,6 +404,11 @@ export async function assessWorktreeBranchDeletion(
 	if (input.ownedByFeatureId) {
 		return structuralBlock(
 			`Branch ${branchRef} belongs to Feature ${input.ownedByFeatureId} and cannot be deleted while the Feature record exists.`,
+		);
+	}
+	if (!baseBranch) {
+		return structuralBlock(
+			"The base branch is unknown; refusing to delete any worktree branch.",
 		);
 	}
 	if (baseBranch && branchRef === baseBranch) {
