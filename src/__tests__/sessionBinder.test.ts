@@ -82,6 +82,12 @@ function registry(sessionAdapter?: ProviderSessionAdapter): CodingToolRegistry {
 			command: toolId ?? "stub",
 			family: "generic" as const,
 		}),
+		resolveAgentToolForAgent: (agent: { toolId?: string }) => ({
+			id: agent.toolId ?? "stub",
+			name: agent.toolId ?? "stub",
+			command: agent.toolId ?? "stub",
+			family: "generic" as const,
+		}),
 		getProvider: () => ({
 			id: "stub",
 			capabilities: {
@@ -98,6 +104,7 @@ function registry(sessionAdapter?: ProviderSessionAdapter): CodingToolRegistry {
 			},
 			sessionAdapter,
 		}),
+		getSessionAdapterForAgent: () => sessionAdapter,
 	} as unknown as CodingToolRegistry;
 }
 

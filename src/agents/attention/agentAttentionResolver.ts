@@ -97,7 +97,7 @@ export class AgentAttentionResolver {
 			};
 		}
 
-		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 		const provider = this.toolRegistry.getProvider
 			? this.toolRegistry.getProvider(tool)
 			: tool.provider;
@@ -209,7 +209,7 @@ export class AgentAttentionResolver {
 			};
 		}
 
-		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 		const provider = this.toolRegistry.getProvider
 			? this.toolRegistry.getProvider(tool)
 			: tool.provider;

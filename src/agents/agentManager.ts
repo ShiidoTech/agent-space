@@ -151,6 +151,14 @@ export class AgentManager {
 		// never guesses it from a CLI family or from sessions found after launch.
 		const sessionId = this.toolRegistry.createInitialConversationId(toolId);
 
+		// Resolve the effective Hermes profile at creation time and persist it
+		// so resume/restore always targets the same runtime even if the project
+		// config or active Hermes profile changes later.
+		const hermesProfile =
+			toolId === "hermes"
+				? (this.config.providers?.hermes?.profile ?? undefined)
+				: undefined;
+
 		const agent: Agent = {
 			id,
 			featureId: feature.id,
@@ -160,6 +168,7 @@ export class AgentManager {
 			tmuxSession: this.tmux.sessionName(this.sessionLabel(feature.id), id),
 			worktreePath,
 			toolId,
+			hermesProfile,
 			status: "stopped",
 			hasStarted: false,
 			createdAt: new Date().toISOString(),

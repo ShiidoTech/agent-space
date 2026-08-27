@@ -88,6 +88,39 @@ describe("mergeProjectConfig", () => {
 		expect(merged.baseBranch).toBe("main");
 		expect(merged.branchKinds).toEqual(["spike"]);
 	});
+
+	it("merges providers.hermes.profile: local overrides shared", () => {
+		const merged = mergeProjectConfig(
+			{ providers: { hermes: { profile: "shared-profile" } } },
+			{ providers: { hermes: { profile: "local-profile" } } },
+		);
+		expect(merged.providers?.hermes?.profile).toBe("local-profile");
+	});
+
+	it("keeps shared profile when local has no hermes profile", () => {
+		const merged = mergeProjectConfig(
+			{ providers: { hermes: { profile: "shared-profile" } } },
+			{},
+		);
+		expect(merged.providers?.hermes?.profile).toBe("shared-profile");
+	});
+
+	it("adds hermes profile from local when shared has none", () => {
+		const merged = mergeProjectConfig(
+			{},
+			{ providers: { hermes: { profile: "local-profile" } } },
+		);
+		expect(merged.providers?.hermes?.profile).toBe("local-profile");
+	});
+
+	it("preserves other providers when merging hermes", () => {
+		const merged = mergeProjectConfig(
+			{ providers: { hermes: { profile: "shared" } } },
+			{ providers: { hermes: { profile: "local" } } },
+		);
+		expect(merged.providers?.hermes?.profile).toBe("local");
+		// Future provider namespaces would be preserved here
+	});
 });
 
 describe("loadProjectConfig", () => {

@@ -17,6 +17,7 @@ import {
 	CodingToolRegistry,
 	resolveSessionStoreDir,
 } from "../agents/codingToolRegistry";
+import type { Agent } from "../types";
 
 // Mock vscode
 vi.mock("vscode", () => ({
@@ -814,6 +815,100 @@ describe("CodingToolRegistry", () => {
 			registry.getStructuredAttentionSignal(tool, "session-2");
 
 			expect(getAttentionSignal).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	describe("hermes profile", () => {
+		it("hermes built-in tool has family 'hermes'", () => {
+			const hermes = BUILTIN_CODING_TOOLS.find((t) => t.id === "hermes");
+			expect(hermes?.family).toBe("hermes");
+		});
+
+		it("resolveAgentToolForAgent returns base tool when no hermesProfile", () => {
+			const agent = { toolId: "hermes" } as Agent;
+			const tool = registry.resolveAgentToolForAgent(agent);
+			expect(tool.id).toBe("hermes");
+			expect(tool.family).toBe("hermes");
+		});
+
+		it("resolveAgentToolForAgent returns profile-aware provider", () => {
+			const agent = { toolId: "hermes", hermesProfile: "iqv2" } as Agent;
+			const tool = registry.resolveAgentToolForAgent(agent);
+			expect(tool.id).toBe("hermes");
+			expect(tool.provider).toBeDefined();
+			// launchArgs: always injects -p flag, no resume flags
+			expect(tool.provider?.launchArgs?.(null)).toEqual(["-p", "iqv2"]);
+			expect(tool.provider?.launchArgs?.("sess-1")).toEqual(["-p", "iqv2"]);
+			// resumeArgs: injects -p flag + resume syntax
+			expect(tool.provider?.resumeArgs?.("sess-1")).toEqual([
+				"-p",
+				"iqv2",
+				"--resume",
+				"sess-1",
+				"--no-restore-cwd",
+			]);
+		});
+
+		it("resolveAgentToolForAgent with hermesProfile builds correct launch command", () => {
+			const agent = { toolId: "hermes", hermesProfile: "iqv2" } as Agent;
+			const tool = registry.resolveAgentToolForAgent(agent);
+			expect(registry.buildLaunchCommand(tool)).toBe("hermes -p iqv2");
+			expect(registry.buildLaunchCommand(tool, "sess-1")).toBe(
+				"hermes -p iqv2",
+			);
+		});
+
+		it("resolveAgentToolForAgent with hermesProfile builds correct resume command", () => {
+			const agent = { toolId: "hermes", hermesProfile: "iqv2" } as Agent;
+			const tool = registry.resolveAgentToolForAgent(agent);
+			expect(registry.buildResumeLaunchCommand(tool, "sess-1")).toBe(
+				"hermes -p iqv2 --resume sess-1 --no-restore-cwd",
+			);
+		});
+
+		it("resolveAgentToolForAgent with hermesProfile builds correct strict resume command", () => {
+			const agent = { toolId: "hermes", hermesProfile: "iqv2" } as Agent;
+			const tool = registry.resolveAgentToolForAgent(agent);
+			expect(registry.buildStrictResumeLaunchCommand(tool, "sess-1")).toBe(
+				"hermes -p iqv2 --resume sess-1 --no-restore-cwd",
+			);
+		});
+
+		it("resolveAgentToolForAgent strict resume returns undefined without sessionId", () => {
+			const agent = { toolId: "hermes", hermesProfile: "iqv2" } as Agent;
+			const tool = registry.resolveAgentToolForAgent(agent);
+			expect(registry.buildStrictResumeLaunchCommand(tool)).toBeUndefined();
+		});
+
+		it("getSessionAdapterForAgent returns adapter for hermes agent", () => {
+			const agent = { toolId: "hermes", hermesProfile: "iqv2" } as Agent;
+			const adapter = registry.getSessionAdapterForAgent(agent);
+			expect(adapter).toBeDefined();
+			expect(adapter?.toolId).toBe("hermes");
+		});
+
+		it("getSessionAdapterForAgent returns undefined for copilot", () => {
+			const agent = { toolId: "copilot" } as Agent;
+			const adapter = registry.getSessionAdapterForAgent(agent);
+			expect(adapter).toBeUndefined();
+		});
+
+		it("two agents with different profiles get different adapters", () => {
+			const agentA = { toolId: "hermes", hermesProfile: "profile-a" } as Agent;
+			const agentB = { toolId: "hermes", hermesProfile: "profile-b" } as Agent;
+			const adapterA = registry.getSessionAdapterForAgent(agentA);
+			const adapterB = registry.getSessionAdapterForAgent(agentB);
+			expect(adapterA).toBeDefined();
+			expect(adapterB).toBeDefined();
+			expect(adapterA).not.toBe(adapterB);
+		});
+
+		it("resume command without profile falls back to default hermes args", () => {
+			const agent = { toolId: "hermes" } as Agent;
+			const tool = registry.resolveAgentToolForAgent(agent);
+			expect(registry.buildStrictResumeLaunchCommand(tool, "sess-1")).toBe(
+				"hermes --resume sess-1 --no-restore-cwd",
+			);
 		});
 	});
 });

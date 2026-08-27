@@ -331,6 +331,7 @@ export async function activate(
 
 	const sessionNameSyncer = new SessionNameSyncer(
 		toolRegistry.getSessionRenameAdapters(),
+		toolRegistry,
 	);
 
 	// Providers record their session when the human sends a first prompt, not

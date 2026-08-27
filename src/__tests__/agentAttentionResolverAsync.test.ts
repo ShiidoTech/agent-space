@@ -40,6 +40,7 @@ describe("AgentAttentionResolver.resolveAsync (non-blocking contract)", () => {
 		};
 		const toolRegistry = {
 			resolveAgentTool: vi.fn(() => tool),
+			resolveAgentToolForAgent: vi.fn(() => tool),
 			getProvider: vi.fn(() => provider),
 			getStructuredAttentionSignal:
 				overrides?.getStructuredAttentionSignal ?? vi.fn(),
@@ -98,6 +99,7 @@ describe("AgentAttentionResolver.resolveAsync (non-blocking contract)", () => {
 		};
 		const toolRegistry = {
 			resolveAgentTool: vi.fn(() => tool),
+			resolveAgentToolForAgent: vi.fn(() => tool),
 			getProvider: vi.fn(() => provider),
 			getStructuredAttentionSignal: vi.fn(),
 			getStructuredAttentionSignalAsync: vi.fn(async () => undefined),

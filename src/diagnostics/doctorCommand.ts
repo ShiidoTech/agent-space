@@ -91,6 +91,7 @@ export function probeAgents(
 					attentionState,
 					attentionSupported,
 					attentionEvidence,
+					hermesProfile: agent.hermesProfile,
 				});
 			}
 		}

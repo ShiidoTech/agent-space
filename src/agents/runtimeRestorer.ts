@@ -129,7 +129,7 @@ async function restoreAgentRuntime(
 
 	// Case B: the runtime is gone. Only a genuinely provable resume may rebuild
 	// it — a silent fresh launch is never acceptable on this path.
-	const tool = deps.toolRegistry.resolveAgentTool(agent.toolId);
+	const tool = deps.toolRegistry.resolveAgentToolForAgent(agent);
 	if (!supportsResume(deps, tool)) {
 		const reason =
 			"Provider has no resume capability; the agent runtime was not recreated";

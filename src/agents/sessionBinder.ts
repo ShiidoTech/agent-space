@@ -769,8 +769,7 @@ export class SessionBinder {
 	}
 
 	private adapterFor(agent: Agent): ProviderSessionAdapter | undefined {
-		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
-		return this.toolRegistry.getProvider(tool).sessionAdapter;
+		return this.toolRegistry.getSessionAdapterForAgent(agent);
 	}
 }
 
