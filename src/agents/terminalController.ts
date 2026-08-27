@@ -128,7 +128,7 @@ export class TerminalController implements vscode.Disposable {
 
 		let justLaunched = false;
 		if (!sessionReady) {
-			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+			const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 			const shouldResume = resume && agent.hasStarted === true;
 			let baseCommand: string;
 			if (shouldResume) {
@@ -187,7 +187,7 @@ export class TerminalController implements vscode.Disposable {
 				);
 				return undefined;
 			}
-			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+			const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 			const message = this.buildStartupFailureMessage(
 				agent.name,
 				tool.name,
@@ -348,7 +348,7 @@ export class TerminalController implements vscode.Disposable {
 
 		let justLaunched = false;
 		if (!sessionReady) {
-			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+			const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 			const shouldResume = resume && agent.hasStarted === true;
 			let baseCommand: string;
 			if (shouldResume) {
@@ -399,7 +399,7 @@ export class TerminalController implements vscode.Disposable {
 		}
 
 		if (!sessionReady) {
-			const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+			const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 			const message = this.buildStartupFailureMessage(
 				agent.name,
 				tool.name,

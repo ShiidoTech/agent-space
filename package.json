@@ -323,6 +323,7 @@
 									"claude",
 									"codex",
 									"opencode",
+									"hermes",
 									"generic"
 								],
 								"description": "Session-handling family. claude-family CLIs are launched with --session-id and resumed with --resume <sessionId>."

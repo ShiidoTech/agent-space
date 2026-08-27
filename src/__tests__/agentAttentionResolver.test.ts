@@ -67,7 +67,24 @@ function registry(
 ): CodingToolRegistry {
 	return {
 		resolveAgentTool: () => tool,
-		getStructuredAttentionSignal: (_tool, sessionId) => {
+		resolveAgentToolForAgent: () => tool,
+		getProvider: () => ({
+			id: tool.id,
+			capabilities: {
+				launch: true,
+				resume: true,
+				sessionDiscovery: false,
+				sessionNaming: false,
+				attention: {
+					"attention.working": true,
+					"attention.waitingForUser": true,
+					"attention.idle": true,
+					"attention.failed": true,
+				},
+			},
+			conversationIdentity: { ownership: "unsupported" as const },
+		}),
+		getStructuredAttentionSignal: (_tool: CodingTool, sessionId: string) => {
 			const signal = attentionProvider?.readAttention(sessionId);
 			return signal
 				? {
@@ -77,7 +94,7 @@ function registry(
 					}
 				: undefined;
 		},
-	} as CodingToolRegistry;
+	} as unknown as CodingToolRegistry;
 }
 
 function writeJsonl(filePath: string, rows: unknown[]): void {

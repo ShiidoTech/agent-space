@@ -3,6 +3,7 @@ import type {
 	ProjectManager,
 } from "../projects/projectManager";
 import type { Agent } from "../types";
+import type { CodingToolRegistry } from "./codingToolRegistry";
 import type {
 	AsyncSessionObservationAdapter,
 	SessionRenameAdapter,
@@ -18,15 +19,20 @@ type ObservableAdapter = SessionRenameAdapter & {
 export class SessionNameSyncer {
 	private readonly knownTitles = new Map<string, string>();
 	private readonly adapters = new Map<string, ObservableAdapter>();
+	private readonly toolRegistry?: CodingToolRegistry;
 	private projectManager: ProjectManager | undefined;
 	private syncTimer?: ReturnType<typeof setInterval>;
 	private syncInFlight: Promise<void> | undefined;
 	private onRenameCallback?: (agentId: string, featureId: string) => void;
 
-	constructor(adapters: ObservableAdapter[]) {
+	constructor(
+		adapters: ObservableAdapter[],
+		toolRegistry?: CodingToolRegistry,
+	) {
 		for (const adapter of adapters) {
 			this.adapters.set(adapter.toolId, adapter);
 		}
+		this.toolRegistry = toolRegistry;
 	}
 
 	onAgentRenamed(callback: (agentId: string, featureId: string) => void): void {
@@ -142,7 +148,7 @@ export class SessionNameSyncer {
 		featureId: string,
 		agent: Agent,
 	): void {
-		const adapter = this.getAdapter(agent.toolId);
+		const adapter = this.getAdapter(agent.toolId, agent);
 		if (!adapter) return;
 		if (agent.status === "done") return;
 		if (!agent.sessionId) return;
@@ -158,7 +164,7 @@ export class SessionNameSyncer {
 		featureId: string,
 		agent: Agent,
 	): Promise<void> {
-		const adapter = this.getAdapter(agent.toolId);
+		const adapter = this.getAdapter(agent.toolId, agent);
 		if (!adapter?.async?.readName) return;
 		if (agent.status === "done") return;
 		if (!agent.sessionId) return;
@@ -208,7 +214,17 @@ export class SessionNameSyncer {
 		this.syncTimer = undefined;
 	}
 
-	private getAdapter(toolId?: string): ObservableAdapter | undefined {
+	private getAdapter(
+		toolId?: string,
+		agent?: Agent,
+	): ObservableAdapter | undefined {
+		// For Hermes agents, resolve the profile-aware adapter from the
+		// registry so two agents using different profiles never share an
+		// adapter. For all other families, fall back to the static map.
+		if (agent && this.toolRegistry) {
+			const resolved = this.toolRegistry.getSessionAdapterForAgent(agent);
+			if (resolved) return resolved as ObservableAdapter;
+		}
 		return this.adapters.get(toolId ?? "claude");
 	}
 

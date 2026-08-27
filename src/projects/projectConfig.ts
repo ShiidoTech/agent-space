@@ -53,6 +53,19 @@ export interface ProjectConfig {
 		/** Relative paths (or an id → path map) to runbooks. */
 		runbooks?: string[] | Record<string, string>;
 	};
+	/**
+	 * Per-provider project-level configuration. Currently only Hermes uses
+	 * this block to declare which profile is active for this project.
+	 *
+	 * The profile is resolved at agent-creation time and persisted on the
+	 * Agent record, so later config changes never move an existing session.
+	 */
+	providers?: {
+		hermes?: {
+			/** Hermes profile name (e.g. "iqv2"). Resolved at agent creation. */
+			profile?: string;
+		};
+	};
 }
 
 /**
@@ -93,6 +106,11 @@ export function projectConfigTemplate(): NullableDeep<ProjectConfig> {
 		knowledge: {
 			instructions: null,
 			runbooks: null,
+		},
+		providers: {
+			hermes: {
+				profile: null,
+			},
 		},
 	};
 }
@@ -216,6 +234,18 @@ export function mergeProjectConfig(
 			...shared.agents,
 			...local.agents,
 			...(enabled ? { enabled } : {}),
+		};
+	}
+	// Explicit merge for providers: local overrides shared per-provider,
+	// not a shallow spread that would drop future provider namespaces.
+	if (shared.providers || local.providers) {
+		merged.providers = {
+			...shared.providers,
+			...local.providers,
+			hermes: {
+				...shared.providers?.hermes,
+				...local.providers?.hermes,
+			},
 		};
 	}
 	return merged;

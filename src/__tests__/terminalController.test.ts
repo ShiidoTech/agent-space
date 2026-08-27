@@ -91,6 +91,7 @@ describe("TerminalController", () => {
 	const isSessionAlive = vi.fn();
 	const getPaneStatus = vi.fn();
 	const resolveAgentTool = vi.fn();
+	const resolveAgentToolForAgent = vi.fn();
 	const buildLaunchCommand = vi.fn();
 	const buildResumeLaunchCommand = vi.fn();
 	const buildStrictResumeLaunchCommand = vi.fn();
@@ -138,6 +139,11 @@ describe("TerminalController", () => {
 			name: "Claude Code",
 			command: "claude",
 		});
+		resolveAgentToolForAgent.mockReturnValue({
+			id: "claude",
+			name: "Claude Code",
+			command: "claude",
+		});
 		buildLaunchCommand.mockReturnValue("claude");
 		buildResumeLaunchCommand.mockReturnValue("claude --resume session-1");
 		buildStrictResumeLaunchCommand.mockReturnValue("claude --resume session-1");
@@ -160,6 +166,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "preassigned" },
 				})),
@@ -204,6 +211,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "preassigned" },
 				})),
@@ -242,6 +250,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "preassigned" },
 				})),
@@ -282,6 +291,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "preassigned" },
 				})),
@@ -321,6 +331,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -352,6 +363,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -391,6 +403,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -430,6 +443,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -477,6 +491,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "preassigned" },
 				})),
@@ -531,6 +546,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "preassigned" },
 				})),
@@ -590,6 +606,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "provider_assigned" },
 				})),
@@ -641,6 +658,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "preassigned" },
 				})),
@@ -699,6 +717,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				getProvider: vi.fn(() => ({
 					conversationIdentity: { ownership: "preassigned" },
 				})),
@@ -741,6 +760,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -800,6 +820,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,
@@ -845,6 +866,7 @@ describe("TerminalController", () => {
 				} as never,
 				{
 					resolveAgentTool,
+					resolveAgentToolForAgent,
 					buildLaunchCommand,
 					buildResumeLaunchCommand,
 				} as never,
@@ -888,6 +910,7 @@ describe("TerminalController", () => {
 				} as never,
 				{
 					resolveAgentTool,
+					resolveAgentToolForAgent,
 					buildLaunchCommand,
 					buildResumeLaunchCommand,
 				} as never,
@@ -933,6 +956,7 @@ describe("TerminalController", () => {
 				} as never,
 				{
 					resolveAgentTool,
+					resolveAgentToolForAgent,
 					buildLaunchCommand,
 					buildResumeLaunchCommand,
 				} as never,
@@ -979,6 +1003,7 @@ describe("TerminalController", () => {
 				} as never,
 				{
 					resolveAgentTool,
+					resolveAgentToolForAgent,
 					buildLaunchCommand,
 					buildResumeLaunchCommand,
 				} as never,
@@ -1021,6 +1046,7 @@ describe("TerminalController", () => {
 				} as never,
 				{
 					resolveAgentTool,
+					resolveAgentToolForAgent,
 					buildLaunchCommand,
 					buildResumeLaunchCommand,
 				} as never,
@@ -1071,6 +1097,7 @@ describe("TerminalController", () => {
 			} as never,
 			{
 				resolveAgentTool,
+				resolveAgentToolForAgent,
 				buildLaunchCommand,
 				buildResumeLaunchCommand,
 				buildStrictResumeLaunchCommand,

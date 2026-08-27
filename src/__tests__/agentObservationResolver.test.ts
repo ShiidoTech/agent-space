@@ -29,6 +29,10 @@ describe("AgentObservationResolver", () => {
 	it("keeps a failed typed tmux observation unknown instead of claiming stopped", () => {
 		const resolver = new AgentObservationResolver(new TmuxIntegration(), {
 			resolveAgentTool: vi.fn(() => ({ id: "generic", provider: undefined })),
+			resolveAgentToolForAgent: vi.fn(() => ({
+				id: "generic",
+				provider: undefined,
+			})),
 			getProvider: vi.fn(() => undefined),
 		} as never);
 
@@ -49,6 +53,10 @@ describe("AgentObservationResolver", () => {
 		});
 		const resolver = new AgentObservationResolver(new TmuxIntegration(), {
 			resolveAgentTool: vi.fn(() => ({ id: "generic", provider: undefined })),
+			resolveAgentToolForAgent: vi.fn(() => ({
+				id: "generic",
+				provider: undefined,
+			})),
 			getProvider: vi.fn(() => undefined),
 		} as never);
 

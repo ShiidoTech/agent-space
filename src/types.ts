@@ -156,7 +156,7 @@ export interface CodingTool {
 	enabled?: boolean;
 	args?: string[];
 	env?: Record<string, string>;
-	family?: "claude" | "codex" | "opencode" | "generic";
+	family?: "claude" | "codex" | "opencode" | "hermes" | "generic";
 	sessionsDir?: string;
 	resumeCommand?: string;
 	/** Internal adapter. Never loaded from project/user configuration. */
@@ -175,6 +175,12 @@ export interface Agent {
 	worktreePath?: string;
 	tmuxSession?: string;
 	toolId?: string;
+	/**
+	 * Persisted Hermes profile used when this agent was created. Ensures
+	 * resume/restore always targets the same runtime even if the project
+	 * config or active Hermes profile changes later.
+	 */
+	hermesProfile?: string;
 	/** Persisted lifecycle state. Do not use this as a precise activity signal. */
 	status: AgentStatus;
 	/**

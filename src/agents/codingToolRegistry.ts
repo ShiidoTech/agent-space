@@ -4,8 +4,9 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { ProjectConfig } from "../projects/projectConfig";
 import { expandHome } from "../projects/projectConfig";
-import type { CodingTool } from "../types";
+import type { Agent, CodingTool } from "../types";
 import { commandExists } from "../utils/platform";
+import { resolveHermesHome } from "./hermesProfileResolver";
 import { resolveAttention } from "./providers/attentionResolver";
 import type {
 	CodingAgentProvider,
@@ -24,7 +25,34 @@ import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvi
 const claudeSessionAdapter = new ClaudeSessionProvider();
 const codexSessionAdapter = new CodexSessionProvider();
 const openCodeSessionAdapter = new OpenCodeSessionProvider();
-const hermesSessionAdapter = new HermesSessionProvider();
+
+/**
+ * Per-home cache for Hermes session adapters. Each Hermes home directory
+ * (resolved from a profile) gets its own adapter instance so two agents
+ * using different profiles never share a SQLite connection or breadcrumb
+ * reader. The cache is never pruned — adapter count is bounded by the
+ * number of distinct profiles in use.
+ */
+const hermesAdapterCache = new Map<string, HermesSessionProvider>();
+
+function getHermesAdapter(
+	home?: string,
+	envHermesHome?: string,
+): HermesSessionProvider {
+	const resolvedHome = home ?? resolveHermesHome(undefined, envHermesHome);
+	let adapter = hermesAdapterCache.get(resolvedHome);
+	if (!adapter) {
+		adapter = new HermesSessionProvider(resolvedHome);
+		hermesAdapterCache.set(resolvedHome, adapter);
+	}
+	return adapter;
+}
+
+/** Default adapter (no profile) for the built-in provider definition. */
+const hermesDefaultAdapter = getHermesAdapter(
+	undefined,
+	process.env.HERMES_HOME,
+);
 
 /**
  * How long a raw provider attention read is trusted before it is re-fetched.
@@ -115,7 +143,7 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 		// restores the cwd recorded in the session, which may be another worktree.
 		resumeArgs: (sessionId) =>
 			sessionId ? ["--resume", sessionId, "--no-restore-cwd"] : [],
-		sessionAdapter: hermesSessionAdapter,
+		sessionAdapter: hermesDefaultAdapter,
 	},
 ];
 
@@ -146,6 +174,7 @@ const providerById = new Map(BUILTIN_PROVIDERS.map((p) => [p.id, p]));
 export function resolveSessionStoreDir(
 	family: CodingTool["family"],
 	sessionsDir?: string,
+	envHermesHome?: string,
 ): string | undefined {
 	if (family === "claude") {
 		return resolveClaudeProjectsDir(
@@ -156,6 +185,9 @@ export function resolveSessionStoreDir(
 		return sessionsDir
 			? expandHome(sessionsDir)
 			: path.join(process.env.HOME || "~", ".codex", "sessions");
+	}
+	if (family === "hermes") {
+		return resolveHermesHome(undefined, envHermesHome);
 	}
 	return undefined;
 }
@@ -172,6 +204,7 @@ function providerForTool(
 	id: string,
 	family?: CodingTool["family"],
 	sessionsDir?: string,
+	envHermesHome?: string,
 ): CodingAgentProvider {
 	const builtin = providerById.get(id);
 	if (builtin) return builtin;
@@ -196,7 +229,7 @@ function providerForTool(
 	// One canonical store path per family, shared with `resolveSessionStoreDir`
 	// and Doctor, so the directory the adapter reads is exactly the directory
 	// whose reachability decides the capabilities and the one Doctor reports.
-	const storeDir = resolveSessionStoreDir(family, sessionsDir);
+	const storeDir = resolveSessionStoreDir(family, sessionsDir, envHermesHome);
 	const claudeSessionProvider =
 		family === "claude" ? new ClaudeSessionProvider(storeDir, id) : undefined;
 	const codexSessionProvider =
@@ -284,7 +317,7 @@ export const BUILTIN_CODING_TOOLS: CodingTool[] = [
 		id: "hermes",
 		name: "Hermes",
 		command: "hermes",
-		family: "generic",
+		family: "hermes",
 		provider: providerById.get("hermes"),
 	},
 ];
@@ -300,6 +333,10 @@ export function isClaudeFamily(tool: {
 
 export function isOpenCodeFamily(tool: CodingTool): boolean {
 	return (tool.family ?? tool.command) === "opencode";
+}
+
+export function isHermesFamily(tool: CodingTool): boolean {
+	return (tool.family ?? tool.command) === "hermes";
 }
 
 function shellQuote(value: string): string {
@@ -325,6 +362,7 @@ function mergeTool(base: CodingTool | undefined, over: CodingTool): CodingTool {
 			over.id,
 			over.family ?? base?.family,
 			over.sessionsDir ?? base?.sessionsDir,
+			over.env?.HERMES_HOME ?? base?.env?.HERMES_HOME,
 		),
 	};
 }
@@ -437,17 +475,67 @@ export class CodingToolRegistry {
 		// Never silently substitute a different tool (e.g. the built-in
 		// claude) for one that cannot be resolved: preserve the requested
 		// identity so the wrong executable is never launched. Family inference
-		// stays on the same isClaudeFamily path used everywhere else.
+		// stays on the same isClaudeFamily/isHermesFamily paths used
+		// everywhere else.
+		const inferredFamily = isClaudeFamily({ command: id })
+			? "claude"
+			: id === "hermes"
+				? "hermes"
+				: "generic";
 		return {
 			id,
 			name: id,
 			command: id,
-			family: isClaudeFamily({ command: id }) ? "claude" : "generic",
+			family: inferredFamily,
 		};
 	}
 
 	getProvider(tool: CodingTool): CodingAgentProvider {
 		return tool.provider ?? providerForTool(tool.id, tool.family);
+	}
+
+	/**
+	 * Resolve the tool for a specific agent, using the persisted hermesProfile
+	 * to build a profile-aware provider when applicable. This is the canonical
+	 * entry point for any layer that needs to build commands, scan sessions, or
+	 * check session existence for a particular agent — never re-resolve from
+	 * project config, which may have changed since creation.
+	 */
+	resolveAgentToolForAgent(agent: Agent): CodingTool {
+		const base = this.resolveAgentTool(agent.toolId);
+		const profile = agent.hermesProfile;
+		if (!isHermesFamily(base) || !profile) return base;
+		const envHermesHome = base.env?.HERMES_HOME;
+		const home = resolveHermesHome(profile, envHermesHome);
+		const adapter = getHermesAdapter(home, envHermesHome);
+		return {
+			...base,
+			provider: {
+				...this.getProvider(base),
+				sessionAdapter: adapter,
+				launchArgs: () => ["-p", profile],
+				resumeArgs: (sessionId) =>
+					sessionId
+						? ["-p", profile, "--resume", sessionId, "--no-restore-cwd"]
+						: ["-p", profile],
+			},
+		};
+	}
+
+	/**
+	 * Return the session adapter for a specific agent. For Hermes agents,
+	 * this returns a profile-aware adapter that reads from the correct home
+	 * directory. For all other families, delegates to the provider's default
+	 * adapter.
+	 *
+	 * This is the single entry point for SessionBinder, SessionNameSyncer,
+	 * and runtimeRestorer — never resolve the adapter by toolId alone for
+	 * Hermes agents.
+	 */
+	getSessionAdapterForAgent(
+		agent: Agent,
+	): import("./providers/types").ProviderSessionAdapter | undefined {
+		return this.resolveAgentToolForAgent(agent).provider?.sessionAdapter;
 	}
 
 	/**
@@ -465,11 +553,43 @@ export class CodingToolRegistry {
 	} {
 		const declared = this.getTool(toolId ?? "claude") !== undefined;
 		const tool = this.resolveAgentTool(toolId);
+		const envHermesHome = tool.env?.HERMES_HOME;
 		return {
 			tool,
 			declared,
-			sessionStoreDir: resolveSessionStoreDir(tool.family, tool.sessionsDir),
+			sessionStoreDir: resolveSessionStoreDir(
+				tool.family,
+				tool.sessionsDir,
+				envHermesHome,
+			),
 			adapter: this.getProvider(tool).sessionAdapter,
+		};
+	}
+
+	/**
+	 * Profile-aware twin of {@link describeAgentTool}: explains how a persisted
+	 * agent is resolved right now, using the agent's frozen `hermesProfile`
+	 * instead of the default store. This is what Doctor must use for Hermes
+	 * agents — otherwise it would probe `~/.hermes` while the agent actually
+	 * reads `<hermes-root>/profiles/<profile>`, yielding a misleading report.
+	 */
+	describeAgentToolForAgent(agent: Agent): {
+		tool: CodingTool;
+		declared: boolean;
+		sessionStoreDir?: string;
+		adapter?: CodingAgentProvider["sessionAdapter"];
+	} {
+		const tool = this.resolveAgentToolForAgent(agent);
+		const declared = this.getTool(agent.toolId ?? "claude") !== undefined;
+		const envHermesHome = tool.env?.HERMES_HOME;
+		const sessionStoreDir = isHermesFamily(tool)
+			? resolveHermesHome(agent.hermesProfile, envHermesHome)
+			: resolveSessionStoreDir(tool.family, tool.sessionsDir, envHermesHome);
+		return {
+			tool,
+			declared,
+			sessionStoreDir,
+			adapter: tool.provider?.sessionAdapter,
 		};
 	}
 

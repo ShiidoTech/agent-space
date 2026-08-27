@@ -22,7 +22,7 @@ export class AgentObservationResolver {
 				? undefined
 				: lifecycle.state,
 		);
-		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
+		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 
 		return {
 			identity: {

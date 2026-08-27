@@ -182,6 +182,70 @@ describe("AgentManager", () => {
 			expect(command).toContain(' -b "feat/Auth-system/agent-');
 			expect(command).toContain('"feat/Auth-system"');
 		});
+
+		it("freezes the project-declared Hermes profile at creation", () => {
+			const hermesManager = new AgentManager(
+				store,
+				tmpDir,
+				path.join(tmpDir, ".worktrees"),
+				tmux as never,
+				{ providers: { hermes: { profile: "iqv2" } } },
+				new CodingToolRegistry(),
+			);
+			const agent = hermesManager.createAgent(feature, "hermes");
+			expect(agent.hermesProfile).toBe("iqv2");
+			expect(store.loadAgents("f1")[0]?.hermesProfile).toBe("iqv2");
+		});
+
+		it("freezes Hermes' active profile at creation when project declares none", () => {
+			const originalEnv = { ...process.env };
+			const hermesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "am-hermes-"));
+			try {
+				process.env.HERMES_HOME = hermesRoot;
+				fs.writeFileSync(path.join(hermesRoot, "active_profile"), "coder\n");
+
+				const hermesManager = new AgentManager(
+					store,
+					tmpDir,
+					path.join(tmpDir, ".worktrees"),
+					tmux as never,
+					undefined,
+					new CodingToolRegistry(),
+				);
+				const agent = hermesManager.createAgent(feature, "hermes");
+				expect(agent.hermesProfile).toBe("coder");
+				expect(store.loadAgents("f1")[0]?.hermesProfile).toBe("coder");
+			} finally {
+				process.env = { ...originalEnv };
+				fs.rmSync(hermesRoot, { recursive: true, force: true });
+			}
+		});
+
+		it("persists explicit default profile for Hermes agents with no other source", () => {
+			const originalEnv = { ...process.env };
+			const hermesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "am-hermes-"));
+			try {
+				process.env.HERMES_HOME = hermesRoot;
+
+				const hermesManager = new AgentManager(
+					store,
+					tmpDir,
+					path.join(tmpDir, ".worktrees"),
+					tmux as never,
+					undefined,
+					new CodingToolRegistry(),
+				);
+				const agent = hermesManager.createAgent(feature, "hermes");
+				// Even the implicit default is persisted explicitly so every
+				// launch goes through -p default and a later `hermes profile
+				// use` cannot silently move the session.
+				expect(agent.hermesProfile).toBe("default");
+				expect(store.loadAgents("f1")[0]?.hermesProfile).toBe("default");
+			} finally {
+				process.env = { ...originalEnv };
+				fs.rmSync(hermesRoot, { recursive: true, force: true });
+			}
+		});
 	});
 
 	describe("getAgents", () => {

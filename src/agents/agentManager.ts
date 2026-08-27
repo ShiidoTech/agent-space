@@ -15,6 +15,7 @@ import type {
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
 import { CodingToolRegistry } from "./codingToolRegistry";
+import { resolveCreationProfile } from "./hermesProfileResolver";
 import { AgentObservationResolver } from "./observation/agentObservationResolver";
 import type { TmuxIntegration } from "./tmux";
 
@@ -151,6 +152,25 @@ export class AgentManager {
 		// never guesses it from a CLI family or from sessions found after launch.
 		const sessionId = this.toolRegistry.createInitialConversationId(toolId);
 
+		// Resolve the effective Hermes profile at creation time and persist it
+		// so resume/restore always targets the same runtime even if the project
+		// config or active Hermes profile changes later.
+		//
+		// Priority: project profile > profile carried by HERMES_HOME (e.g.
+		// HERMES_HOME=/root/profiles/coder) > Hermes' active profile (`hermes
+		// profile use`) > "default". Always a concrete profile for Hermes
+		// agents, so even the implicit default is persisted explicitly and
+		// every launch goes through `-p <profile>`.
+		let hermesProfile: string | undefined;
+		if (toolId === "hermes") {
+			const tool = this.toolRegistry.getTool("hermes");
+			const envHermesHome = tool?.env?.HERMES_HOME;
+			hermesProfile = resolveCreationProfile(
+				this.config.providers?.hermes?.profile,
+				envHermesHome,
+			);
+		}
+
 		const agent: Agent = {
 			id,
 			featureId: feature.id,
@@ -160,6 +180,7 @@ export class AgentManager {
 			tmuxSession: this.tmux.sessionName(this.sessionLabel(feature.id), id),
 			worktreePath,
 			toolId,
+			hermesProfile,
 			status: "stopped",
 			hasStarted: false,
 			createdAt: new Date().toISOString(),

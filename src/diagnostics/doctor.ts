@@ -61,6 +61,8 @@ export interface DoctorAgentProbe {
 	attentionState?: string;
 	attentionSupported?: boolean;
 	attentionEvidence?: string;
+	/** Persisted Hermes profile for this agent, when applicable. */
+	hermesProfile?: string;
 }
 
 /** A project agent id that is enabled in config but resolves to no known tool. */
@@ -339,6 +341,9 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 		const facts = [`tool \`${probe.toolId}\``];
 		if (!probe.toolDeclared)
 			facts.push("not declared in agentSpace.codingTools");
+		if (probe.hermesProfile) {
+			facts.push(`profile \`${probe.hermesProfile}\``);
+		}
 		if (probe.sessionsDir) {
 			facts.push(`sessions ${redactHome(probe.sessionsDir, homeDir)}`);
 		}

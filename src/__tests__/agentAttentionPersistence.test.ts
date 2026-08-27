@@ -55,6 +55,13 @@ describe("agent attention persistence", () => {
 				command: "generic",
 				family: "generic",
 			}),
+			resolveAgentToolForAgent: () => ({
+				id: "generic",
+				name: "Generic",
+				command: "generic",
+				family: "generic",
+			}),
+			getSessionAdapterForAgent: () => undefined,
 			isClaudeFamilyTool: () => false,
 		} as unknown as CodingToolRegistry;
 
