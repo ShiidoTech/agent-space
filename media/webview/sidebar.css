@@ -224,6 +224,35 @@ button {
 	cursor: pointer;
 }
 
+.feature-identity {
+	min-width: 0;
+	flex: 1;
+	display: flex;
+	align-items: baseline;
+	gap: 7px;
+}
+
+.feature-branch-line {
+	min-width: 0;
+	max-width: 42%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 10px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.feature-branch-label {
+	font-size: 9px;
+	text-transform: uppercase;
+	letter-spacing: 0.35px;
+	opacity: 0.75;
+}
+
+.feature-checkout-line {
+	color: var(--vscode-charts-yellow);
+}
+
 .status-badge {
 	font-size: 10px;
 	padding: 2px 6px;

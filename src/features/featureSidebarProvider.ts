@@ -573,6 +573,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	private renderFeatureCard(snapshot: FeatureSnapshot): string {
 		const feature = snapshot.feature as Feature;
+		const deliveryBranch = feature.primaryBranchRef ?? feature.branch;
+		const checkoutBranch =
+			feature.branch !== deliveryBranch ? feature.branch : undefined;
 		const agents = this.snapshotAgents(snapshot);
 		const services = this.snapshotServices(snapshot);
 		const totalCount =
@@ -591,7 +594,11 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		<div class="feature-card" data-feature-id="${feature.id}" onclick="selectFeature('${feature.id}')">
 			<div class="card-header">
 				<span class="card-chevron" id="card-chevron-${feature.id}" onclick="toggleFeatureCard(event, '${feature.id}')">${ICON_CHEVRON_DOWN}</span>
-				<span class="feature-name">${this.escapeHtml(feature.branch)}</span>
+				<span class="feature-identity">
+					<span class="feature-name" title="Feature name">${this.escapeHtml(feature.name)}</span>
+					<span class="feature-branch-line" title="Delivery branch"><span class="feature-branch-label">delivery</span> ${this.escapeHtml(deliveryBranch)}</span>
+					${checkoutBranch ? `<span class="feature-branch-line feature-checkout-line" title="Branch currently checked out in the worktree"><span class="feature-branch-label">checkout</span> ${this.escapeHtml(checkoutBranch)}</span>` : ""}
+				</span>
 				${summary ? `<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>` : ""}
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
 				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Finish Feature">${ICON_DELETE}</button>
