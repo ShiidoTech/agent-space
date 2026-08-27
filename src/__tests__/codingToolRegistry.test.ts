@@ -566,7 +566,7 @@ describe("CodingToolRegistry", () => {
 
 			expect(
 				registry.buildStrictResumeLaunchCommand(tool, "hermes-session"),
-			).toBe("hermes --resume hermes-session");
+			).toBe("hermes --resume hermes-session --no-restore-cwd");
 		});
 
 		it("returns claude --resume <id> when claude tool has sessionId", () => {

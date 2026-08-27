@@ -111,7 +111,10 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 			sessionNaming: true,
 			attention: NO_ATTENTION_CAPABILITIES,
 		},
-		resumeArgs: (sessionId) => (sessionId ? ["--resume", sessionId] : []),
+		// Keep the cwd supplied by Agent Space when resuming. Hermes otherwise
+		// restores the cwd recorded in the session, which may be another worktree.
+		resumeArgs: (sessionId) =>
+			sessionId ? ["--resume", sessionId, "--no-restore-cwd"] : [],
 		sessionAdapter: hermesSessionAdapter,
 	},
 ];
