@@ -1,8 +1,11 @@
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	resolveActiveHermesProfile,
 	resolveAgentHermesHome,
+	resolveCreationProfile,
 	resolveHermesHome,
 	resolveHermesProfile,
 	resolveHermesRoot,
@@ -57,6 +60,13 @@ describe("resolveHermesHome", () => {
 		expect(resolveHermesHome("")).toBe(path.join(os.homedir(), ".hermes"));
 	});
 
+	it("returns root itself for the literal default profile", () => {
+		delete process.env.HERMES_HOME;
+		expect(resolveHermesHome("default")).toBe(
+			path.join(os.homedir(), ".hermes"),
+		);
+	});
+
 	it("returns <root>/profiles/<profile> for a named profile", () => {
 		delete process.env.HERMES_HOME;
 		expect(resolveHermesHome("iqv2")).toBe(
@@ -74,6 +84,67 @@ describe("resolveHermesHome", () => {
 	it("respects HERMES_HOME for default profile", () => {
 		process.env.HERMES_HOME = "/custom/hermes";
 		expect(resolveHermesHome()).toBe("/custom/hermes");
+	});
+});
+
+describe("resolveActiveHermesProfile", () => {
+	const originalEnv = { ...process.env };
+	const tmpDirs: string[] = [];
+
+	afterEach(() => {
+		process.env = { ...originalEnv };
+		for (const dir of tmpDirs.splice(0)) {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	function makeRoot(): string {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-active-"));
+		tmpDirs.push(root);
+		return root;
+	}
+
+	it("returns default when active_profile file is absent", () => {
+		const root = makeRoot();
+		process.env.HERMES_HOME = root;
+		expect(resolveActiveHermesProfile()).toBe("default");
+	});
+
+	it("returns default when active_profile file is empty", () => {
+		const root = makeRoot();
+		process.env.HERMES_HOME = root;
+		fs.writeFileSync(path.join(root, "active_profile"), "");
+		expect(resolveActiveHermesProfile()).toBe("default");
+	});
+
+	it("returns the name written by hermes profile use", () => {
+		const root = makeRoot();
+		process.env.HERMES_HOME = root;
+		fs.writeFileSync(path.join(root, "active_profile"), "iqv2\n");
+		expect(resolveActiveHermesProfile()).toBe("iqv2");
+	});
+});
+
+describe("resolveCreationProfile", () => {
+	it("project profile wins over the active Hermes profile", () => {
+		expect(resolveCreationProfile("project-profile")).toBe("project-profile");
+	});
+
+	it("falls back to the active Hermes profile when project profile is absent", () => {
+		const originalEnv = { ...process.env };
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-create-"));
+		try {
+			process.env.HERMES_HOME = root;
+			fs.writeFileSync(path.join(root, "active_profile"), "iqv2\n");
+			expect(resolveCreationProfile()).toBe("iqv2");
+		} finally {
+			process.env = { ...originalEnv };
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("returns default when neither project nor active profile is set", () => {
+		expect(resolveCreationProfile()).toBe("default");
 	});
 });
 

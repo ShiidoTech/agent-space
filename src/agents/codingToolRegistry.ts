@@ -551,6 +551,32 @@ export class CodingToolRegistry {
 		};
 	}
 
+	/**
+	 * Profile-aware twin of {@link describeAgentTool}: explains how a persisted
+	 * agent is resolved right now, using the agent's frozen `hermesProfile`
+	 * instead of the default store. This is what Doctor must use for Hermes
+	 * agents — otherwise it would probe `~/.hermes` while the agent actually
+	 * reads `<hermes-root>/profiles/<profile>`, yielding a misleading report.
+	 */
+	describeAgentToolForAgent(agent: Agent): {
+		tool: CodingTool;
+		declared: boolean;
+		sessionStoreDir?: string;
+		adapter?: CodingAgentProvider["sessionAdapter"];
+	} {
+		const tool = this.resolveAgentToolForAgent(agent);
+		const declared = this.getTool(agent.toolId ?? "claude") !== undefined;
+		const sessionStoreDir = isHermesFamily(tool)
+			? resolveHermesHome(agent.hermesProfile)
+			: resolveSessionStoreDir(tool.family, tool.sessionsDir);
+		return {
+			tool,
+			declared,
+			sessionStoreDir,
+			adapter: tool.provider?.sessionAdapter,
+		};
+	}
+
 	resolveAttention(tool: CodingTool, sessionId?: string | null) {
 		return resolveAttention(this.getProvider(tool), sessionId);
 	}

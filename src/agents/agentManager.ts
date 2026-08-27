@@ -15,6 +15,7 @@ import type {
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
 import { CodingToolRegistry } from "./codingToolRegistry";
+import { resolveCreationProfile } from "./hermesProfileResolver";
 import { AgentObservationResolver } from "./observation/agentObservationResolver";
 import type { TmuxIntegration } from "./tmux";
 
@@ -154,9 +155,14 @@ export class AgentManager {
 		// Resolve the effective Hermes profile at creation time and persist it
 		// so resume/restore always targets the same runtime even if the project
 		// config or active Hermes profile changes later.
+		//
+		// Priority: project profile > Hermes' active profile (`hermes profile
+		// use`) > "default". Always a concrete profile for Hermes agents, so
+		// even the implicit default is persisted explicitly and every launch
+		// goes through `-p <profile>`.
 		const hermesProfile =
 			toolId === "hermes"
-				? (this.config.providers?.hermes?.profile ?? undefined)
+				? resolveCreationProfile(this.config.providers?.hermes?.profile)
 				: undefined;
 
 		const agent: Agent = {

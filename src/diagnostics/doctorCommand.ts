@@ -48,7 +48,10 @@ export function probeAgents(
 		];
 		for (const feature of features) {
 			for (const agent of store.loadAgents(feature.id)) {
-				const resolution = toolRegistry.describeAgentTool(agent.toolId);
+				// Resolve through the agent's frozen profile so a Hermes agent
+				// probes the store it actually reads (profiles/<name>), not the
+				// default ~/.hermes that describeAgentTool would reach.
+				const resolution = toolRegistry.describeAgentToolForAgent(agent);
 				const adapter = resolution.adapter;
 				const provider = toolRegistry.getProvider
 					? toolRegistry.getProvider(resolution.tool)

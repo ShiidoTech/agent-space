@@ -824,7 +824,9 @@ describe("CodingToolRegistry", () => {
 			expect(hermes?.family).toBe("hermes");
 		});
 
-		it("resolveAgentToolForAgent returns base tool when no hermesProfile", () => {
+		it("resolveAgentToolForAgent returns base tool for a legacy agent with no frozen profile", () => {
+			// New Hermes agents always get a frozen profile (even "default"),
+			// so this path only exists for pre-feature persisted agents.
 			const agent = { toolId: "hermes" } as Agent;
 			const tool = registry.resolveAgentToolForAgent(agent);
 			expect(tool.id).toBe("hermes");
@@ -903,12 +905,46 @@ describe("CodingToolRegistry", () => {
 			expect(adapterA).not.toBe(adapterB);
 		});
 
-		it("resume command without profile falls back to default hermes args", () => {
+		it("legacy hermes agent without a frozen profile resumes without -p", () => {
+			// New agents always freeze a profile, so this only documents the
+			// defensive path for pre-feature persisted agents.
 			const agent = { toolId: "hermes" } as Agent;
 			const tool = registry.resolveAgentToolForAgent(agent);
 			expect(registry.buildStrictResumeLaunchCommand(tool, "sess-1")).toBe(
 				"hermes --resume sess-1 --no-restore-cwd",
 			);
+		});
+
+		it("describeAgentToolForAgent resolves the profile-aware store for a hermes agent", () => {
+			const originalEnv = { ...process.env };
+			const hermesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cr-hermes-"));
+			try {
+				process.env.HERMES_HOME = hermesRoot;
+				const agent = { toolId: "hermes", hermesProfile: "iqv2" } as Agent;
+				const resolution = registry.describeAgentToolForAgent(agent);
+				expect(resolution.declared).toBe(true);
+				expect(resolution.sessionStoreDir).toBe(
+					path.join(hermesRoot, "profiles", "iqv2"),
+				);
+				expect(resolution.adapter?.toolId).toBe("hermes");
+			} finally {
+				process.env = { ...originalEnv };
+				fs.rmSync(hermesRoot, { recursive: true, force: true });
+			}
+		});
+
+		it("describeAgentToolForAgent resolves the base store for an explicit default profile", () => {
+			const originalEnv = { ...process.env };
+			const hermesRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cr-hermes-"));
+			try {
+				process.env.HERMES_HOME = hermesRoot;
+				const agent = { toolId: "hermes", hermesProfile: "default" } as Agent;
+				const resolution = registry.describeAgentToolForAgent(agent);
+				expect(resolution.sessionStoreDir).toBe(hermesRoot);
+			} finally {
+				process.env = { ...originalEnv };
+				fs.rmSync(hermesRoot, { recursive: true, force: true });
+			}
 		});
 	});
 });

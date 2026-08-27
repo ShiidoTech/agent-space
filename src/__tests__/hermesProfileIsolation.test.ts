@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("vscode", () => ({
 	workspace: {
@@ -7,6 +11,15 @@ vi.mock("vscode", () => ({
 		}),
 	},
 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:child_process")>();
+	return {
+		...actual,
+		execFile: vi.fn(actual.execFile),
+		execFileSync: vi.fn(actual.execFileSync),
+	};
+});
 
 vi.mock("../utils/platform", () => ({
 	commandExists: vi.fn().mockReturnValue(true),
@@ -17,169 +30,205 @@ import { resolveHermesHome } from "../agents/hermesProfileResolver";
 import type { Agent } from "../types";
 
 /**
- * Integration test proving that two Hermes agents using different profiles
- * never share session state, adapters, or commands — even when the same
- * sessionId happens to exist in both profile stores.
+ * Real isolation test: two Hermes homes (two distinct profiles) that both
+ * contain the *same* sessionId but with different titles and cwd. Proves that
+ * a Hermes agent's adapter reads only its own profile's store — hasSession,
+ * readName and scanSessions never leak across profiles, even for a shared id.
  *
- * The test creates two temporary Hermes homes with distinct state.db and
- * breadcrumb files, then verifies that:
- * 1. Each agent resolves to a different adapter (different home).
- * 2. Each agent's launch/resume command targets the correct profile.
- * 3. The same sessionId does not leak across profiles.
+ * HERMES_HOME is pointed at a temp root so every profile home is a real,
+ * on-disk directory the adapters genuinely read.
  */
 describe("Hermes profile isolation", () => {
-	it("two agents with different profiles get different adapters", () => {
+	const originalEnv = { ...process.env };
+	const roots: string[] = [];
+
+	function makeRoot(): string {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-root-"));
+		roots.push(root);
+		return root;
+	}
+
+	function makeStateDb(
+		home: string,
+		sessions: Array<{ id: string; title: string; cwd?: string }>,
+	): void {
+		fs.mkdirSync(home, { recursive: true });
+		const db = new DatabaseSync(path.join(home, "state.db"), {
+			readOnly: false,
+		});
+		db.exec(
+			"CREATE TABLE sessions(id TEXT PRIMARY KEY, title TEXT, cwd TEXT, source TEXT)",
+		);
+		for (const s of sessions) {
+			db.prepare(
+				"INSERT INTO sessions(id, title, cwd, source) VALUES(?,?,?,?)",
+			).run(s.id, s.title, s.cwd ?? "/work", "cli");
+		}
+		db.close();
+	}
+
+	function makeBreadcrumb(home: string, sessionId: string, cwd: string): void {
+		const dir = path.join(home, "terminal-sessions");
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(
+			path.join(dir, `tmux-${sessionId}`),
+			JSON.stringify({ session_id: sessionId, cwd, ts: 1700000000 }),
+		);
+	}
+
+	afterEach(() => {
+		process.env = { ...originalEnv };
+		for (const root of roots.splice(0)) {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	function hermesAgent(overrides: Partial<Agent> = {}): Agent {
+		return {
+			id: "agent-1",
+			featureId: "feat-1",
+			name: "Agent 1",
+			sessionId: null,
+			status: "stopped",
+			createdAt: new Date().toISOString(),
+			toolId: "hermes",
+			...overrides,
+		};
+	}
+
+	it("adapter hasSession is isolated per profile for a shared sessionId", () => {
+		const root = makeRoot();
+		process.env.HERMES_HOME = root;
+
+		const homeA = resolveHermesHome("profile-a");
+		const homeB = resolveHermesHome("profile-b");
+		makeStateDb(homeA, [{ id: "shared-id", title: "Title A" }]);
+		makeStateDb(homeB, [{ id: "shared-id", title: "Title B" }]);
+		makeBreadcrumb(homeA, "shared-id", "/worktree/a");
+		makeBreadcrumb(homeB, "shared-id", "/worktree/b");
+
 		const registry = new CodingToolRegistry();
-		const agentA: Agent = {
-			id: "agent-a",
-			featureId: "feat-1",
-			name: "Agent A",
-			sessionId: null,
-			status: "stopped",
-			createdAt: new Date().toISOString(),
-			toolId: "hermes",
-			hermesProfile: "profile-a",
-		};
-		const agentB: Agent = {
-			id: "agent-b",
-			featureId: "feat-1",
-			name: "Agent B",
-			sessionId: null,
-			status: "stopped",
-			createdAt: new Date().toISOString(),
-			toolId: "hermes",
-			hermesProfile: "profile-b",
-		};
+		const adapterA = registry.getSessionAdapterForAgent(
+			hermesAgent({ hermesProfile: "profile-a" }),
+		);
+		const adapterB = registry.getSessionAdapterForAgent(
+			hermesAgent({ hermesProfile: "profile-b" }),
+		);
 
-		const adapterA = registry.getSessionAdapterForAgent(agentA);
-		const adapterB = registry.getSessionAdapterForAgent(agentB);
-
-		expect(adapterA).toBeDefined();
-		expect(adapterB).toBeDefined();
-		// Different profiles → different adapter instances
-		expect(adapterA).not.toBe(adapterB);
-		// Both are hermes adapters
 		expect(adapterA?.toolId).toBe("hermes");
 		expect(adapterB?.toolId).toBe("hermes");
+		expect(adapterA).not.toBe(adapterB);
+
+		// Both profiles own the same id, so both answer true — but each only
+		// because *its own* store has the session.
+		expect(adapterA?.hasSession?.("shared-id")).toBe(true);
+		expect(adapterB?.hasSession?.("shared-id")).toBe(true);
+
+		// An id that exists in neither profile is not reported by either.
+		expect(adapterA?.hasSession?.("ghost-id")).toBe(false);
+		expect(adapterB?.hasSession?.("ghost-id")).toBe(false);
 	});
 
-	it("launch command includes the correct profile flag", () => {
+	it("adapter readName returns each profile's own title for a shared sessionId", () => {
+		const root = makeRoot();
+		process.env.HERMES_HOME = root;
+
+		const homeA = resolveHermesHome("profile-a");
+		const homeB = resolveHermesHome("profile-b");
+		makeStateDb(homeA, [{ id: "shared-id", title: "Title A" }]);
+		makeStateDb(homeB, [{ id: "shared-id", title: "Title B" }]);
+		makeBreadcrumb(homeA, "shared-id", "/worktree/a");
+		makeBreadcrumb(homeB, "shared-id", "/worktree/b");
+
 		const registry = new CodingToolRegistry();
-		const agent: Agent = {
-			id: "agent-1",
-			featureId: "feat-1",
-			name: "Agent 1",
-			sessionId: null,
-			status: "stopped",
-			createdAt: new Date().toISOString(),
-			toolId: "hermes",
-			hermesProfile: "iqv2",
-		};
-
-		const tool = registry.resolveAgentToolForAgent(agent);
-		expect(registry.buildLaunchCommand(tool)).toBe("hermes -p iqv2");
-	});
-
-	it("resume command includes the correct profile flag", () => {
-		const registry = new CodingToolRegistry();
-		const agent: Agent = {
-			id: "agent-1",
-			featureId: "feat-1",
-			name: "Agent 1",
-			sessionId: "sess-123",
-			status: "stopped",
-			createdAt: new Date().toISOString(),
-			toolId: "hermes",
-			hermesProfile: "prod",
-		};
-
-		const tool = registry.resolveAgentToolForAgent(agent);
-		expect(registry.buildStrictResumeLaunchCommand(tool, "sess-123")).toBe(
-			"hermes -p prod --resume sess-123 --no-restore-cwd",
+		const adapterA = registry.getSessionAdapterForAgent(
+			hermesAgent({ hermesProfile: "profile-a" }),
 		);
+		const adapterB = registry.getSessionAdapterForAgent(
+			hermesAgent({ hermesProfile: "profile-b" }),
+		);
+
+		expect(adapterA?.readName("shared-id")).toBe("Title A");
+		expect(adapterB?.readName("shared-id")).toBe("Title B");
 	});
 
-	it("same sessionId in two profiles does not leak across agents", () => {
+	it("adapter scanSessions only surfaces its own profile's sessions", () => {
+		const root = makeRoot();
+		process.env.HERMES_HOME = root;
+
+		const homeA = resolveHermesHome("profile-a");
+		const homeB = resolveHermesHome("profile-b");
+		makeStateDb(homeA, [{ id: "shared-id", title: "Title A" }]);
+		makeStateDb(homeB, [
+			{ id: "shared-id", title: "Title B" },
+			{ id: "only-b", title: "Only B" },
+		]);
+		makeBreadcrumb(homeA, "shared-id", "/worktree/a");
+		makeBreadcrumb(homeB, "shared-id", "/worktree/b");
+		makeBreadcrumb(homeB, "only-b", "/worktree/b2");
+
 		const registry = new CodingToolRegistry();
-		const sharedSessionId = "shared-session-id";
+		const adapterA = registry.getSessionAdapterForAgent(
+			hermesAgent({ hermesProfile: "profile-a" }),
+		);
+		const adapterB = registry.getSessionAdapterForAgent(
+			hermesAgent({ hermesProfile: "profile-b" }),
+		);
 
-		const agentA: Agent = {
-			id: "agent-a",
-			featureId: "feat-1",
-			name: "Agent A",
-			sessionId: sharedSessionId,
-			status: "running",
-			createdAt: new Date().toISOString(),
-			toolId: "hermes",
-			hermesProfile: "profile-a",
-		};
-		const agentB: Agent = {
-			id: "agent-b",
-			featureId: "feat-1",
-			name: "Agent B",
-			sessionId: sharedSessionId,
-			status: "running",
-			createdAt: new Date().toISOString(),
-			toolId: "hermes",
+		const sessionsA = adapterA?.scanSessions?.() ?? [];
+		const sessionsB = adapterB?.scanSessions?.() ?? [];
+
+		const idsA = sessionsA.map((s) => s.sessionId);
+		const idsB = sessionsB.map((s) => s.sessionId);
+
+		// A only sees its own shared-id (from its own store), not B's "only-b".
+		expect(idsA).toEqual(["shared-id"]);
+		expect(idsB.sort()).toEqual(["only-b", "shared-id"]);
+
+		// The cwd recorded in each profile's breadcrumb is preserved, proving
+		// each adapter read from a different directory.
+		const byId = (list: typeof sessionsA) =>
+			new Map(list.map((s) => [s.sessionId, s.projectPath]));
+		expect(byId(sessionsA).get("shared-id")).toBe("/worktree/a");
+		expect(byId(sessionsB).get("shared-id")).toBe("/worktree/b");
+	});
+
+	it("launch and resume commands target each profile explicitly", () => {
+		const root = makeRoot();
+		process.env.HERMES_HOME = root;
+
+		const registry = new CodingToolRegistry();
+		const agentA = hermesAgent({ hermesProfile: "profile-a" });
+		const agentB = hermesAgent({
 			hermesProfile: "profile-b",
-		};
+			sessionId: "sess-9",
+		});
 
-		// Both agents have the same sessionId but different profiles
 		const toolA = registry.resolveAgentToolForAgent(agentA);
 		const toolB = registry.resolveAgentToolForAgent(agentB);
 
-		// Their providers should be different (different session adapters)
-		expect(toolA.provider).not.toBe(toolB.provider);
-		expect(toolA.provider?.sessionAdapter).not.toBe(
-			toolB.provider?.sessionAdapter,
+		expect(registry.buildLaunchCommand(toolA)).toBe("hermes -p profile-a");
+		expect(registry.buildStrictResumeLaunchCommand(toolB, "sess-9")).toBe(
+			"hermes -p profile-b --resume sess-9 --no-restore-cwd",
 		);
-
-		// But both build valid resume commands with their respective profiles
-		expect(
-			registry.buildStrictResumeLaunchCommand(toolA, sharedSessionId),
-		).toBe(`hermes -p profile-a --resume ${sharedSessionId} --no-restore-cwd`);
-		expect(
-			registry.buildStrictResumeLaunchCommand(toolB, sharedSessionId),
-		).toBe(`hermes -p profile-b --resume ${sharedSessionId} --no-restore-cwd`);
 	});
 
-	it("agent without hermesProfile uses default adapter", () => {
-		const registry = new CodingToolRegistry();
-		const agent: Agent = {
-			id: "agent-default",
-			featureId: "feat-1",
-			name: "Agent Default",
-			sessionId: null,
-			status: "stopped",
-			createdAt: new Date().toISOString(),
-			toolId: "hermes",
-		};
+	it("explicit default profile maps to the base home and still uses -p default", () => {
+		const root = makeRoot();
+		process.env.HERMES_HOME = root;
 
+		// The default profile is the root itself — never profiles/default.
+		expect(resolveHermesHome("default")).toBe(root);
+
+		// Persisting an explicit "default" profile means the agent is still
+		// launched with an explicit -p flag, so a later `hermes profile use`
+		// cannot silently change its runtime.
+		const registry = new CodingToolRegistry();
+		const agent = hermesAgent({ hermesProfile: "default" });
 		const tool = registry.resolveAgentToolForAgent(agent);
-		// No profile → default launch args (no -p flag)
-		expect(registry.buildLaunchCommand(tool)).toBe("hermes");
+		expect(registry.buildLaunchCommand(tool)).toBe("hermes -p default");
 		expect(registry.buildStrictResumeLaunchCommand(tool, "sess-1")).toBe(
-			"hermes --resume sess-1 --no-restore-cwd",
+			"hermes -p default --resume sess-1 --no-restore-cwd",
 		);
-	});
-
-	it("getSessionRenameAdapters returns one adapter per toolId (not per profile)", () => {
-		const registry = new CodingToolRegistry();
-		// getSessionRenameAdapters uses the built-in tools (no project config),
-		// so it returns the default hermes adapter. Profile-specific adapters
-		// are only created via getSessionAdapterForAgent.
-		const adapters = registry.getSessionRenameAdapters();
-		const hermesAdapters = adapters.filter((a) => a.toolId === "hermes");
-		expect(hermesAdapters).toHaveLength(1);
-	});
-
-	it("resolveHermesHome respects profile hierarchy", () => {
-		// Named profile → <root>/profiles/<name>
-		const namedHome = resolveHermesHome("iqv2");
-		expect(namedHome).toContain("profiles/iqv2");
-
-		// Default → <root> itself
-		const defaultHome = resolveHermesHome();
-		expect(defaultHome).not.toContain("profiles");
 	});
 });

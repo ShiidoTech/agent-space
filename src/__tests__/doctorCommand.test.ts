@@ -40,7 +40,7 @@ describe("doctor agent probing", () => {
 			const result = probeAgents(storagePath, [project], {
 				getUnknownProjectAgentIds: () => [],
 				getStructuredAttentionSignal: () => undefined,
-				describeAgentTool: () => ({
+				describeAgentToolForAgent: () => ({
 					declared: true,
 					tool: { id: "stub", name: "Stub", command: "stub" },
 					adapter: {

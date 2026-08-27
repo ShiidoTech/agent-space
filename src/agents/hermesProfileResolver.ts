@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ProjectConfig } from "../projects/projectConfig";
@@ -16,17 +17,61 @@ export function resolveHermesRoot(): string {
 }
 
 /**
+ * Resolve the profile Hermes itself considers active (its "sticky default",
+ * set with `hermes profile use <name>`).
+ *
+ * Hermes stores the sticky default in `<hermes-root>/active_profile`: a file
+ * whose trimmed contents are the active profile name. When the file is absent,
+ * empty, or unreadable, Hermes behaves as if the active profile were
+ * `"default"` (the base `~/.hermes` home). This mirrors `get_active_profile()`
+ * in Hermes' `profiles.py` so Agent Space freezes the same runtime a bare
+ * `hermes` invocation would have used.
+ */
+export function resolveActiveHermesProfile(): string {
+	const root = resolveHermesRoot();
+	const activePath = path.join(root, "active_profile");
+	try {
+		const name = fs.readFileSync(activePath, "utf8").trim();
+		if (!name) return "default";
+		return name;
+	} catch {
+		return "default";
+	}
+}
+
+/**
+ * Resolve the Hermes profile to freeze onto a newly created agent.
+ *
+ * Priority order:
+ * 1. `projectProfile` — the project's declared `providers.hermes.profile`.
+ * 2. Hermes' own active profile (`hermes profile use`), if any.
+ * 3. `"default"` — the base `~/.hermes` home.
+ *
+ * This always returns a concrete profile (never `undefined`) so that every
+ * Hermes agent is created with an explicit persisted `hermesProfile`, and
+ * every subsequent launch/resume goes through `-p <profile>`. Only by
+ * persisting even the implicit default can Agent Space guarantee that a later
+ * `hermes profile use` (or project config edit) never silently moves an
+ * existing session to a different runtime.
+ */
+export function resolveCreationProfile(projectProfile?: string): string {
+	return projectProfile ?? resolveActiveHermesProfile();
+}
+
+/**
  * Resolve the filesystem path for a Hermes home directory given a profile.
  *
  * - Named profile `"iqv2"` → `<hermes-root>/profiles/iqv2`
- * - Default / `undefined`  → `<hermes-root>` itself
+ * - Default / `undefined` / `"default"` → `<hermes-root>` itself
  *
  * The root is determined by {@link resolveHermesRoot} (respects
- * `HERMES_HOME` and platform conventions).
+ * `HERMES_HOME` and platform conventions). The literal name `"default"`
+ * refers to Hermes' built-in base profile, which is the root directory
+ * itself — never `<hermes-root>/profiles/default`.
  */
 export function resolveHermesHome(profile?: string): string {
 	const root = resolveHermesRoot();
-	if (!profile) return root;
+	if (!profile || profile === "default") return root;
 	return path.join(root, "profiles", profile);
 }
 
