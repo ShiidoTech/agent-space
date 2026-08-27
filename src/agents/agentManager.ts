@@ -156,14 +156,20 @@ export class AgentManager {
 		// so resume/restore always targets the same runtime even if the project
 		// config or active Hermes profile changes later.
 		//
-		// Priority: project profile > Hermes' active profile (`hermes profile
-		// use`) > "default". Always a concrete profile for Hermes agents, so
-		// even the implicit default is persisted explicitly and every launch
-		// goes through `-p <profile>`.
-		const hermesProfile =
-			toolId === "hermes"
-				? resolveCreationProfile(this.config.providers?.hermes?.profile)
-				: undefined;
+		// Priority: project profile > profile carried by HERMES_HOME (e.g.
+		// HERMES_HOME=/root/profiles/coder) > Hermes' active profile (`hermes
+		// profile use`) > "default". Always a concrete profile for Hermes
+		// agents, so even the implicit default is persisted explicitly and
+		// every launch goes through `-p <profile>`.
+		let hermesProfile: string | undefined;
+		if (toolId === "hermes") {
+			const tool = this.toolRegistry.getTool("hermes");
+			const envHermesHome = tool?.env?.HERMES_HOME;
+			hermesProfile = resolveCreationProfile(
+				this.config.providers?.hermes?.profile,
+				envHermesHome,
+			);
+		}
 
 		const agent: Agent = {
 			id,

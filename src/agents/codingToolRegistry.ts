@@ -35,8 +35,11 @@ const openCodeSessionAdapter = new OpenCodeSessionProvider();
  */
 const hermesAdapterCache = new Map<string, HermesSessionProvider>();
 
-function getHermesAdapter(home?: string): HermesSessionProvider {
-	const resolvedHome = home ?? resolveHermesHome();
+function getHermesAdapter(
+	home?: string,
+	envHermesHome?: string,
+): HermesSessionProvider {
+	const resolvedHome = home ?? resolveHermesHome(undefined, envHermesHome);
 	let adapter = hermesAdapterCache.get(resolvedHome);
 	if (!adapter) {
 		adapter = new HermesSessionProvider(resolvedHome);
@@ -46,7 +49,10 @@ function getHermesAdapter(home?: string): HermesSessionProvider {
 }
 
 /** Default adapter (no profile) for the built-in provider definition. */
-const hermesDefaultAdapter = getHermesAdapter();
+const hermesDefaultAdapter = getHermesAdapter(
+	undefined,
+	process.env.HERMES_HOME,
+);
 
 /**
  * How long a raw provider attention read is trusted before it is re-fetched.
@@ -168,6 +174,7 @@ const providerById = new Map(BUILTIN_PROVIDERS.map((p) => [p.id, p]));
 export function resolveSessionStoreDir(
 	family: CodingTool["family"],
 	sessionsDir?: string,
+	envHermesHome?: string,
 ): string | undefined {
 	if (family === "claude") {
 		return resolveClaudeProjectsDir(
@@ -180,7 +187,7 @@ export function resolveSessionStoreDir(
 			: path.join(process.env.HOME || "~", ".codex", "sessions");
 	}
 	if (family === "hermes") {
-		return resolveHermesHome();
+		return resolveHermesHome(undefined, envHermesHome);
 	}
 	return undefined;
 }
@@ -197,6 +204,7 @@ function providerForTool(
 	id: string,
 	family?: CodingTool["family"],
 	sessionsDir?: string,
+	envHermesHome?: string,
 ): CodingAgentProvider {
 	const builtin = providerById.get(id);
 	if (builtin) return builtin;
@@ -221,7 +229,7 @@ function providerForTool(
 	// One canonical store path per family, shared with `resolveSessionStoreDir`
 	// and Doctor, so the directory the adapter reads is exactly the directory
 	// whose reachability decides the capabilities and the one Doctor reports.
-	const storeDir = resolveSessionStoreDir(family, sessionsDir);
+	const storeDir = resolveSessionStoreDir(family, sessionsDir, envHermesHome);
 	const claudeSessionProvider =
 		family === "claude" ? new ClaudeSessionProvider(storeDir, id) : undefined;
 	const codexSessionProvider =
@@ -354,6 +362,7 @@ function mergeTool(base: CodingTool | undefined, over: CodingTool): CodingTool {
 			over.id,
 			over.family ?? base?.family,
 			over.sessionsDir ?? base?.sessionsDir,
+			over.env?.HERMES_HOME ?? base?.env?.HERMES_HOME,
 		),
 	};
 }
@@ -496,8 +505,9 @@ export class CodingToolRegistry {
 		const base = this.resolveAgentTool(agent.toolId);
 		const profile = agent.hermesProfile;
 		if (!isHermesFamily(base) || !profile) return base;
-		const home = resolveHermesHome(profile);
-		const adapter = getHermesAdapter(home);
+		const envHermesHome = base.env?.HERMES_HOME;
+		const home = resolveHermesHome(profile, envHermesHome);
+		const adapter = getHermesAdapter(home, envHermesHome);
 		return {
 			...base,
 			provider: {
@@ -543,10 +553,15 @@ export class CodingToolRegistry {
 	} {
 		const declared = this.getTool(toolId ?? "claude") !== undefined;
 		const tool = this.resolveAgentTool(toolId);
+		const envHermesHome = tool.env?.HERMES_HOME;
 		return {
 			tool,
 			declared,
-			sessionStoreDir: resolveSessionStoreDir(tool.family, tool.sessionsDir),
+			sessionStoreDir: resolveSessionStoreDir(
+				tool.family,
+				tool.sessionsDir,
+				envHermesHome,
+			),
 			adapter: this.getProvider(tool).sessionAdapter,
 		};
 	}
@@ -566,9 +581,10 @@ export class CodingToolRegistry {
 	} {
 		const tool = this.resolveAgentToolForAgent(agent);
 		const declared = this.getTool(agent.toolId ?? "claude") !== undefined;
+		const envHermesHome = tool.env?.HERMES_HOME;
 		const sessionStoreDir = isHermesFamily(tool)
-			? resolveHermesHome(agent.hermesProfile)
-			: resolveSessionStoreDir(tool.family, tool.sessionsDir);
+			? resolveHermesHome(agent.hermesProfile, envHermesHome)
+			: resolveSessionStoreDir(tool.family, tool.sessionsDir, envHermesHome);
 		return {
 			tool,
 			declared,
