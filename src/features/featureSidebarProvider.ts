@@ -595,8 +595,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="card-header">
 				<span class="card-chevron" id="card-chevron-${feature.id}" onclick="toggleFeatureCard(event, '${feature.id}')">${ICON_CHEVRON_DOWN}</span>
 				<span class="feature-identity">
-					<span class="feature-name" title="Feature name">${this.escapeHtml(feature.name)}</span>
-					<span class="feature-branch-line" title="Delivery branch"><span class="feature-branch-label">delivery</span> ${this.escapeHtml(deliveryBranch)}</span>
+					<span class="feature-name" title="Feature: ${this.escapeHtml(feature.name)}">${this.escapeHtml(deliveryBranch)}</span>
 					${checkoutBranch ? `<span class="feature-branch-line feature-checkout-line" title="Branch currently checked out in the worktree"><span class="feature-branch-label">checkout</span> ${this.escapeHtml(checkoutBranch)}</span>` : ""}
 				</span>
 				${summary ? `<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>` : ""}
