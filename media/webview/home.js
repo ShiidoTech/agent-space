@@ -25,6 +25,15 @@ document.addEventListener("click", (event) => {
 		});
 		return;
 	}
+	const protectButton = target.closest(".worktree-branch-protect");
+	if (protectButton) {
+		event.stopPropagation();
+		send("addProtectedBranch", {
+			projectId: protectButton.dataset.projectId,
+			branchRef: protectButton.dataset.branchRef,
+		});
+		return;
+	}
 
 	const updateButton = target.closest(".project-base-update-btn");
 	if (updateButton) {

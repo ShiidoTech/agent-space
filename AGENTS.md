@@ -34,9 +34,10 @@ project.
 
 ## Operational knowledge
 
+- **BEFORE any install, build, or deployment action: read the matching runbook
+  from `.agentspace/runbooks/`.** Do not reconstruct commands from memory — a
+  workflow already exercised by the project is not something a fresh agent
+  should rediscover.
 - Local install/verify workflow: `.agentspace/runbooks/local-extension-test.md`.
 - Provider session stores (schemas, readonly invariant, smoke test):
   `.agentspace/runbooks/provider-session-stores.md`.
-- Prefer the repository's runbooks over reconstructing shell commands from
-  memory; a workflow already exercised by the project is not something a fresh
-  agent should rediscover.

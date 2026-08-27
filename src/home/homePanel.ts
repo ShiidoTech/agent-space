@@ -21,6 +21,7 @@ import {
 	projectConfigTemplate,
 	pruneEmptyConfig,
 } from "../projects/projectConfig";
+import { PROTECTED_BRANCH_NAMES } from "../projects/projectGitOps";
 import type {
 	ProjectContext,
 	ProjectManager,
@@ -371,6 +372,12 @@ export class HomePanel {
 				this.saveProjectConfig(
 					message.projectId as string,
 					message.content as string,
+				);
+				break;
+			case "addProtectedBranch":
+				this.addProtectedBranch(
+					message.projectId as string,
+					message.branchRef as string,
 				);
 				break;
 			case "removeProject":
@@ -888,6 +895,7 @@ export class HomePanel {
 			this.featureStateCoordinator.getProjectWorktreeBranches(projectId);
 		const repoPath =
 			this.projectManager.getContext(projectId)?.project.repoPath;
+		const context = this.projectManager.getContext(projectId);
 		if (!inventory || inventory.status !== "known") {
 			return `
 				<div class="worktree-branches-card">
@@ -895,14 +903,20 @@ export class HomePanel {
 					<div class="project-setting-source">Branch inventory not observed yet.</div>
 				</div>`;
 		}
-		if (inventory.branches.length === 0) {
+		const protectedBranches = new Set([
+			...PROTECTED_BRANCH_NAMES,
+			...(context?.config?.protectedBranches ?? []),
+			...(inventory.baseRef ? [inventory.baseRef] : []),
+		]);
+		const visibleBranches = inventory.branches;
+		if (visibleBranches.length === 0) {
 			return `
 				<div class="worktree-branches-card">
 					<div class="section-label">Worktree branches</div>
 					<div class="project-setting-source">No branch worktrees detected.</div>
 				</div>`;
 		}
-		const rows = inventory.branches
+		const rows = visibleBranches
 			.map((branch) => {
 				const relation = this.renderBranchRelation(branch.baseRelation);
 				const worktreeTone =
@@ -921,9 +935,13 @@ export class HomePanel {
 						: "";
 				const deletable =
 					!branch.linkedFeatureId &&
-					branch.ref !== inventory.baseRef &&
+					inventory.baseRef !== undefined &&
+					!protectedBranches.has(branch.ref) &&
 					repoPath !== undefined &&
 					branch.worktreePath !== repoPath;
+				const protectedAction = protectedBranches.has(branch.ref)
+					? '<span class="worktree-branch-protected">protected</span>'
+					: `<button class="worktree-branch-protect" data-project-id="${this.escapeHtml(projectId)}" data-branch-ref="${this.escapeHtml(branch.ref)}" title="Protect this branch from deletion">protect</button>`;
 				const deleteTitle =
 					branch.outsideBase === true
 						? "Delete this external branch and its worktree (an extra confirmation will be asked)"
@@ -938,13 +956,13 @@ export class HomePanel {
 						<span title="${this.escapeHtml(branch.headSha)}">@${this.escapeHtml(branch.headSha.slice(0, 8))}</span>
 						${branch.prunable ? '<span class="worktree-branch-prunable">prunable</span>' : ""}
 					</span>
-					<span class="worktree-branch-chips">${relation}${worktreeChip}${link}${externalChip}${deleteAction}</span>
+				<span class="worktree-branch-chips">${relation}${worktreeChip}${link}${externalChip}${protectedAction}${deleteAction}</span>
 				</div>`;
 			})
 			.join("");
 		return `
 			<div class="worktree-branches-card">
-				<div class="section-label">Worktree branches <span class="project-setting-source">· ${inventory.branches.length} branch${inventory.branches.length === 1 ? "" : "es"}</span></div>
+			<div class="section-label">Worktree branches <span class="project-setting-source">· ${visibleBranches.length} branch${visibleBranches.length === 1 ? "" : "es"}</span></div>
 				<div class="worktree-branch-list">${rows}</div>
 			</div>`;
 	}
@@ -1706,6 +1724,7 @@ export class HomePanel {
 				<div class="section-label">Project Settings</div>
 				<div class="project-settings-grid">
 					<div><span class="project-setting-label">Base branch</span><strong>${this.escapeHtml(effectiveBaseBranch)}</strong><span class="project-setting-source">${baseSource}</span></div>
+					<div><span class="project-setting-label">Protected branches</span><span>${this.escapeHtml([...new Set([...PROTECTED_BRANCH_NAMES, ...(context.config.protectedBranches ?? [])])].join(", "))}</span></div>
 					<div><span class="project-setting-label">Branch kinds</span><span>${this.escapeHtml(branchKinds.join(", ") || "Default")}</span>${defaultBranchKind ? `<span class="project-setting-source">Default: ${this.escapeHtml(defaultBranchKind)}</span>` : ""}</div>
 					<div><span class="project-setting-label">Worktrees</span><span class="project-worktree-cell">${this.escapeHtml(context.featureManager.getWorktreeBase())}</span></div>
 				</div>
@@ -1720,6 +1739,7 @@ export class HomePanel {
 					<summary>Available settings</summary>
 					<pre>{
   "baseBranch": "main",              // shared base branch for worktrees
+  "protectedBranches": ["trunk"],    // additional branches never offered for deletion
   "branchKinds": ["feature", "fix"], // kinds offered at feature creation
   "defaultBranchKind": "feature",
   "worktreesDir": "~/.worktrees",    // default: &lt;repo&gt;/.worktrees
@@ -1852,6 +1872,17 @@ export class HomePanel {
 				`Could not save project configuration: ${error instanceof Error ? error.message : String(error)}`,
 			);
 		}
+	}
+
+	private addProtectedBranch(projectId: string, branchRef: string): void {
+		const context = this.projectManager.getContext(projectId);
+		const branch = branchRef.trim();
+		if (!context || !branch || PROTECTED_BRANCH_NAMES.has(branch)) return;
+		const sharedConfig = loadSharedProjectConfig(context.project.repoPath);
+		const protectedBranches = [
+			...new Set([...(sharedConfig.protectedBranches ?? []), branch]),
+		];
+		this.projectManager.updateProjectConfig(projectId, { protectedBranches });
 	}
 
 	private removeProject(projectId: string): void {

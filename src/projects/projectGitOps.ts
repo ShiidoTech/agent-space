@@ -8,6 +8,17 @@ import {
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
 import type { ProjectReferenceBranchHealth } from "./referenceBranchHealth";
 
+export const PROTECTED_BRANCH_NAMES: ReadonlySet<string> = new Set([
+	"main",
+	"master",
+	"develop",
+	"dev",
+	"production",
+	"prod",
+	"release",
+	"staging",
+]);
+
 export type BaseBranchUpdateResult =
 	| { readonly status: "updated"; readonly method: "fast_forward" | "merge" }
 	| { readonly status: "already_current" }
@@ -297,6 +308,7 @@ export interface DeleteWorktreeBranchInput {
 	readonly worktreePath: string;
 	readonly branchRef: string;
 	readonly baseBranch?: string;
+	readonly protectedBranches?: readonly string[];
 	/**
 	 * Feature owning this ref (primary branch, active branch or branch link).
 	 * Feature-owned branches are never deletable from the worktree list even
@@ -395,9 +407,23 @@ export async function assessWorktreeBranchDeletion(
 			`Branch ${branchRef} belongs to Feature ${input.ownedByFeatureId} and cannot be deleted while the Feature record exists.`,
 		);
 	}
+	if (!baseBranch) {
+		return structuralBlock(
+			"The base branch is unknown; refusing to delete any worktree branch.",
+		);
+	}
 	if (baseBranch && branchRef === baseBranch) {
 		return structuralBlock(
 			`Branch ${branchRef} is the project's base branch and cannot be deleted.`,
+		);
+	}
+	const protectedBranches = new Set([
+		...PROTECTED_BRANCH_NAMES,
+		...(input.protectedBranches ?? []),
+	]);
+	if (protectedBranches.has(branchRef)) {
+		return structuralBlock(
+			`Branch "${branchRef}" is protected and cannot be deleted.`,
 		);
 	}
 	if (path.resolve(worktreePath) === path.resolve(repoRoot)) {

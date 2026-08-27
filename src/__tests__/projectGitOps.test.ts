@@ -373,6 +373,22 @@ describe("deleteWorktreeBranch", () => {
 		expect(execFileMock).not.toHaveBeenCalled();
 	});
 
+	it("refuses deletion when the base branch is unknown", async () => {
+		const outcome = await deleteWorktreeBranch(readerOk(), {
+			repoRoot,
+			worktreeBase,
+			worktreePath: `${worktreeBase}/feat/x`,
+			branchRef: "feat/x",
+			baseBranch: undefined,
+		});
+
+		expect(outcome.status).toBe("not_deletable");
+		expect(
+			(outcome as { reasons: readonly string[] }).reasons.join(),
+		).toContain("base branch is unknown");
+		expect(execFileMock).not.toHaveBeenCalled();
+	});
+
 	it("refuses to remove the main working tree", async () => {
 		const outcome = await deleteWorktreeBranch(readerOk(), {
 			repoRoot,
