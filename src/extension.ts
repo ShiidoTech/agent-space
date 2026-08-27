@@ -2011,6 +2011,7 @@ export async function activate(
 						worktreePath,
 						branchRef,
 						baseBranch,
+						protectedBranches: ctx.config.protectedBranches,
 						...(ownedByFeatureId ? { ownedByFeatureId } : {}),
 					},
 					ctx.gitClient,
@@ -2120,6 +2121,7 @@ export async function activate(
 					worktreePath,
 					branchRef,
 					baseBranch,
+					protectedBranches: ctx.config.protectedBranches,
 					...(ownedByFeatureId ? { ownedByFeatureId } : {}),
 					// Bound destructive flags by exactly what was confirmed.
 					...(hasLoss ? { acknowledgedLoss: losses } : {}),

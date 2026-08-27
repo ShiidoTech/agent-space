@@ -308,6 +308,7 @@ export interface DeleteWorktreeBranchInput {
 	readonly worktreePath: string;
 	readonly branchRef: string;
 	readonly baseBranch?: string;
+	readonly protectedBranches?: readonly string[];
 	/**
 	 * Feature owning this ref (primary branch, active branch or branch link).
 	 * Feature-owned branches are never deletable from the worktree list even
@@ -416,9 +417,13 @@ export async function assessWorktreeBranchDeletion(
 			`Branch ${branchRef} is the project's base branch and cannot be deleted.`,
 		);
 	}
-	if (PROTECTED_BRANCH_NAMES.has(branchRef)) {
+	const protectedBranches = new Set([
+		...PROTECTED_BRANCH_NAMES,
+		...(input.protectedBranches ?? []),
+	]);
+	if (protectedBranches.has(branchRef)) {
 		return structuralBlock(
-			`Branch "${branchRef}" is a well-known protected branch and cannot be deleted.`,
+			`Branch "${branchRef}" is protected and cannot be deleted.`,
 		);
 	}
 	if (path.resolve(worktreePath) === path.resolve(repoRoot)) {

@@ -795,6 +795,22 @@ body[data-severity-filter="info"] .problem-row:not([data-severity="info"]) {
 	font-size: 11px;
 	color: var(--vscode-charts-blue);
 }
+.worktree-branch-protected {
+	font-size: 11px;
+	color: var(--vscode-charts-yellow);
+}
+.worktree-branch-protect {
+	padding: 1px 5px;
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	font-size: 10px;
+	cursor: pointer;
+}
+.worktree-branch-protect:hover {
+	background: var(--vscode-toolbar-hoverBackground);
+}
 .worktree-branch-delete {
 	display: inline-flex;
 	align-items: center;

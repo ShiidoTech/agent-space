@@ -29,6 +29,8 @@ import * as path from "node:path";
  */
 export interface ProjectConfig {
 	baseBranch?: string;
+	/** Additional branch names that must never be offered for deletion. */
+	protectedBranches?: string[];
 	branchKinds?: string[];
 	defaultBranchKind?: string;
 	worktreesDir?: string;
@@ -79,6 +81,7 @@ type NullableDeep<T> = {
 export function projectConfigTemplate(): NullableDeep<ProjectConfig> {
 	return {
 		baseBranch: null,
+		protectedBranches: null,
 		branchKinds: null,
 		defaultBranchKind: null,
 		worktreesDir: null,
