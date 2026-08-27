@@ -41,3 +41,9 @@ project.
 - Local install/verify workflow: `.agentspace/runbooks/local-extension-test.md`.
 - Provider session stores (schemas, readonly invariant, smoke test):
   `.agentspace/runbooks/provider-session-stores.md`.
+- Hermes launched from Agent Space runs under the `agent-space` Hermes profile,
+  pinned by `providers.hermes.profile` in `.agentspace/config.json`. The repo
+  only declares this deterministic name; the actual profile (model, tools,
+  SOUL) and its sessions/memory live machine-locally under the Hermes profile
+  home and are never committed. Global Hermes setup guidance (the `cwd: "."`
+  rule, profile resolution, secrets) is in `docs/providers/hermes-setup.md`.

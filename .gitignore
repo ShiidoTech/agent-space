@@ -8,3 +8,7 @@ feature/
 # Machine-local Agent Space overlay: personal CLI profiles and paths that only
 # resolve on one machine. Shared conventions live in .agentspace/config.json.
 .agentspace/config.local.json
+# Project skills are versioned, but the agent-space* pattern above (packaged
+# VSIX/binary artifacts) would swallow this directory tree.
+!.agents/skills/
+!.agents/skills/**

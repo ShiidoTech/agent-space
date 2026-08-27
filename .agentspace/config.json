@@ -14,5 +14,10 @@
     "runbooks": [
       ".agentspace/runbooks/local-extension-test.md"
     ]
+  },
+  "providers": {
+    "hermes": {
+      "profile": "agent-space"
+    }
   }
 }
