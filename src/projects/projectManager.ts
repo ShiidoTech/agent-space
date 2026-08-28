@@ -314,6 +314,26 @@ export class ProjectManager {
 		return undefined;
 	}
 
+	/**
+	 * Strictly cache-only lookup: returns a context only if it — and, for a
+	 * regular feature, its project mapping — are already warm in memory.
+	 * Unlike {@link findContextByFeatureIdFast}, this NEVER reads
+	 * `projects.json`, never calls `getProjects()`/`getAllContexts()`, and
+	 * never constructs a context: a cold cache returns `undefined` rather
+	 * than falling back to any of that. Fail-closed by design — callers on
+	 * a genuinely hot path (e.g. a peek that must stay zero-I/O, see
+	 * `AgentFocusService`'s G1) are expected to treat `undefined` as "skip,
+	 * don't resolve" rather than as an error (issue #120 PR2, review
+	 * round 4).
+	 */
+	peekWarmContext(featureId: string): ProjectContext | undefined {
+		if (featureId.startsWith("base:")) {
+			return this.contexts.get(featureId.slice("base:".length));
+		}
+		const projectId = this.featureToProject.get(featureId);
+		return projectId ? this.contexts.get(projectId) : undefined;
+	}
+
 	findContextByFeatureId(featureId: string): ProjectContext | undefined {
 		if (featureId.startsWith("base:")) {
 			const projectId = featureId.slice("base:".length);

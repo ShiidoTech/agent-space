@@ -215,6 +215,119 @@ describe("ProjectManager", () => {
 		});
 	});
 
+	describe("peekWarmContext (issue #120 PR2, review round 4)", () => {
+		it("resolves base:<projectId> when the project's context is already warm, without reading projects.json", () => {
+			const project = manager.addProject(tmpDir);
+			manager.getContext(project.id); // warms the context, as a render pass would
+
+			const getProjectsSpy = vi.spyOn(globalStore, "getProjects");
+			const resolved = manager.peekWarmContext(`base:${project.id}`);
+
+			expect(resolved?.project.id).toBe(project.id);
+			expect(getProjectsSpy).not.toHaveBeenCalled();
+		});
+
+		it("returns undefined for a cold context, without ever constructing one or reading projects.json", () => {
+			manager.addProject(tmpDir);
+			// Deliberately never call getContext/getAllContexts: the project
+			// exists on disk, but nothing has warmed it in this process yet.
+			const getProjectsSpy = vi.spyOn(globalStore, "getProjects");
+
+			expect(manager.peekWarmContext(`base:${tmpDir}`)).toBeUndefined();
+			expect(getProjectsSpy).not.toHaveBeenCalled();
+		});
+
+		it("resolves a regular feature once its reverse-index entry is warm, without reading projects.json", () => {
+			const project = manager.addProject(tmpDir);
+			const ctx = manager.getContext(project.id);
+			// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+			const feature = ctx!.featureManager.createFeatureRecord(
+				"Peek Lookup",
+				"shared",
+			);
+			// A render pass (findContextByFeatureIdFast/resolveFeature) would
+			// normally have primed this already; do it explicitly here.
+			manager.findContextByFeatureIdFast(feature.id);
+
+			const getProjectsSpy = vi.spyOn(globalStore, "getProjects");
+			const resolved = manager.peekWarmContext(feature.id);
+
+			expect(resolved?.project.id).toBe(project.id);
+			expect(getProjectsSpy).not.toHaveBeenCalled();
+		});
+
+		it("returns undefined for an unknown feature id without reading projects.json", () => {
+			manager.addProject(tmpDir);
+			const getProjectsSpy = vi.spyOn(globalStore, "getProjects");
+
+			expect(manager.peekWarmContext("no-such-feature")).toBeUndefined();
+			expect(getProjectsSpy).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("AgentFocusService wiring: warm click stays disk-free end to end (issue #120 PR2, review round 4)", () => {
+		it("a warm tracked terminal with a pending receipt reveals with zero project/store reads, then defers a matching compare-and-clear ack", async () => {
+			vi.useFakeTimers();
+			try {
+				const project = manager.addProject(tmpDir);
+				const ctx = manager.getContext(project.id);
+				// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+				const feature = ctx!.featureManager.createFeatureRecord(
+					"Wiring Check",
+					"shared",
+				);
+				// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+				const agent = ctx!.agentManager.createAgent(feature);
+				// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+				ctx!.agentManager.recordTurnCompleted(agent.id, feature.id, "review-1");
+				// Prime the reverse index the way a render pass would.
+				manager.findContextByFeatureIdFast(feature.id);
+
+				const { AgentFocusService } = await import(
+					"../agents/agentFocusService"
+				);
+				const show = vi.fn();
+				const focusService = new AgentFocusService({
+					getTerminalController: () =>
+						({
+							getTerminal: () => ({ show }),
+							focusOrCreateTerminalAsync: vi.fn(),
+						}) as never,
+					resolveFeature: (id: string) => manager.resolveFeature(id),
+					peekPendingReviewId: (featureId, agentId) =>
+						manager
+							.peekWarmContext(featureId)
+							?.agentManager.peekPendingReviewId(featureId, agentId),
+					acknowledgeReview: (featureId, agentId, expectedReviewId) => {
+						manager
+							.peekWarmContext(featureId)
+							?.agentManager.acknowledgeReviewIfMatches(
+								agentId,
+								featureId,
+								expectedReviewId,
+							);
+					},
+				});
+
+				const getProjectsSpy = vi.spyOn(globalStore, "getProjects");
+				focusService.requestFocus(feature.id, agent.id);
+
+				// The reveal itself never touched disk.
+				expect(show).toHaveBeenCalledTimes(1);
+				expect(getProjectsSpy).not.toHaveBeenCalled();
+
+				await vi.advanceTimersByTimeAsync(0);
+
+				const refreshed =
+					// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+					ctx!.agentManager.getAgents(feature.id)[0].pendingReviewId;
+				expect(refreshed).toBeUndefined();
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	});
+
 	describe("resolveFeature", () => {
 		it("resolves base:<projectId> to a base feature", () => {
 			const project = manager.addProject(tmpDir);

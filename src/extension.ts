@@ -227,9 +227,13 @@ export async function activate(
 	const agentFocusService = new AgentFocusService({
 		getTerminalController: () => terminalController,
 		resolveFeature: (featureId) => projectManager.resolveFeature(featureId),
+		// Strictly cache-only: never falls back to reading projects.json or
+		// constructing a context, unlike findContextByFeatureIdFast — this
+		// runs synchronously on every focus click, including the warm path,
+		// so it must never touch disk (issue #120 PR2, review round 4).
 		peekPendingReviewId: (featureId, agentId) =>
 			projectManager
-				.findContextByFeatureIdFast(featureId)
+				.peekWarmContext(featureId)
 				?.agentManager.peekPendingReviewId(featureId, agentId),
 		acknowledgeReview: (featureId, agentId, expectedReviewId) => {
 			projectManager
