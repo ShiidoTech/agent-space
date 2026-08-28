@@ -844,7 +844,12 @@ function safeCorrelate(
 	if (!entry.adapter.correlateOwnedSession) return undefined;
 	try {
 		const known = new Set([...(entry.agent.sessionBaseline ?? []), ...taken]);
-		const discovered = entry.adapter.correlateOwnedSession(entry.cwd, known);
+		const discovered = entry.adapter.correlateOwnedSession({
+			cwd: entry.cwd,
+			knownSessionIds: known,
+			tmuxSession: entry.agent.tmuxSession,
+			launchedAtMs: entry.launchedMs || undefined,
+		});
 		return typeof discovered === "string" ? discovered : undefined;
 	} catch {
 		return undefined;
@@ -878,10 +883,12 @@ async function safeCorrelateAsync(
 	if (!entry.adapter.async?.correlateOwnedSession) return undefined;
 	try {
 		const known = new Set([...(entry.agent.sessionBaseline ?? []), ...taken]);
-		const discovered = await entry.adapter.async.correlateOwnedSession(
-			entry.cwd,
-			known,
-		);
+		const discovered = await entry.adapter.async.correlateOwnedSession({
+			cwd: entry.cwd,
+			knownSessionIds: known,
+			tmuxSession: entry.agent.tmuxSession,
+			launchedAtMs: entry.launchedMs || undefined,
+		});
 		return typeof discovered === "string" ? discovered : undefined;
 	} catch {
 		return undefined;

@@ -1,6 +1,7 @@
 import type { AgentAttentionStatus } from "../../types";
 import type {
 	AsyncSessionObservationAdapter,
+	SessionCorrelationContext,
 	SessionInfo,
 	SessionRenameAdapter,
 } from "../sessionProviders/types";
@@ -60,8 +61,7 @@ export interface ProviderSessionAdapter extends SessionRenameAdapter {
 	): SessionInfo[];
 	/** Return an id only with provider-specific proof this launch owns it. */
 	correlateOwnedSession?(
-		cwd: string,
-		knownSessionIds: ReadonlySet<string>,
+		context: SessionCorrelationContext,
 	): string | undefined | Promise<string | undefined>;
 }
 

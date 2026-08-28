@@ -81,6 +81,21 @@ const FULL_ATTENTION_CAPABILITIES = {
 	"attention.failed": true,
 } as const;
 
+/**
+ * Hermes-native attention capabilities (issue #120 PR3). Only `failed` is
+ * natively and durably provable today (a session whose `end_reason` records a
+ * failure). `working`, `waiting_for_user` and `idle`/`turn_completed` are
+ * deliberately NOT advertised: Hermes does not persist an authoritative
+ * per-turn phase for them, and Agent Space refuses to invent `turn_completed`
+ * from terminal silence.
+ */
+const HERMES_ATTENTION_CAPABILITIES = {
+	"attention.working": false,
+	"attention.waitingForUser": false,
+	"attention.idle": false,
+	"attention.failed": true,
+} as const;
+
 export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	{
 		id: "claude",
@@ -137,13 +152,17 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 			resume: true,
 			sessionDiscovery: true,
 			sessionNaming: true,
-			attention: NO_ATTENTION_CAPABILITIES,
+			attention: HERMES_ATTENTION_CAPABILITIES,
 		},
 		// Keep the cwd supplied by Agent Space when resuming. Hermes otherwise
 		// restores the cwd recorded in the session, which may be another worktree.
 		resumeArgs: (sessionId) =>
 			sessionId ? ["--resume", sessionId, "--no-restore-cwd"] : [],
 		sessionAdapter: hermesDefaultAdapter,
+		getAttentionSignal: (sessionId) =>
+			hermesDefaultAdapter.getAttentionSignal?.(sessionId),
+		getAttentionSignalAsync: async (sessionId) =>
+			hermesDefaultAdapter.getAttentionSignal?.(sessionId),
 	},
 ];
 
@@ -508,11 +527,26 @@ export class CodingToolRegistry {
 		const envHermesHome = base.env?.HERMES_HOME;
 		const home = resolveHermesHome(profile, envHermesHome);
 		const adapter = getHermesAdapter(home, envHermesHome);
+		const provider = this.getProvider(base);
 		return {
 			...base,
 			provider: {
-				...this.getProvider(base),
+				...provider,
 				sessionAdapter: adapter,
+				// The profile-aware provider must advertise the same Hermes-native
+				// attention subset (failed only) and forward signals through the
+				// adapter that reads THIS profile's store, not the default one.
+				capabilities: {
+					...provider.capabilities,
+					attention: {
+						...provider.capabilities.attention,
+						...HERMES_ATTENTION_CAPABILITIES,
+					},
+				},
+				getAttentionSignal: (sessionId) =>
+					adapter.getAttentionSignal?.(sessionId),
+				getAttentionSignalAsync: async (sessionId) =>
+					adapter.getAttentionSignal?.(sessionId),
 				launchArgs: () => ["-p", profile],
 				resumeArgs: (sessionId) =>
 					sessionId

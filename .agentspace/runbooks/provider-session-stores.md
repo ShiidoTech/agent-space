@@ -107,6 +107,25 @@ Session-to-cwd mapping stored as JSON files in `$HERMES_HOME/terminal-sessions/`
 
 Timestamps are **seconds** (not milliseconds).
 
+**The breadcrumb filename IS the exact ownership proof (PR3 of #120).** Hermes
+derives it from the terminal the process runs in (`hermes_cli/terminal_breadcrumbs.py`
+`get_terminal_id()`): the tty device path of stdin/stdout (`/dev/pts/N` →
+`sanitize → "dev-pts-N"` → `tty-dev-pts-N`) when a tty exists, else the first
+multiplexer env var (`ZELLIJ_PANE_ID`, `TMUX_PANE`, ...). Agent Space launches
+each Hermes agent in its own dedicated tmux session and mirrors the SAME
+derivation by reading the pane's pty (`tmux display-message -p "#{pane_tty}"`)
+in `TmuxIntegration.getPaneTty`. `HermesSessionProvider.correlateOwnedSession`
+then reads `terminal-sessions/<that-id>` and returns its `session_id` — an
+exact, deterministic, per-terminal link. Fail-closed: it returns nothing when
+the pane has no readable tty, the breadcrumb is absent, the session is already
+owned (in the launch baseline / taken set), or the session is gone from the
+store. Sanitization lives in `sanitizeHermesTerminalPart` /
+`deriveHermesTerminalId` and is unit-tested to match Hermes exactly.
+
+The leaf `hasSession` first queries `state.db`; a readable database answers both
+`true` and `false` without a subprocess. The CLI is only a fallback when the DB
+is unreadable.
+
 ### Fallback
 
 `hermes sessions export --session-id <id> --format jsonl -` (async only on the

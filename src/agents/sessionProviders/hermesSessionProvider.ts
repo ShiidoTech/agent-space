@@ -4,9 +4,13 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import type { ProviderSessionAdapter } from "../providers/types";
+import type {
+	ProviderAttentionSignal,
+	ProviderSessionAdapter,
+} from "../providers/types";
+import { TmuxIntegration } from "../tmux";
 import { SqliteReadOnlyDb } from "./sqliteRead";
-import type { SessionInfo } from "./types";
+import type { SessionCorrelationContext, SessionInfo } from "./types";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,18 +20,57 @@ interface HermesBreadcrumb {
 	ts?: unknown;
 }
 
+/**
+ * Resolves the pty device path of an Agent Space tmux pane. Mirrors the
+ * terminal identity simply that Hermes computes inside the pane, so Agent Space
+ * can derive the exact `$HERMES_HOME/terminal-sessions/<terminal-id>` of its
+ * own agent's two panes. Injected so unit tests can substitute a fixed pane
+ * tty without talking to tmux.
+ */
+export interface HermesPaneTtyResolver {
+	getPaneTty?(sessionName: string): string | null;
+	getPaneTtyAsync?(sessionName: string): Promise<string | null>;
+}
+
+/**
+ * The env vars Hermes consults (in order) when it cannot derive a tty path —
+ * mirrored verbatim from `hermes_cli/terminal_breadcrumbs.py`.
+ */
+const HERMES_TERMINAL_ENV_VARS = [
+	"ZELLIJ_PANE_ID",
+	"TMUX_PANE",
+	"KITTY_WINDOW_ID",
+	"WEZTERM_PANE",
+	"TERM_SESSION_ID",
+	"WT_SESSION",
+] as const;
+
+/** Failure end-reasons Hermes natively records on a session row. */
+const HERMES_FAILURE_END_REASONS = new Set([
+	"error",
+	"failed",
+	"failure",
+	"crash",
+	"exception",
+	"tool_error",
+	"interrupted_by_error",
+]);
+
 /** Hermes records the owning session and cwd for every interactive terminal. */
 export class HermesSessionProvider implements ProviderSessionAdapter {
 	readonly toolId = "hermes";
 	private readonly home: string;
 	private readonly sqlite: SqliteReadOnlyDb;
+	private readonly paneTty: HermesPaneTtyResolver;
+	private sessionColumns: string[] | undefined;
 
-	constructor(hermesHome?: string) {
+	constructor(hermesHome?: string, paneTtyResolver?: HermesPaneTtyResolver) {
 		this.home =
 			hermesHome ??
 			process.env.HERMES_HOME ??
 			path.join(os.homedir(), ".hermes");
 		this.sqlite = new SqliteReadOnlyDb(path.join(this.home, "state.db"));
+		this.paneTty = paneTtyResolver ?? new TmuxIntegration();
 	}
 
 	private get breadcrumbDirectory(): string {
@@ -40,6 +83,9 @@ export class HermesSessionProvider implements ProviderSessionAdapter {
 			this.hasSessionAsync(sessionId),
 		readName: async (sessionId: string): Promise<string | null> =>
 			this.readNameAsync(sessionId),
+		correlateOwnedSession: async (
+			context: SessionCorrelationContext,
+		): Promise<string | undefined> => this.correlateOwnedSessionAsync(context),
 	};
 
 	scanSessions(): SessionInfo[] {
@@ -231,6 +277,172 @@ export class HermesSessionProvider implements ProviderSessionAdapter {
 		return result;
 	}
 
+	/**
+	 * Exact, deterministic Hermes ownership proof (issue #120 section A / PR3).
+	 *
+	 * Agent Space launches each Hermes agent inside its own dedicated tmux
+	 * session (`agent-space-<feature>-<agent>`). Hermes, in turn, drops one
+	 * per-terminal breadcrumb under `$HERMES_HOME/terminal-sessions/<terminal-id>`
+	 * keyed by the pane's tty device path (mirroring its own
+	 * `get_terminal_id()`). By reading this agent's own pane tty and deriving
+	 * the same terminal id, Agent Space proves exactly which Hermes session
+	 * belongs to this agent's pane — no newest-session, cwd, order or count
+	 * heuristic. It is fail-closed: without a readable pane tty, a matching
+	 * breadcrumb, or a session that still exists and is not already owned, it
+	 * returns `undefined` rather than adopting an ambiguous session.
+	 */
+	correlateOwnedSession(
+		context: SessionCorrelationContext,
+	): string | undefined {
+		const terminalId = this.resolveTerminalId(context.tmuxSession);
+		if (!terminalId) return undefined;
+		const crumb = this.readBreadcrumbFile(terminalId);
+		if (!crumb) return undefined;
+		const sessionId =
+			typeof crumb.session_id === "string" ? crumb.session_id : "";
+		if (!sessionId) return undefined;
+		// Already attributed to another agent (or in the pre-launch baseline) —
+		// never adopt it; ownership must be exclusive.
+		if (context.knownSessionIds.has(sessionId)) return undefined;
+		// The session must still exist in the Hermes store, or the breadcrumb is
+		// reporting a deleted parent.
+		if (!this.hasSession(sessionId)) return undefined;
+		return sessionId;
+	}
+
+	private async correlateOwnedSessionAsync(
+		context: SessionCorrelationContext,
+	): Promise<string | undefined> {
+		const terminalId = await this.resolveTerminalIdAsync(context.tmuxSession);
+		if (!terminalId) return undefined;
+		const crumb = this.readBreadcrumbFile(terminalId);
+		if (!crumb) return undefined;
+		const sessionId =
+			typeof crumb.session_id === "string" ? crumb.session_id : "";
+		if (!sessionId) return undefined;
+		if (context.knownSessionIds.has(sessionId)) return undefined;
+		// Async-only existence check so the background binder path never blocks
+		// the Extension Host on a subprocess (a readable store answers without
+		// spawning anything).
+		if (!(await this.hasSessionAsync(sessionId))) return undefined;
+		return sessionId;
+	}
+
+	/**
+	 * Hermes-native structured attention for the dimensions its durable store
+	 * records authoritatively. A session whose row shows a `ended_at` and a
+	 * failure `end_reason` is a real Hermes-terminating failure (never an
+	 * inference from terminal silence). For every other state
+	 * (`working`, `waiting_for_user`, `idle`/`turn_completed`) Hermes does not
+	 * persist an authoritative phase, so Agent Space deliberately reports
+	 * nothing (→ `unknown`/`unsupported`) instead of inventing one.
+	 */
+	getAttentionSignal(sessionId: string): ProviderAttentionSignal | undefined {
+		if (!isSafeSessionId(sessionId)) return undefined;
+		const { endedAt, endReason } = this.readSessionEnd(sessionId);
+		// A failure is only a Hermes-native fact when the session actually
+		// terminated (`ended_at`) with a failure `end_reason`. An active session
+		// (no end) is never reported as failed, and no other state is invented.
+		if (
+			endedAt != null &&
+			endReason &&
+			HERMES_FAILURE_END_REASONS.has(endReason)
+		) {
+			return {
+				status: "failed",
+				evidence: `Hermes session ended (${endReason})`,
+			};
+		}
+		return undefined;
+	}
+
+	async getAttentionSignalAsync(
+		sessionId: string,
+	): Promise<ProviderAttentionSignal | undefined> {
+		return this.getAttentionSignal(sessionId);
+	}
+
+	/**
+	 * Derive the Hermes terminal id for an Agent Space tmux session by reading
+	 * the pane's pty path. Within tmux the pane always owns a pty, so this
+	 * mirrors the tty-device branch of Hermes' `get_terminal_id()` exactly.
+	 *
+	 * Ownership proof must come EXCLUSIVELY from the pane identified by
+	 * `context.tmuxSession`. If that pane has no readable tty, return
+	 * `undefined` — never fall back to `process.env` (the Extension Host's own
+	 * terminal, which could be a *different* tmux/zellij pane with a valid but
+	 * unrelated Hermes session).
+	 */
+	private resolveTerminalId(tmuxSession?: string): string | undefined {
+		if (!tmuxSession) return undefined;
+		const tty = this.paneTty.getPaneTty?.(tmuxSession) ?? null;
+		if (!tty) return undefined;
+		return deriveHermesTerminalId(tty);
+	}
+
+	private async resolveTerminalIdAsync(
+		tmuxSession?: string,
+	): Promise<string | undefined> {
+		if (!tmuxSession) return undefined;
+		const tty =
+			(await this.paneTty.getPaneTtyAsync?.(tmuxSession)) ??
+			this.paneTty.getPaneTty?.(tmuxSession) ??
+			null;
+		if (!tty) return undefined;
+		return deriveHermesTerminalId(tty);
+	}
+
+	private readBreadcrumbFile(terminalId: string): HermesBreadcrumb | undefined {
+		try {
+			const raw = fs.readFileSync(
+				path.join(this.breadcrumbDirectory, terminalId),
+				"utf8",
+			);
+			const value = JSON.parse(raw) as HermesBreadcrumb;
+			return typeof value.session_id === "string" ? value : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Read `end_reason`/`ended_at` defensively: tolerant of older/minimal `sessions` schemas. */
+	private readSessionEnd(sessionId: string): {
+		endedAt: number | null;
+		endReason: string | null;
+	} {
+		const columns = this.sessionColumns ?? this.readSessionColumns();
+		this.sessionColumns = columns;
+		if (!columns.includes("end_reason"))
+			return { endedAt: null, endReason: null };
+		const rows = this.sqlite.querySync(
+			"SELECT ended_at, end_reason FROM sessions WHERE id = ?",
+			[sessionId],
+		);
+		const row = rows[0] as Record<string, unknown> | undefined;
+		const endReason =
+			typeof row?.end_reason === "string" && row.end_reason.trim()
+				? row.end_reason.trim().toLowerCase()
+				: null;
+		const endedAt =
+			typeof row?.ended_at === "number" && Number.isFinite(row.ended_at)
+				? row.ended_at
+				: null;
+		return { endedAt, endReason };
+	}
+
+	private readSessionColumns(): string[] {
+		try {
+			const rows = this.sqlite.querySync(
+				"PRAGMA table_info(sessions)",
+			) as Array<Record<string, unknown>>;
+			return rows
+				.map((row) => (typeof row.name === "string" ? row.name : ""))
+				.filter(Boolean);
+		} catch {
+			return [];
+		}
+	}
+
 	dispose(): void {
 		this.sqlite.dispose();
 	}
@@ -238,6 +450,45 @@ export class HermesSessionProvider implements ProviderSessionAdapter {
 
 function isSafeSessionId(sessionId: string): boolean {
 	return /^[a-zA-Z0-9_-]+$/u.test(sessionId);
+}
+
+/**
+ * Sanitize a tty/terminal path exactly as Hermes' `_sanitize()` in
+ * `hermes_cli/terminal_breadcrumbs.py`: strip whitespace, strip leading/trailing
+ * slashes, replace anything outside `[A-Za-z0-9._-]` with `-`, cap at 120 chars.
+ * Two Agent Space panes therefore produce two distinct, stable ids.
+ */
+export function sanitizeHermesTerminalPart(raw: string): string {
+	return raw
+		.trim()
+		.replace(/^[/]+|[/]+$/g, "")
+		.replace(/[^A-Za-z0-9._-]/g, "-")
+		.slice(0, 120);
+}
+
+/** The terminal id Hermes writes for a pane whose pty path is `ttyPath`. */
+export function deriveHermesTerminalId(ttyPath: string): string {
+	return `tty-${sanitizeHermesTerminalPart(ttyPath)}`;
+}
+
+/**
+ * The terminal id Hermes would use when it cannot read a tty, derived from the
+ * first multiplexer/emulator env var present (mirrors Hermes' fallback branch).
+ *
+ * Available as a helper for diagnostic/other uses ONLY. It MUST NOT be used as
+ * an Agent Space ownership proof: it reads the calling process's environment
+ * (potentially the Extension Host's own terminal), not the pane identified by
+ * an agent's `context.tmuxSession`. `correlateOwnedSession` deliberately never
+ * calls it (see {@link HermesSessionProvider.resolveTerminalId}).
+ */
+export function deriveHermesTerminalIdFromEnv(): string | undefined {
+	for (const varName of HERMES_TERMINAL_ENV_VARS) {
+		const value = process.env[varName];
+		if (value) {
+			return `${varName.toLowerCase()}-${sanitizeHermesTerminalPart(value)}`;
+		}
+	}
+	return undefined;
 }
 
 /**
