@@ -31,9 +31,12 @@ The adapter consumes only thread-scoped structured messages:
   error;
 - `error` → provider `failed`.
 
-These observations enter the existing provider-neutral resolver and PR2
-transition detector. The provider does not maintain a second state machine or
-persist `finished`; PR2 owns `turn_completed` and the review receipt.
+These observations are parsed for a future path where Agent Space directly
+controls the app-server turn stream. They are not advertised as native-TUI
+attention today: the TUI is a separate process, and the decisive smoke did not
+prove cross-process delivery. The provider does not maintain a second state
+machine or persist `finished`; PR2 owns `turn_completed` and the review receipt
+when a proven event source is enabled.
 
 If the app-server exits, pending requests fail and live app-server observations
 are cleared. The next exact `thread/resume` lazily starts a fresh connection.
@@ -45,6 +48,9 @@ source.
 
 On 2026-08-28, local `codex-cli 0.150.1` was queried with a real stdio
 connection. `initialize` returned successfully, `thread/start` returned a
-UUIDv7 `thread.id`, and `thread/started` carried the same id. No model turn was
-started, so working/approval/completion/failure were validated with the fake
-transport contract tests rather than claimed as a live model smoke.
+UUIDv7 `thread.id`, and `thread/started` carried the same id. The decisive
+cross-process smoke launched `codex resume <thread.id>` in a separate TUI and
+sent a prompt, but the TUI received HTTP 401 from
+`wss://api.openai.com/v1/responses`; no external `turn/started` or
+`turn/completed` was observed. Native Codex attention is consequently
+unsupported, not inferred from this incomplete smoke.

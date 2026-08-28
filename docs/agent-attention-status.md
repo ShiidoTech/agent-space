@@ -52,8 +52,11 @@ A generic permission prompt is not guessed from terminal text. If Claude does no
 ### Codex
 
 For PR4, the primary source is the controlled `codex app-server --stdio`
-connection, keyed by the persisted exact thread id. Rollout JSONL remains a
-diagnostic fallback and never establishes ownership.
+connection, keyed by the persisted exact thread id. The native TUI is a
+separate process, and the cross-process smoke did not prove that this external
+server receives its live events. Codex attention is therefore advertised as
+`unsupported` for now. Rollout JSONL remains a diagnostic fallback and never
+establishes ownership.
 
 Strong signals include:
 

@@ -86,8 +86,9 @@ Add unit tests for:
 
 Document any provider behavior that was observed but not implemented. Hermes
 session binding and resume use its terminal breadcrumbs; attention remains
-unsupported. Claude and Codex currently provide structured turn
-boundaries for working/waiting/failed attention states.
+unsupported. Codex's app-server event shapes are parsed, but Codex attention
+must remain unsupported until a real cross-process TUI event path is proven or
+Agent Space directly controls turns through app-server.
 
 ## Project Curation
 

@@ -638,8 +638,12 @@ export class CodexSessionProvider
 				observedAt,
 			};
 		} else if (event.method === "turn/completed") {
-			const turn = params.turn as { status?: { type?: unknown } } | undefined;
-			const status = turn?.status?.type;
+			const turn = params.turn as { status?: unknown } | undefined;
+			const rawStatus = turn?.status;
+			const status =
+				typeof rawStatus === "string"
+					? rawStatus
+					: (rawStatus as { type?: unknown } | undefined)?.type;
 			signal =
 				status === "failed" || status === "error"
 					? {

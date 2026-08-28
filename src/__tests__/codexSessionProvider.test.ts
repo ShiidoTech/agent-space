@@ -165,6 +165,27 @@ describe("CodexSessionProvider", () => {
 			expect(provider.readAttention("thread-a")?.status).toBe("idle");
 		});
 
+		it("classifies Codex 0.150.1 string turn statuses correctly", () => {
+			const fake = appServerFake([]);
+			const provider = new CodexSessionProvider(
+				tmpDir,
+				sessionIndexPath,
+				fake.transport,
+			);
+			fake.emit({
+				method: "turn/started",
+				params: { threadId: "thread-failed" },
+			});
+			fake.emit({
+				method: "turn/completed",
+				params: {
+					threadId: "thread-failed",
+					turn: { status: "failed" },
+				},
+			});
+			expect(provider.readAttention("thread-failed")?.status).toBe("failed");
+		});
+
 		it("resumes only the persisted thread id", async () => {
 			const fake = appServerFake([]);
 			const provider = new CodexSessionProvider(

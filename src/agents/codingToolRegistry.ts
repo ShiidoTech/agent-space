@@ -113,7 +113,8 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	{
 		id: "codex",
 		conversationIdentity: { ownership: "provider_assigned" },
-		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
+		// Cross-process delivery from the native TUI is not proven yet.
+		capabilities: fullSessionCapabilities(NO_ATTENTION_CAPABILITIES),
 		getAttentionSignal: (sessionId) =>
 			codexSessionAdapter.readAttention(sessionId),
 		getAttentionSignalAsync: async (sessionId) =>
@@ -287,9 +288,10 @@ function providerForTool(
 			resume: Boolean(sessionFamily),
 			sessionDiscovery: sessionCapable,
 			sessionNaming: sessionCapable,
-			attention: sessionCapable
-				? FULL_ATTENTION_CAPABILITIES
-				: NO_ATTENTION_CAPABILITIES,
+			attention:
+				sessionCapable && family !== "codex"
+					? FULL_ATTENTION_CAPABILITIES
+					: NO_ATTENTION_CAPABILITIES,
 		},
 		launchArgs,
 		resumeArgs,
