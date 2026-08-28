@@ -191,6 +191,24 @@ export interface Agent {
 	attentionStatus?: AgentAttentionStatus;
 	/** Human-readable evidence summary for tooltips/debugging; never provider payload text. */
 	attentionReason?: string;
+	/**
+	 * Provenance of `attentionStatus`: `"provider"` means structured provider
+	 * evidence, `"tmux"` means an inference from process/pane liveness alone.
+	 * Not persisted, recomputed alongside `attentionStatus`. Exists so
+	 * consumers can require provider-native evidence for high-stakes
+	 * transitions (e.g. a completed turn) instead of treating a clean tmux
+	 * exit as proof a turn finished.
+	 */
+	attentionSource?: "lifecycle" | "tmux" | "provider" | "fallback";
+	/**
+	 * Opaque, Agent-Space-issued receipt for a completed turn the user has
+	 * not yet reviewed. Persisted (survives restarts) and cleared only when
+	 * the user opens/focuses this exact agent. Distinct from
+	 * `attentionStatus` (recomputed transient evidence) and from Feature
+	 * delivery readiness ("Ready to finish"): this is per-agent, per-turn
+	 * review-inbox state.
+	 */
+	pendingReviewId?: string;
 	hasStarted?: boolean;
 	lastError?: string;
 	lastExitCode?: number | null;

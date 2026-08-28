@@ -2143,6 +2143,7 @@ export class HomePanel {
 					state: agent.sessionBinding?.state ?? "pending",
 					detail: agent.sessionBinding?.detail,
 				},
+				review: { pending: Boolean(agent.pendingReviewId) },
 			},
 		);
 		const presented = card.primaryState;

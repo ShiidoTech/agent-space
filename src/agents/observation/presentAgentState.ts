@@ -8,7 +8,7 @@ import type { AgentObservation, PresentedAgentState } from "./types";
 export function presentAgentState(
 	observation: AgentObservation,
 ): PresentedAgentState {
-	const { lifecycle, attention } = observation;
+	const { lifecycle, attention, review } = observation;
 
 	if (lifecycle.state === "errored") {
 		return {
@@ -39,6 +39,13 @@ export function presentAgentState(
 			return { label: "Working", tone: "working", detail: attention.reason };
 		case "idle":
 			if (lifecycle.state === "running") {
+				if (review.pending) {
+					return {
+						label: "Ready for review",
+						tone: "review",
+						detail: attention.reason ?? "Finished a turn — not yet reviewed",
+					};
+				}
 				return { label: "Idle", tone: "normal", detail: attention.reason };
 			}
 			break;

@@ -167,6 +167,54 @@ describe("ProjectManager", () => {
 		});
 	});
 
+	describe("findContextByFeatureIdFast", () => {
+		it("resolves base:<projectId> without touching featureManager.getFeature", () => {
+			const project = manager.addProject(tmpDir);
+			const ctx = manager.findContextByFeatureIdFast(`base:${project.id}`);
+			// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+			const getFeatureSpy = vi.spyOn(ctx!.featureManager, "getFeature");
+
+			expect(ctx?.project.id).toBe(project.id);
+			expect(getFeatureSpy).not.toHaveBeenCalled();
+		});
+
+		it("returns undefined for an unknown feature id, without a Git-reconciling call", () => {
+			const project = manager.addProject(tmpDir);
+			const getFeatureSpy = vi.spyOn(
+				// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+				manager.getContext(project.id)!.featureManager,
+				"getFeature",
+			);
+
+			expect(
+				manager.findContextByFeatureIdFast("no-such-feature"),
+			).toBeUndefined();
+			expect(getFeatureSpy).not.toHaveBeenCalled();
+		});
+
+		it("resolves a real feature via the cached list, never via the Git-reconciling getFeature", () => {
+			const project = manager.addProject(tmpDir);
+			const ctx = manager.getContext(project.id);
+			// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+			const feature = ctx!.featureManager.createFeatureRecord(
+				"Fast Lookup",
+				"shared",
+			);
+			// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+			const getFeatureSpy = vi.spyOn(ctx!.featureManager, "getFeature");
+
+			const resolved = manager.findContextByFeatureIdFast(feature.id);
+
+			expect(resolved?.project.id).toBe(project.id);
+			expect(getFeatureSpy).not.toHaveBeenCalled();
+
+			// Second lookup reuses the now-populated reverse index and still
+			// never calls the Git-reconciling accessor.
+			manager.findContextByFeatureIdFast(feature.id);
+			expect(getFeatureSpy).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("resolveFeature", () => {
 		it("resolves base:<projectId> to a base feature", () => {
 			const project = manager.addProject(tmpDir);

@@ -39,6 +39,7 @@ describe("AgentFocusService (behavioral contract)", () => {
 
 	function buildService(
 		controller?: Record<string, unknown> | null,
+		acknowledgeReview?: (featureId: string, agentId: string) => void,
 	): AgentFocusService {
 		return new AgentFocusService({
 			getTerminalController: () =>
@@ -47,6 +48,7 @@ describe("AgentFocusService (behavioral contract)", () => {
 					: (controller ??
 						({ getTerminal, focusOrCreateTerminalAsync } as never))) as never,
 			resolveFeature: resolveFeature as never,
+			acknowledgeReview,
 		});
 	}
 
@@ -211,6 +213,43 @@ describe("AgentFocusService (behavioral contract)", () => {
 		// reconciliation is ever started for an unknown feature/agent.
 		expect(focusOrCreateTerminalAsync).not.toHaveBeenCalled();
 		expect(states).toEqual([]);
+	});
+
+	it("acknowledges the review receipt on the warm path", () => {
+		getTerminal.mockReturnValue({ show: vi.fn() });
+		const acknowledgeReview = vi.fn();
+
+		buildService(undefined, acknowledgeReview).requestFocus("f1", "a1");
+
+		expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1");
+	});
+
+	it("acknowledges the review receipt on the cold path", async () => {
+		getTerminal.mockReturnValue(undefined);
+		const acknowledgeReview = vi.fn();
+
+		buildService(undefined, acknowledgeReview).requestFocus("f1", "a1");
+
+		expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1");
+	});
+
+	it("isolates a throwing acknowledgeReview dep from focus itself", () => {
+		getTerminal.mockReturnValue({ show: vi.fn() });
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const acknowledgeReview = vi.fn(() => {
+			throw new Error("store boom");
+		});
+		const states: string[] = [];
+
+		expect(() =>
+			buildService(undefined, acknowledgeReview).requestFocus(
+				"f1",
+				"a1",
+				track(states),
+			),
+		).not.toThrow();
+
+		expect(states).toEqual(["focused"]);
 	});
 
 	it("missing terminal controller is a silent no-op", () => {

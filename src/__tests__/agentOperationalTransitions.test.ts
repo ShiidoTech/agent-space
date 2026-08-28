@@ -96,21 +96,53 @@ describe("AgentOperationalTransitionDetector", () => {
 		expect(detector.scan([agent("a1", "working")])).toEqual([]);
 	});
 
-	it("emits turn_completed only on a working -> idle edge, never spamming an already-idle agent", () => {
+	it("emits turn_completed only on a working -> provider-sourced idle edge, never spamming an already-idle agent", () => {
 		const detector = new AgentOperationalTransitionDetector();
 
 		// Idle without ever having been seen working: no completion invented.
-		expect(detector.scan([agent("a1", "idle")])).toEqual([]);
+		expect(
+			detector.scan([agent("a1", "idle", { attentionSource: "provider" })]),
+		).toEqual([]);
 		// Still idle on the next tick: nothing.
-		expect(detector.scan([agent("a1", "idle")])).toEqual([]);
+		expect(
+			detector.scan([agent("a1", "idle", { attentionSource: "provider" })]),
+		).toEqual([]);
 
 		detector.scan([agent("a1", "working")]);
-		const transitions = detector.scan([agent("a1", "idle")]);
+		const transitions = detector.scan([
+			agent("a1", "idle", { attentionSource: "provider" }),
+		]);
 		expect(transitions).toHaveLength(1);
 		expect(transitions[0]?.kind).toBe("turn_completed");
 
 		// Repeated idle polls in the same episode: no duplicate.
-		expect(detector.scan([agent("a1", "idle")])).toEqual([]);
+		expect(
+			detector.scan([agent("a1", "idle", { attentionSource: "provider" })]),
+		).toEqual([]);
+	});
+
+	// PR #122 review, blocker 2: a clean tmux pane exit also resolves to
+	// `attentionStatus: "idle"` (AgentAttentionResolver, source "tmux"), but
+	// that is not provider-native proof a turn actually completed. Issue
+	// #120's own rule: no notification invented from terminal silence.
+	it("never emits turn_completed for an idle reading sourced from tmux liveness instead of provider evidence", () => {
+		const detector = new AgentOperationalTransitionDetector();
+		detector.scan([agent("a1", "working", { attentionSource: "provider" })]);
+
+		const transitions = detector.scan([
+			agent("a1", "idle", { attentionSource: "tmux" }),
+		]);
+
+		expect(transitions).toEqual([]);
+	});
+
+	it("never emits turn_completed for an idle reading with no source at all", () => {
+		const detector = new AgentOperationalTransitionDetector();
+		detector.scan([agent("a1", "working", { attentionSource: "provider" })]);
+
+		const transitions = detector.scan([agent("a1", "idle")]);
+
+		expect(transitions).toEqual([]);
 	});
 
 	it("never emits turn_completed for a working agent settling into lifecycle done", () => {

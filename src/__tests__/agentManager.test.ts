@@ -348,6 +348,50 @@ describe("AgentManager", () => {
 		});
 	});
 
+	describe("recordTurnCompleted / acknowledgeReview", () => {
+		it("opens a review receipt that survives a reload and clears it on acknowledgement", () => {
+			const agent = manager.createAgent(feature);
+
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			expect(manager.getAgents("f1")[0]).toMatchObject({
+				pendingReviewId: "review-1",
+			});
+
+			// Persisted, not just in-memory: a fresh manager reading the same
+			// store still sees it.
+			const reloaded = new AgentManager(
+				store,
+				tmpDir,
+				path.join(tmpDir, ".worktrees"),
+				tmux as never,
+				undefined,
+				new CodingToolRegistry(),
+			);
+			expect(reloaded.getAgents("f1")[0]).toMatchObject({
+				pendingReviewId: "review-1",
+			});
+
+			manager.acknowledgeReview(agent.id, "f1");
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBeUndefined();
+		});
+
+		it("overwrites an unacknowledged receipt with the latest completion", () => {
+			const agent = manager.createAgent(feature);
+
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			manager.recordTurnCompleted(agent.id, "f1", "review-2");
+
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBe("review-2");
+		});
+
+		it("acknowledging with nothing pending is a silent no-op", () => {
+			const agent = manager.createAgent(feature);
+
+			expect(() => manager.acknowledgeReview(agent.id, "f1")).not.toThrow();
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBeUndefined();
+		});
+	});
+
 	describe("deleteAgent", () => {
 		it("removes agent", () => {
 			const agent = manager.createAgent(feature);

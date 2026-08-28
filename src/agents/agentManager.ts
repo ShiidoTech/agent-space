@@ -89,6 +89,7 @@ export class AgentManager {
 					...agent,
 					attentionStatus: attention.status,
 					attentionReason: attention.reason,
+					attentionSource: attention.source,
 				};
 			}),
 		);
@@ -306,6 +307,39 @@ export class AgentManager {
 			}
 			agent.startup.state = "failed";
 		}
+		this.saveAgents(featureId, agents);
+	}
+
+	/**
+	 * Open a review-inbox entry for one completed turn: persists an opaque
+	 * receipt (`pendingReviewId`) until {@link acknowledgeReview} clears it.
+	 * Idempotent per call — a later completion always overwrites an earlier
+	 * unacknowledged one, since only the most recent completion matters.
+	 */
+	recordTurnCompleted(
+		agentId: string,
+		featureId: string,
+		reviewId: string,
+	): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((a) => a.id === agentId);
+		if (!agent) return;
+		agent.pendingReviewId = reviewId;
+		this.saveAgents(featureId, agents);
+	}
+
+	/**
+	 * Clear a pending review receipt, if any. Called when the user opens or
+	 * focuses this exact agent — never on a mere status poll — so "Ready for
+	 * review" reflects turns the user has genuinely not yet looked at.
+	 * Silent no-op when there is nothing to acknowledge, matching
+	 * `AgentFocusService`'s no-op-on-unknown semantics.
+	 */
+	acknowledgeReview(agentId: string, featureId: string): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((a) => a.id === agentId);
+		if (!agent?.pendingReviewId) return;
+		agent.pendingReviewId = undefined;
 		this.saveAgents(featureId, agents);
 	}
 
@@ -534,6 +568,7 @@ export class AgentManager {
 			...agent,
 			attentionStatus: attention.status,
 			attentionReason: attention.reason,
+			attentionSource: attention.source,
 		};
 	}
 

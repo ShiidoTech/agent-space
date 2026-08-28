@@ -3,6 +3,7 @@ import {
 	type AttentionCollectableContext,
 	collectWatchedAgents,
 } from "../agents/attention/agentAttentionCollector";
+import { AgentOperationalTransitionDetector } from "../agents/attention/agentOperationalTransitions";
 import type { Agent, Feature } from "../types";
 
 describe("collectWatchedAgents (non-blocking contract)", () => {
@@ -107,5 +108,75 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 
 		expect(watched).toHaveLength(1);
 		expect(watched[0]?.featureId).toBe("f1");
+	});
+
+	// PR #122 review, blocker 1: AgentManager.recordAgentFailure() sets
+	// lifecycle status "errored". A single-agent Feature must not be
+	// dropped by the pre-filter the instant that happens, or the `failed`
+	// operational transition (and its notification) can never be observed.
+	it("still probes a feature whose only agent just recorded a lifecycle failure", async () => {
+		const erroredAgent: Agent = {
+			...runningAgent,
+			id: "a3",
+			status: "errored",
+			lastError: "Agent crashed",
+		};
+		const ctx = buildContext({ f1: [erroredAgent] });
+
+		const watched = await collectWatchedAgents([ctx]);
+
+		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith("f1");
+		expect(watched).toHaveLength(1);
+		expect(watched[0]?.id).toBe("a3");
+	});
+
+	it("still skips a feature whose agents are all definitively quiescent (stopped/done)", async () => {
+		const stoppedAgent: Agent = {
+			...runningAgent,
+			id: "a4",
+			status: "stopped",
+		};
+		const doneAgent: Agent = { ...runningAgent, id: "a5", status: "done" };
+		const ctx = buildContext({ f1: [stoppedAgent, doneAgent] });
+
+		const watched = await collectWatchedAgents([ctx]);
+
+		expect(ctx.agentManager.getAgentsAsync).not.toHaveBeenCalled();
+		expect(watched).toEqual([]);
+	});
+
+	it("end-to-end: a single agent going errored produces exactly one failed transition", async () => {
+		const detector = new AgentOperationalTransitionDetector();
+		const runningCtx = buildContext({ f1: [runningAgent] });
+
+		// First tick: agent is running/working — no failure yet.
+		let transitions = detector.scan(await collectWatchedAgents([runningCtx]));
+		expect(transitions.some((t) => t.kind === "failed")).toBe(false);
+
+		// The agent crashes: lifecycle flips to "errored" (as
+		// AgentManager.recordAgentFailure would persist), and the async
+		// probe now reports attentionStatus "failed" from the lifecycle
+		// short-circuit in AgentAttentionResolver.
+		const erroredCtx = buildContext({
+			f1: [{ ...runningAgent, status: "errored", lastError: "Agent crashed" }],
+		});
+		(
+			erroredCtx.agentManager.getAgentsAsync as ReturnType<typeof vi.fn>
+		).mockImplementation(async () => [
+			{
+				...runningAgent,
+				attentionStatus: "failed",
+				attentionReason: "Agent lifecycle recorded a failure",
+				attentionSource: "lifecycle",
+			},
+		]);
+
+		transitions = detector.scan(await collectWatchedAgents([erroredCtx]));
+		expect(transitions).toHaveLength(1);
+		expect(transitions[0]).toMatchObject({ kind: "failed", agentId: "a1" });
+
+		// Repeated polls in the same episode: no duplicate.
+		transitions = detector.scan(await collectWatchedAgents([erroredCtx]));
+		expect(transitions.filter((t) => t.kind === "failed")).toEqual([]);
 	});
 });

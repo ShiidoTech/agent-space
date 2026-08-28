@@ -10,6 +10,7 @@ function observation(
 		lifecycle: { state: "running", source: "tmux" },
 		attention: { state: "working" },
 		session: { state: "bound", sessionId: "session-1" },
+		review: { pending: false },
 		...overrides,
 	};
 }

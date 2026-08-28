@@ -253,6 +253,48 @@ export class ProjectManager {
 		return persisted ?? this.tmux.sessionName(featureId, agentId);
 	}
 
+	/**
+	 * Same lookup as {@link findContextByFeatureId}, but never calls
+	 * `featureManager.getFeature()` — which reconciles branch links with a
+	 * synchronous Git exec. Existence is checked against
+	 * `listFeaturesCached()` instead (in-memory, no exec), so this is safe
+	 * to call from both a hot, latency-sensitive path (e.g. every
+	 * agent-focus click) and a background poll tick (e.g. every attention
+	 * scan) without ever blocking the Extension Host on Git. `getContext()`
+	 * may still lazily construct a project's managers on first touch (cheap,
+	 * in-memory), same as the non-fast lookup.
+	 */
+	findContextByFeatureIdFast(featureId: string): ProjectContext | undefined {
+		if (featureId.startsWith("base:")) {
+			return this.getContext(featureId.slice("base:".length));
+		}
+
+		const projectId = this.featureToProject.get(featureId);
+		if (projectId) {
+			const ctx = this.getContext(projectId);
+			if (
+				ctx?.featureManager
+					.listFeaturesCached()
+					.some((feature) => feature.id === featureId)
+			) {
+				return ctx;
+			}
+			this.featureToProject.delete(featureId);
+		}
+
+		for (const ctx of this.getAllContexts()) {
+			if (
+				ctx.featureManager
+					.listFeaturesCached()
+					.some((feature) => feature.id === featureId)
+			) {
+				this.featureToProject.set(featureId, ctx.project.id);
+				return ctx;
+			}
+		}
+		return undefined;
+	}
+
 	findContextByFeatureId(featureId: string): ProjectContext | undefined {
 		if (featureId.startsWith("base:")) {
 			const projectId = featureId.slice("base:".length);

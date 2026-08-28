@@ -51,6 +51,13 @@ export interface AgentFocusObserver {
 export interface AgentFocusDeps {
 	getTerminalController(): TerminalController | undefined;
 	resolveFeature: ProjectManager["resolveFeature"];
+	/**
+	 * Best-effort receipt-acknowledgement hook: clears a pending "ready for
+	 * review" receipt for this exact agent. Must stay cheap and
+	 * non-blocking (in-memory lookup only, no Git exec) — it runs on every
+	 * focus request, including the warm path's zero-exec guarantee (G1).
+	 */
+	acknowledgeReview?(featureId: string, agentId: string): void;
 }
 
 /** Unified agent-listing policy: prefer the non-probing read model. */
@@ -73,6 +80,16 @@ export class AgentFocusService {
 	): void {
 		const terminalController = this.deps.getTerminalController();
 		if (!terminalController || !featureId) return;
+
+		// Opening/focusing this exact agent is the acknowledgement signal for
+		// its "ready for review" receipt (issue #120 section B/PR2). Runs on
+		// every request, warm or cold, so it must be cheap and non-blocking —
+		// isolated so a misbehaving dep can never break focus itself.
+		try {
+			this.deps.acknowledgeReview?.(featureId, agentId);
+		} catch (error) {
+			console.warn(`[AgentSpace] review acknowledgement failed: ${error}`);
+		}
 
 		// G1 — strict fast path FIRST, before any feature/agent resolution:
 		// resolving a feature can run synchronous git execs on the Extension

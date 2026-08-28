@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import * as crypto from "node:crypto";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { AgentFocusService } from "./agents/agentFocusService";
@@ -226,6 +227,11 @@ export async function activate(
 	const agentFocusService = new AgentFocusService({
 		getTerminalController: () => terminalController,
 		resolveFeature: (featureId) => projectManager.resolveFeature(featureId),
+		acknowledgeReview: (featureId, agentId) => {
+			projectManager
+				.findContextByFeatureIdFast(featureId)
+				?.agentManager.acknowledgeReview(agentId, featureId);
+		},
 	});
 
 	const sidebarProvider = new FeatureSidebarProvider(
@@ -623,7 +629,18 @@ export async function activate(
 	const attentionMonitor = new AgentAttentionMonitor(
 		{
 			collect: () => collectWatchedAgents(projectManager.getAllContexts()),
-			onTransition: (transition) => notifyOperationalTransition(transition),
+			onTransition: (transition) => {
+				if (transition.kind === "turn_completed" && transition.featureId) {
+					projectManager
+						.findContextByFeatureIdFast(transition.featureId)
+						?.agentManager.recordTurnCompleted(
+							transition.agentId,
+							transition.featureId,
+							crypto.randomUUID(),
+						);
+				}
+				notifyOperationalTransition(transition);
+			},
 			onError: (error) => {
 				console.warn(`[AgentSpace] attention scan failed: ${error}`);
 			},

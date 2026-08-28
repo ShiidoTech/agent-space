@@ -64,6 +64,7 @@ function observation(session: AgentObservation["session"]): AgentObservation {
 		lifecycle: { state: "running", source: "tmux" },
 		attention: { state: "unknown", reason: "No attributable session" },
 		session,
+		review: { pending: false },
 	};
 }
 

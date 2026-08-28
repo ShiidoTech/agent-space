@@ -5,6 +5,11 @@ export interface AttentionWatchedAgent {
 	readonly featureName?: string;
 	readonly attentionStatus?: string;
 	readonly attentionReason?: string;
+	/**
+	 * Provenance of `attentionStatus`: `"provider"` is structured provider
+	 * evidence; `"tmux"` is inferred from process/pane liveness alone.
+	 */
+	readonly attentionSource?: string;
 }
 
 export type AgentOperationalTransitionKind =
@@ -55,7 +60,7 @@ export class AgentOperationalTransitionDetector {
 			const current = agent.attentionStatus;
 			nextStatus.set(agent.id, current);
 
-			const kind = transitionKind(previous, current);
+			const kind = transitionKind(previous, current, agent.attentionSource);
 			if (!kind) continue;
 			transitions.push({
 				kind,
@@ -75,6 +80,7 @@ export class AgentOperationalTransitionDetector {
 function transitionKind(
 	previous: string | undefined,
 	current: string | undefined,
+	currentSource: string | undefined,
 ): AgentOperationalTransitionKind | undefined {
 	switch (current) {
 		case "waiting_for_user":
@@ -83,9 +89,16 @@ function transitionKind(
 			return previous !== "failed" ? "failed" : undefined;
 		// A completed turn is distinguishable from Agent Space lifecycle
 		// `done` (issue #120, section D): only a working -> idle edge counts,
-		// never idle/unknown/unsupported settling into "done".
+		// never idle/unknown/unsupported settling into "done". It must also
+		// be provider-native evidence, never inferred from terminal silence
+		// (issue #120's own rule): a clean tmux pane exit also resolves to
+		// `idle`, but that's a runtime observation, not proof a turn
+		// finished — only an `idle` reading sourced from structured provider
+		// evidence counts.
 		case "idle":
-			return previous === "working" ? "turn_completed" : undefined;
+			return previous === "working" && currentSource === "provider"
+				? "turn_completed"
+				: undefined;
 		case "working":
 			return previous !== "working" ? "working_started" : undefined;
 		default:
