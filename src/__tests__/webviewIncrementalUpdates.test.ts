@@ -27,6 +27,8 @@ import {
 import { createFeatureChangeFlusher } from "../features/featureChangeRouting";
 import { FeatureSidebarProvider } from "../features/featureSidebarProvider";
 import type { FeatureSnapshot } from "../features/featureSnapshot";
+import { known } from "../git/featureGitObservations";
+import { resolvePullRequest } from "../github/pullRequest";
 import { HomePanel } from "../home/homePanel";
 import type { Feature } from "../types";
 
@@ -52,10 +54,12 @@ const agent = {
 };
 
 function buildSnapshot(): FeatureSnapshot {
-	// `sendGitStatsAsync` (the incremental Home patch path) only reads
-	// `runtime.agents` and `git.featureDiff`; the full-rebuild render path
-	// (`getFeatureHtml`) is stubbed in the tests below, so this snapshot is
-	// intentionally not a complete `FeatureSnapshot` fixture.
+	// `sendRuntimeUpdateAsync` (the incremental Home patch path) reads
+	// `runtime.agents`, `git.featureDiff`, and now also feeds
+	// `presentFeatureCockpit`; the full-rebuild render path (`getFeatureHtml`)
+	// is stubbed in the tests below, so this snapshot is intentionally not a
+	// complete `FeatureSnapshot` fixture — see `buildFullSnapshot` further
+	// down for the fixture used by the runtime-projection contract test.
 	return {
 		feature,
 		attention: [],
@@ -64,6 +68,98 @@ function buildSnapshot(): FeatureSnapshot {
 			services: { status: "known", value: [] },
 		},
 		git: { featureDiff: { status: "unknown" } },
+	} as unknown as FeatureSnapshot;
+}
+
+/**
+ * A complete `FeatureSnapshot`, valid input for `presentFeatureCockpit` —
+ * unlike `buildSnapshot()` above, which only ever fed the pre-#120-review
+ * `agentAttentionUpdate`/`gitStatsUpdate` path. Used by the runtime-patch
+ * contract test below, which needs the cockpit headline/primary action to
+ * actually change between two attention states.
+ */
+function buildFullSnapshot(
+	overrides: Partial<FeatureSnapshot> = {},
+): FeatureSnapshot {
+	const featureRef = { ref: "feat/one", sha: "2".repeat(40) };
+	const baseRef = { ref: "main", sha: "3".repeat(40) };
+	return {
+		projectId: "p1",
+		feature,
+		source: { status: "known" },
+		git: {
+			repository: known({ root: "/repo" }),
+			worktree: known({ path: feature.worktreePath, present: true }),
+			branch: known({
+				expected: "feat/one",
+				actual: "feat/one",
+				detached: false,
+				matchesExpected: true,
+			}),
+			head: known(featureRef),
+			feature: known(featureRef),
+			base: known(baseRef),
+			creationPoint: known({ ref: "1".repeat(40), sha: "1".repeat(40) }),
+			creationPointInFeature: known({
+				ancestor: { ref: "1".repeat(40), sha: "1".repeat(40) },
+				descendant: featureRef,
+				isAncestor: true,
+			}),
+			upstream: known({ branchRef: "feat/one", upstream: null }),
+			upstreamDivergence: known(null),
+			featureDelta: known({
+				left: baseRef,
+				right: featureRef,
+				leftOnly: 0,
+				rightOnly: 1,
+			}),
+			featureDiff: known({
+				base: baseRef,
+				feature: featureRef,
+				files: [],
+				filesChanged: 0,
+				insertions: 0,
+				deletions: 0,
+				raw: "",
+			}),
+			workingTree: known({
+				staged: [],
+				unstaged: [],
+				untracked: [],
+				conflicted: [],
+			}),
+			worktrees: known([]),
+			featureInBase: known({
+				ancestor: featureRef,
+				descendant: baseRef,
+				isAncestor: false,
+			}),
+		},
+		github: {
+			provider: "github",
+			status: "known",
+			pulls: [],
+			resolution: resolvePullRequest([], featureRef.sha, "main"),
+			repository: { status: "unknown" },
+			queriedHeadSha: featureRef.sha,
+			expectedBaseRef: "main",
+			observedAt: "2026-08-28T00:00:00.000Z",
+		},
+		integration: {
+			status: "known",
+			outcome: "not_integrated",
+			evidence: { feature: featureRef, base: baseRef },
+		},
+		runtime: {
+			agents: {
+				status: "known",
+				value: [{ agent, tmuxAlive: { status: "unknown" } }],
+			},
+			services: { status: "known", value: [] },
+		},
+		attention: [],
+		observedAt: "2026-08-28T00:00:00.000Z",
+		...overrides,
 	} as unknown as FeatureSnapshot;
 }
 
@@ -103,15 +199,19 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 		return { provider, getHtmlAssignments: () => htmlAssignments };
 	}
 
-	function buildHomePanelBase(featureId: string | undefined) {
+	function buildHomePanelBase(
+		featureId: string | undefined,
+		snapshotFn: () => FeatureSnapshot = () => buildSnapshot(),
+	) {
 		const receiveMessage = vi.fn();
+		const postMessage = vi.fn();
 		const webviewPanel = {
 			visible: false,
 			title: "",
 			webview: {
 				onDidReceiveMessage: receiveMessage,
 				asWebviewUri: vi.fn(() => ({})),
-				postMessage: vi.fn(),
+				postMessage,
 				set html(_value: string) {
 					htmlAssignments += 1;
 				},
@@ -121,7 +221,7 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 			reveal: vi.fn(),
 		};
 		let htmlAssignments = 0;
-		const getSnapshot = vi.fn(() => buildSnapshot());
+		const getSnapshot = vi.fn(snapshotFn);
 		// @ts-expect-error HomePanel's constructor is private; test drives the
 		// panel directly, matching the existing homePanel.test.ts pattern.
 		const panel = new HomePanel(
@@ -158,7 +258,10 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 				isFeatureStale: vi.fn(() => false),
 				isProjectStale: vi.fn(() => false),
 			} as never,
-			{} as never,
+			{
+				sessionName: vi.fn(() => "session"),
+				capturePane: vi.fn(() => ""),
+			} as never,
 			{ resolveAgentTool: vi.fn(() => ({ name: "Claude" })) } as never,
 			{} as never,
 			{} as never,
@@ -175,11 +278,14 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 		vi.spyOn(panel as any, "getFeatureHtml").mockReturnValue("<html></html>");
 		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
 		vi.spyOn(panel as any, "getWelcomeHtml").mockReturnValue("<html></html>");
-		return { panel, getHtmlAssignments: () => htmlAssignments };
+		return { panel, getHtmlAssignments: () => htmlAssignments, postMessage };
 	}
 
-	function buildHomeFeaturePanel(featureId = "f1") {
-		const built = buildHomePanelBase(featureId);
+	function buildHomeFeaturePanel(
+		featureId = "f1",
+		snapshotFn?: () => FeatureSnapshot,
+	) {
+		const built = buildHomePanelBase(featureId, snapshotFn);
 		HomePanel["featurePanels"].set(featureId, built.panel);
 		return built;
 	}
@@ -299,5 +405,55 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 		// once, and f1's unrelated panel is never touched by that fallback.
 		expect(instanceHtml()).toBe(instanceBefore + 1);
 		expect(getWebviewRebuildCounts()).toEqual({ sidebar: 0, home: 1 });
+	});
+
+	// PR #121 third review: a runtime-kind change previously only patched the
+	// agent card + Git stats, so the Feature page's cockpit headline/primary
+	// action/runtime label (all derived from `snapshot.attention`, which
+	// `commitRuntime()` recomputes) could keep showing stale state — e.g. an
+	// agent going `waiting_for_user` updated the sidebar/agent card badge but
+	// left the page's headline on the old "In progress" banner until the next
+	// full rebuild. This proves the runtime patch now also refreshes the
+	// cockpit/services/diagnostics containers, without ever assigning
+	// `webview.html`.
+	it("a working -> waiting_for_user runtime transition patches the Feature page's cockpit headline/primary action, not just the agent card, with zero webview.html assignments", async () => {
+		let currentSnapshot = buildFullSnapshot({ attention: [] });
+		const { panel, getHtmlAssignments, postMessage } = buildHomeFeaturePanel(
+			"f1",
+			() => currentSnapshot,
+		);
+		const before = getHtmlAssignments();
+
+		panel.refreshLiveState();
+		await Promise.resolve();
+		postMessage.mockClear();
+
+		currentSnapshot = buildFullSnapshot({
+			attention: [
+				{
+					code: "agent_waiting_for_user",
+					severity: "warning",
+					summary: "Agent needs you",
+					detail: "Waiting for input",
+					evidence: { agentId: agent.id },
+				},
+			],
+		});
+		panel.refreshLiveState();
+		await Promise.resolve();
+
+		expect(getHtmlAssignments()).toBe(before);
+		expect(getWebviewRebuildCounts().home).toBe(0);
+
+		const runtimeUpdate = postMessage.mock.calls
+			.map(([message]) => message)
+			.find((message) => message.type === "featureRuntimeUpdate");
+		expect(runtimeUpdate).toBeDefined();
+		expect(runtimeUpdate.cockpitHtml).toContain("Needs you");
+
+		const attentionUpdate = postMessage.mock.calls
+			.map(([message]) => message)
+			.find((message) => message.type === "agentAttentionUpdate");
+		expect(attentionUpdate).toBeDefined();
 	});
 });

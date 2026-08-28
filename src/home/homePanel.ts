@@ -246,7 +246,7 @@ export class HomePanel {
 			? `Agent Space: ${resolved.feature.branch}`
 			: "Agent Space";
 		this.panel.reveal(vscode.ViewColumn.One, true);
-		this.sendGitStatsAsync().catch(() => {});
+		this.sendRuntimeUpdateAsync().catch(() => {});
 		this.panel.webview.html = this.getFeatureHtml(featureId);
 		agentSpaceDiagnostic(
 			`focus feature:${featureId} local-render ${Date.now() - startedAt}ms`,
@@ -319,14 +319,16 @@ export class HomePanel {
 	}
 
 	/**
-	 * Patch live agent state (name/session title/attention/lifecycle) for an
+	 * Patch live agent state (name/session title/attention/lifecycle) and
+	 * every runtime-derived Feature projection (cockpit headline/primary
+	 * action/runtime label/alerts, services, tmux diagnostics) for an
 	 * already-open Feature panel without replacing the webview document.
 	 * Only safe for state that never adds/removes a card — callers must know
 	 * the affected agents/services already exist in this panel's DOM.
 	 */
 	public refreshLiveState(): void {
 		if (!this.currentFeatureId) return;
-		this.sendGitStatsAsync().catch(() => {});
+		this.sendRuntimeUpdateAsync().catch(() => {});
 	}
 
 	/**
@@ -802,8 +804,20 @@ export class HomePanel {
 		}
 	}
 
-	// -- Git stats + attention ------------------------------------
-	private async sendGitStatsAsync(): Promise<void> {
+	// -- Runtime-derived Feature projections -----------------------
+	/**
+	 * Re-render and patch every Feature-page projection that depends only on
+	 * runtime evidence (agent/service liveness) and the `attention` it
+	 * drives — cockpit headline/primary action/runtime label/alerts, the
+	 * services section, and tmux diagnostics — plus the agent cards and Git
+	 * stats block. Never assigns `webview.html`: issue #120 review flagged
+	 * that a `"runtime"`-kind change previously only patched the agent card
+	 * and Git stats, leaving the cockpit headline/primary action stale (e.g.
+	 * an agent going `waiting_for_user` updated the sidebar/agent card but
+	 * not the Feature page's "Needs you" banner) until the next full
+	 * rebuild — a cross-surface semantic divergence #120 requires eliminated.
+	 */
+	private async sendRuntimeUpdateAsync(): Promise<void> {
 		if (!this.currentFeatureId) return;
 		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
 		const snapshot = this.featureStateCoordinator.getSnapshot(
@@ -823,11 +837,30 @@ export class HomePanel {
 		});
 
 		const stats = this.snapshotGitStats(snapshot);
-		if (!stats) return;
+		if (stats) {
+			this.panel.webview.postMessage({
+				type: "gitStatsUpdate",
+				html: this.renderGitStatsContent(stats),
+			});
+		}
 
+		const cockpit = presentFeatureCockpit(
+			snapshot,
+			this.featureStateCoordinator.getProjectReferenceHealth(
+				snapshot.projectId,
+			),
+		);
+		const servicesKnown = snapshot.runtime.services.status === "known";
 		this.panel.webview.postMessage({
-			type: "gitStatsUpdate",
-			html: this.renderGitStatsContent(stats),
+			type: "featureRuntimeUpdate",
+			cockpitHtml: this.renderFeatureCockpit(cockpit, snapshot),
+			servicesHtml: servicesKnown
+				? this.renderServicesSection(
+						this.snapshotServices(snapshot),
+						snapshot.feature as Feature,
+					)
+				: undefined,
+			diagnosticsHtml: this.renderFeatureDiagnostics(snapshot),
 		});
 	}
 
@@ -1355,7 +1388,7 @@ export class HomePanel {
 						feature,
 						ctx.featureManager?.isProvisioningActive?.(feature.id) ?? false,
 					)}
-				${this.renderFeatureCockpit(cockpit, snapshot)}
+				<div id="feature-cockpit-container">${this.renderFeatureCockpit(cockpit, snapshot)}</div>
 				${runtimeNotice}
 			${
 				agentsKnown
@@ -1369,8 +1402,8 @@ export class HomePanel {
 						)
 					: ""
 			}
-			${servicesKnown ? this.renderServicesSection(services, feature) : ""}
-			${this.renderFeatureDiagnostics(snapshot)}
+			<div id="feature-services-container">${servicesKnown ? this.renderServicesSection(services, feature) : ""}</div>
+			<div id="feature-diagnostics-container">${this.renderFeatureDiagnostics(snapshot)}</div>
 			${this.renderQuickActions(
 				feature,
 				ctx.featureManager.getBootstrapCommands().length > 0,

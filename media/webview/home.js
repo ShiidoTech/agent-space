@@ -399,6 +399,29 @@ window.addEventListener("message", (event) => {
 			if (statsEl) statsEl.innerHTML = message.html;
 			break;
 		}
+		case "featureRuntimeUpdate": {
+			// Patches every Feature-page projection derived from runtime
+			// evidence (cockpit headline/primary action/runtime label/alerts,
+			// services, tmux diagnostics) without a full document reload —
+			// issue #120 (cross-surface staleness after a runtime-only change).
+			const cockpitEl = document.getElementById("feature-cockpit-container");
+			if (cockpitEl && typeof message.cockpitHtml === "string") {
+				cockpitEl.innerHTML = message.cockpitHtml;
+			}
+			if (typeof message.servicesHtml === "string") {
+				const servicesEl = document.getElementById(
+					"feature-services-container",
+				);
+				if (servicesEl) servicesEl.innerHTML = message.servicesHtml;
+			}
+			const diagnosticsEl = document.getElementById(
+				"feature-diagnostics-container",
+			);
+			if (diagnosticsEl && typeof message.diagnosticsHtml === "string") {
+				diagnosticsEl.innerHTML = message.diagnosticsHtml;
+			}
+			break;
+		}
 	}
 });
 
