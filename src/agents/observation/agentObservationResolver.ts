@@ -41,6 +41,9 @@ export class AgentObservationResolver {
 				sessionId: agent.sessionId ?? undefined,
 				detail: agent.sessionBinding?.detail,
 			},
+			review: {
+				pending: Boolean(agent.pendingReviewId),
+			},
 		};
 	}
 

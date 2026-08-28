@@ -200,6 +200,25 @@ export class ProjectManager {
 			return;
 		}
 
+		// projects/{id}/features/{fid}/review-inbox.json → live patch, never a
+		// full rebuild: this file can never add/remove an agent (issue #120
+		// PR2 review round 2, blocker 2), so a self-write from this window's
+		// own AgentFocusService.acknowledgeReview, or a genuine write from a
+		// sibling window, is always safely structural: false. No agent-cache
+		// invalidation needed: `AgentManager` re-reads the review inbox from
+		// disk on every call, uncached.
+		if (
+			parts.length === 5 &&
+			parts[0] === "projects" &&
+			parts[2] === "features" &&
+			parts[4] === "review-inbox.json"
+		) {
+			const projectId = parts[1];
+			const featureId = parts[3];
+			this.notifyChange({ projectId, featureId, structural: false });
+			return;
+		}
+
 		// projects/{id}/features/{fid}/services.json → invalidate service cache
 		if (
 			parts.length === 5 &&
@@ -251,6 +270,68 @@ export class ProjectManager {
 		persisted?: string,
 	): string {
 		return persisted ?? this.tmux.sessionName(featureId, agentId);
+	}
+
+	/**
+	 * Same lookup as {@link findContextByFeatureId}, but never calls
+	 * `featureManager.getFeature()` — which reconciles branch links with a
+	 * synchronous Git exec. Existence is checked against
+	 * `listFeaturesCached()` instead (in-memory, no exec), so this is safe
+	 * to call from both a hot, latency-sensitive path (e.g. every
+	 * agent-focus click) and a background poll tick (e.g. every attention
+	 * scan) without ever blocking the Extension Host on Git. `getContext()`
+	 * may still lazily construct a project's managers on first touch (cheap,
+	 * in-memory), same as the non-fast lookup.
+	 */
+	findContextByFeatureIdFast(featureId: string): ProjectContext | undefined {
+		if (featureId.startsWith("base:")) {
+			return this.getContext(featureId.slice("base:".length));
+		}
+
+		const projectId = this.featureToProject.get(featureId);
+		if (projectId) {
+			const ctx = this.getContext(projectId);
+			if (
+				ctx?.featureManager
+					.listFeaturesCached()
+					.some((feature) => feature.id === featureId)
+			) {
+				return ctx;
+			}
+			this.featureToProject.delete(featureId);
+		}
+
+		for (const ctx of this.getAllContexts()) {
+			if (
+				ctx.featureManager
+					.listFeaturesCached()
+					.some((feature) => feature.id === featureId)
+			) {
+				this.featureToProject.set(featureId, ctx.project.id);
+				return ctx;
+			}
+		}
+		return undefined;
+	}
+
+	/**
+	 * Strictly cache-only lookup: returns a context only if it — and, for a
+	 * regular feature, its project mapping — are already warm in memory.
+	 * Unlike {@link findContextByFeatureIdFast}, this NEVER reads
+	 * `projects.json`, never calls `getProjects()`/`getAllContexts()`, and
+	 * never constructs a context: a cold cache returns `undefined` rather
+	 * than falling back to any of that. Fail-closed by design — callers on
+	 * a genuinely hot path (e.g. a peek that must stay zero-I/O, see
+	 * `AgentFocusService`'s G1) are expected to treat `undefined` as "skip,
+	 * don't resolve" rather than as an error (issue #120 PR2, review
+	 * round 4).
+	 */
+	peekWarmContext(featureId: string): ProjectContext | undefined {
+		if (featureId.startsWith("base:")) {
+			return this.contexts.get(featureId.slice("base:".length));
+		}
+		const projectId = this.featureToProject.get(featureId);
+		return projectId ? this.contexts.get(projectId) : undefined;
 	}
 
 	findContextByFeatureId(featureId: string): ProjectContext | undefined {

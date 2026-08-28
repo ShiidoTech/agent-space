@@ -697,6 +697,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					state: a.sessionBinding?.state ?? "pending",
 					detail: a.sessionBinding?.detail,
 				},
+				review: { pending: Boolean(a.pendingReviewId) },
 			};
 			const card = presentAgentCard(observation);
 			const presented = card.primaryState;
@@ -741,6 +742,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 							lifecycle: { state: a.status, source: "agentspace" },
 							attention: { state: "unknown" },
 							session: { state: "pending" },
+							review: { pending: Boolean(a.pendingReviewId) },
 						},
 					).primaryState;
 					return `

@@ -10,6 +10,7 @@ function observation(
 		lifecycle: { state: "running", source: "agentspace" },
 		attention: { state: "unsupported" },
 		session: { state: "unsupported" },
+		review: { pending: false },
 		...overrides,
 	};
 }
@@ -95,5 +96,97 @@ describe("Agent observation contract", () => {
 				presentAgentState(observation({ attention: { state: attention } })),
 			).toMatchObject({ tone });
 		}
+	});
+
+	describe("review-inbox state (issue #120, PR2 blocker 3)", () => {
+		it("shows Ready for review instead of Idle when a completed turn is unacknowledged", () => {
+			expect(
+				presentAgentState(
+					observation({
+						attention: { state: "idle" },
+						review: { pending: true },
+					}),
+				),
+			).toMatchObject({ label: "Ready for review", tone: "review" });
+		});
+
+		it("shows plain Idle once the review receipt is acknowledged", () => {
+			expect(
+				presentAgentState(
+					observation({
+						attention: { state: "idle" },
+						review: { pending: false },
+					}),
+				),
+			).toMatchObject({ label: "Idle", tone: "normal" });
+		});
+
+		it("never lets a pending review mask Needs you or Failed", () => {
+			expect(
+				presentAgentState(
+					observation({
+						attention: { state: "waiting_for_user" },
+						review: { pending: true },
+					}),
+				),
+			).toMatchObject({ label: "Needs you", tone: "warning" });
+
+			expect(
+				presentAgentState(
+					observation({
+						attention: { state: "failed" },
+						review: { pending: true },
+					}),
+				),
+			).toMatchObject({ label: "Failed", tone: "error" });
+		});
+
+		// PR2 review round 2, blocker 3: the receipt is independent of the
+		// current runtime attention reading — it must outrank Working and
+		// Unknown/Unsupported too, not just plain Idle, since it stays true
+		// until the user actually opens the agent regardless of what the
+		// provider reports in the meantime.
+		it("outranks Working: an autonomous next turn does not hide an unacknowledged completion", () => {
+			expect(
+				presentAgentState(
+					observation({
+						attention: { state: "working" },
+						review: { pending: true },
+					}),
+				),
+			).toMatchObject({ label: "Ready for review", tone: "review" });
+		});
+
+		it("outranks Unknown/Unsupported: a quiet provider does not hide an unacknowledged completion", () => {
+			expect(
+				presentAgentState(
+					observation({
+						attention: { state: "unknown" },
+						review: { pending: true },
+					}),
+				),
+			).toMatchObject({ label: "Ready for review", tone: "review" });
+
+			expect(
+				presentAgentState(
+					observation({
+						attention: { state: "unsupported" },
+						review: { pending: true },
+					}),
+				),
+			).toMatchObject({ label: "Ready for review", tone: "review" });
+		});
+
+		it("does not apply once the agent has left the running lifecycle", () => {
+			expect(
+				presentAgentState(
+					observation({
+						lifecycle: { state: "stopped", source: "agentspace" },
+						attention: { state: "idle" },
+						review: { pending: true },
+					}),
+				),
+			).toMatchObject({ label: "Stopped", tone: "muted" });
+		});
 	});
 });

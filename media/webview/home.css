@@ -1399,6 +1399,9 @@ body[data-severity-filter="info"] .problem-row:not([data-severity="info"]) {
 .agent-primary-state.primary-state-error {
 	color: var(--vscode-errorForeground);
 }
+.agent-primary-state.primary-state-review {
+	color: var(--vscode-charts-purple, var(--vscode-textLink-foreground));
+}
 .agent-metadata {
 	display: flex;
 	align-items: center;

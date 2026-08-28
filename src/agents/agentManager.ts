@@ -27,6 +27,15 @@ export interface AgentWorktreeRemovalResult {
 
 export class AgentManager {
 	private agentsByFeature = new Map<string, Agent[]>();
+	/**
+	 * Last-known review-inbox snapshot per feature, refreshed on every read
+	 * or mutation of the review inbox. Backs {@link peekPendingReviewId}: a
+	 * cheap, synchronous, in-memory-only lookup (never a disk read) so
+	 * `AgentFocusService` can capture exactly which receipt a click is about
+	 * to acknowledge without violating its warm path's zero-I/O guarantee
+	 * (issue #120 PR2, review round 3).
+	 */
+	private lastKnownReviewInbox = new Map<string, Record<string, string>>();
 	private cachedDefaultBranch: string | undefined;
 	private invalidateTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly attentionResolver: AgentAttentionResolver;
@@ -70,8 +79,9 @@ export class AgentManager {
 	}
 
 	getAgents(featureId: string): Agent[] {
+		const pending = this.loadReviewInbox(featureId);
 		return this.loadAgents(featureId).map((agent) =>
-			this.withAttentionStatus(agent),
+			this.withPendingReview(this.withAttentionStatus(agent), pending),
 		);
 	}
 
@@ -82,14 +92,19 @@ export class AgentManager {
 	 */
 	async getAgentsAsync(featureId: string): Promise<Agent[]> {
 		const agents = this.loadAgents(featureId);
+		const pending = this.loadReviewInbox(featureId);
 		return Promise.all(
 			agents.map(async (agent) => {
 				const attention = await this.attentionResolver.resolveAsync(agent);
-				return {
-					...agent,
-					attentionStatus: attention.status,
-					attentionReason: attention.reason,
-				};
+				return this.withPendingReview(
+					{
+						...agent,
+						attentionStatus: attention.status,
+						attentionReason: attention.reason,
+						attentionSource: attention.source,
+					},
+					pending,
+				);
 			}),
 		);
 	}
@@ -100,7 +115,10 @@ export class AgentManager {
 	 * and must never block the Extension Host or replace the last-known model.
 	 */
 	getAgentsReadModel(featureId: string): Agent[] {
-		return this.store.loadAgents(featureId).map((agent) => ({ ...agent }));
+		const pending = this.loadReviewInbox(featureId);
+		return this.store
+			.loadAgents(featureId)
+			.map((agent) => this.withPendingReview({ ...agent }, pending));
 	}
 
 	/** Persist startup restore state without populating the normalized cache. */
@@ -116,7 +134,20 @@ export class AgentManager {
 
 	getAgent(featureId: string, agentId: string): Agent | undefined {
 		const agent = this.loadAgents(featureId).find((a) => a.id === agentId);
-		return agent ? this.withAttentionStatus(agent) : undefined;
+		if (!agent) return undefined;
+		const pending = this.loadReviewInbox(featureId);
+		return this.withPendingReview(this.withAttentionStatus(agent), pending);
+	}
+
+	/**
+	 * Cheap, synchronous, in-memory-only peek at the review receipt last
+	 * seen for this agent — never a disk read. Backs
+	 * `AgentFocusDeps.peekPendingReviewId`: `AgentFocusService` calls this
+	 * at click time to capture exactly which receipt a focus request is
+	 * about to acknowledge (issue #120 PR2, review round 3).
+	 */
+	peekPendingReviewId(featureId: string, agentId: string): string | undefined {
+		return this.lastKnownReviewInbox.get(featureId)?.[agentId];
 	}
 
 	getObservation(featureId: string, agentId: string) {
@@ -309,6 +340,59 @@ export class AgentManager {
 		this.saveAgents(featureId, agents);
 	}
 
+	/**
+	 * Open a review-inbox entry for one completed turn: persists an opaque
+	 * receipt (`pendingReviewId`) until {@link acknowledgeReview} clears it.
+	 * Idempotent per call — a later completion always overwrites an earlier
+	 * unacknowledged one, since only the most recent completion matters.
+	 */
+	recordTurnCompleted(
+		agentId: string,
+		featureId: string,
+		reviewId: string,
+	): void {
+		if (!this.loadAgents(featureId).some((a) => a.id === agentId)) return;
+		const pending = this.loadReviewInbox(featureId);
+		pending[agentId] = reviewId;
+		this.saveReviewInbox(featureId, pending);
+	}
+
+	/**
+	 * Unconditionally clear a pending review receipt, if any, regardless of
+	 * which completion it points to. For agent lifecycle transitions where
+	 * the receipt stops making sense outright (closed/deleted agent) — never
+	 * for a focus/review action, which must use
+	 * {@link acknowledgeReviewIfMatches} so a race can't swallow a newer
+	 * receipt. Silent no-op when there is nothing to acknowledge.
+	 */
+	acknowledgeReview(agentId: string, featureId: string): void {
+		const pending = this.loadReviewInbox(featureId);
+		if (!(agentId in pending)) return;
+		delete pending[agentId];
+		this.saveReviewInbox(featureId, pending);
+	}
+
+	/**
+	 * Compare-and-clear acknowledgement: clears the receipt only if it still
+	 * equals `expectedReviewId`. Used by `AgentFocusService` — its
+	 * `expectedReviewId` is a snapshot captured synchronously at click time
+	 * (via {@link peekPendingReviewId}), so a newer completion that races in
+	 * after the click but before the deferred acknowledgement runs is left
+	 * untouched instead of being silently marked reviewed (issue #120 PR2,
+	 * review round 3). Silent no-op when the receipt no longer matches or is
+	 * already gone.
+	 */
+	acknowledgeReviewIfMatches(
+		agentId: string,
+		featureId: string,
+		expectedReviewId: string,
+	): void {
+		const pending = this.loadReviewInbox(featureId);
+		if (pending[agentId] !== expectedReviewId) return;
+		delete pending[agentId];
+		this.saveReviewInbox(featureId, pending);
+	}
+
 	updateAgentSessionId(
 		agentId: string,
 		featureId: string,
@@ -382,6 +466,11 @@ export class AgentManager {
 		delete agent.lastError;
 		delete agent.lastExitCode;
 		this.saveAgents(featureId, agents);
+		// A closed agent takes no further turns, so any unacknowledged
+		// receipt can never be reviewed by opening it again; clear it here
+		// rather than let it resurface as "Ready for review" if the agent
+		// is later reopened.
+		this.acknowledgeReview(agentId, featureId);
 	}
 
 	/**
@@ -499,14 +588,22 @@ export class AgentManager {
 			featureId,
 			agents.filter((a) => a.id !== agentId),
 		);
+		this.acknowledgeReview(agentId, featureId);
 	}
 
 	deleteAllAgents(featureId: string): void {
-		const remaining = this.loadAgents(featureId).filter((agent) => {
+		const before = this.loadAgents(featureId);
+		const remaining = before.filter((agent) => {
 			if (!agent.worktreePath) return false;
 			return !this.removeWorktree(agent.worktreePath).removed;
 		});
 		this.saveAgents(featureId, remaining);
+		const stillPresent = new Set(remaining.map((a) => a.id));
+		for (const agent of before) {
+			if (!stillPresent.has(agent.id)) {
+				this.acknowledgeReview(agent.id, featureId);
+			}
+		}
 	}
 
 	/** Remove only the agent worktree; keep its record until Feature cleanup succeeds. */
@@ -534,7 +631,39 @@ export class AgentManager {
 			...agent,
 			attentionStatus: attention.status,
 			attentionReason: attention.reason,
+			attentionSource: attention.source,
 		};
+	}
+
+	/**
+	 * Merge a review-inbox receipt onto a read-path copy of an agent. The
+	 * receipt lives in its own file (see `Store.loadReviewInbox`), never in
+	 * `agents.json`, so this merge happens only here — never inside
+	 * `loadAgents()`/`saveAgents()`, which stay the single source of truth
+	 * for what actually gets written to `agents.json`.
+	 */
+	private withPendingReview(
+		agent: Agent,
+		pending: Record<string, string>,
+	): Agent {
+		const reviewId = pending[agent.id];
+		return reviewId ? { ...agent, pendingReviewId: reviewId } : agent;
+	}
+
+	/** Reads the review inbox from disk and refreshes the in-memory snapshot backing {@link peekPendingReviewId}. */
+	private loadReviewInbox(featureId: string): Record<string, string> {
+		const pending = this.store.loadReviewInbox(featureId);
+		this.lastKnownReviewInbox.set(featureId, pending);
+		return pending;
+	}
+
+	/** Persists the review inbox and refreshes the in-memory snapshot backing {@link peekPendingReviewId}. */
+	private saveReviewInbox(
+		featureId: string,
+		pending: Record<string, string>,
+	): void {
+		this.store.saveReviewInbox(featureId, pending);
+		this.lastKnownReviewInbox.set(featureId, pending);
 	}
 
 	private loadAgents(featureId: string): Agent[] {

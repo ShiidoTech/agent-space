@@ -294,7 +294,11 @@ button {
 }
 
 .status-normal {
-	background-color: color-mix(in srgb, var(--vscode-charts-blue) 16%, transparent);
+	background-color: color-mix(
+		in srgb,
+		var(--vscode-charts-blue) 16%,
+		transparent
+	);
 	color: var(--vscode-charts-blue);
 }
 
@@ -304,12 +308,20 @@ button {
 }
 
 .status-warning {
-	background-color: color-mix(in srgb, var(--vscode-notificationsWarningIcon-foreground) 16%, transparent);
+	background-color: color-mix(
+		in srgb,
+		var(--vscode-notificationsWarningIcon-foreground) 16%,
+		transparent
+	);
 	color: var(--vscode-notificationsWarningIcon-foreground);
 }
 
 .status-error {
-	background-color: color-mix(in srgb, var(--vscode-errorForeground) 16%, transparent);
+	background-color: color-mix(
+		in srgb,
+		var(--vscode-errorForeground) 16%,
+		transparent
+	);
 	color: var(--vscode-errorForeground);
 }
 
@@ -509,6 +521,16 @@ button {
 .status-dot.done {
 	background-color: var(--vscode-disabledForeground);
 	opacity: 0.5;
+}
+
+/* Ready-for-review receipt (issue #120 PR2): mirrors .agent-primary-state
+   .primary-state-review in home.css so the same tone reads consistently
+   across both surfaces. */
+.status-dot.primary-state-review {
+	background-color: var(
+		--vscode-charts-purple,
+		var(--vscode-textLink-foreground)
+	);
 }
 
 @keyframes pulse-green {

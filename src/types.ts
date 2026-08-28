@@ -191,6 +191,31 @@ export interface Agent {
 	attentionStatus?: AgentAttentionStatus;
 	/** Human-readable evidence summary for tooltips/debugging; never provider payload text. */
 	attentionReason?: string;
+	/**
+	 * Provenance of `attentionStatus`: `"provider"` means structured provider
+	 * evidence, `"tmux"` means an inference from process/pane liveness alone.
+	 * Not persisted, recomputed alongside `attentionStatus`. Exists so
+	 * consumers can require provider-native evidence for high-stakes
+	 * transitions (e.g. a completed turn) instead of treating a clean tmux
+	 * exit as proof a turn finished.
+	 */
+	attentionSource?: "lifecycle" | "tmux" | "provider" | "fallback";
+	/**
+	 * Opaque, Agent-Space-issued receipt for a completed turn the user has
+	 * not yet reviewed. Persisted (survives restarts) and cleared only when
+	 * the user opens/focuses this exact agent. Distinct from
+	 * `attentionStatus` (recomputed transient evidence) and from Feature
+	 * delivery readiness ("Ready to finish"): this is per-agent, per-turn
+	 * review-inbox state.
+	 *
+	 * Not stored inline in `agents.json`: kept in a dedicated
+	 * `review-inbox.json` (see {@link FeatureReviewInbox}) and merged onto
+	 * this field only in `AgentManager`'s read methods. A separate file
+	 * means every review-inbox write is by construction never structural
+	 * (it can never add/remove an agent), so cross-window sync can always
+	 * route it as a live patch instead of a full rebuild.
+	 */
+	pendingReviewId?: string;
 	hasStarted?: boolean;
 	lastError?: string;
 	lastExitCode?: number | null;
@@ -233,6 +258,15 @@ export interface CompanionState {
 
 export interface FeatureAgents {
 	agents: Agent[];
+}
+
+/**
+ * Per-feature review-inbox receipts, keyed by agent id. Deliberately its own
+ * file (not part of `FeatureAgents`/`agents.json`): see
+ * {@link Agent.pendingReviewId}.
+ */
+export interface FeatureReviewInbox {
+	pending: Record<string, string>;
 }
 
 export interface Project {

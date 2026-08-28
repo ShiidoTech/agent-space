@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentFocusObserver } from "../agents/agentFocusService";
 import { AgentFocusService } from "../agents/agentFocusService";
 import type { Agent, Feature } from "../types";
@@ -39,6 +39,17 @@ describe("AgentFocusService (behavioral contract)", () => {
 
 	function buildService(
 		controller?: Record<string, unknown> | null,
+		reviewDeps?: {
+			peekPendingReviewId?: (
+				featureId: string,
+				agentId: string,
+			) => string | undefined;
+			acknowledgeReview?: (
+				featureId: string,
+				agentId: string,
+				expectedReviewId: string,
+			) => void;
+		},
 	): AgentFocusService {
 		return new AgentFocusService({
 			getTerminalController: () =>
@@ -47,6 +58,8 @@ describe("AgentFocusService (behavioral contract)", () => {
 					: (controller ??
 						({ getTerminal, focusOrCreateTerminalAsync } as never))) as never,
 			resolveFeature: resolveFeature as never,
+			peekPendingReviewId: reviewDeps?.peekPendingReviewId,
+			acknowledgeReview: reviewDeps?.acknowledgeReview,
 		});
 	}
 
@@ -211,6 +224,166 @@ describe("AgentFocusService (behavioral contract)", () => {
 		// reconciliation is ever started for an unknown feature/agent.
 		expect(focusOrCreateTerminalAsync).not.toHaveBeenCalled();
 		expect(states).toEqual([]);
+	});
+
+	describe("review receipt acknowledgement (PR2 review round 2, blocker 1)", () => {
+		beforeEach(() => {
+			vi.useFakeTimers();
+		});
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("warm path: focuses synchronously and defers acknowledgement off the click stack (G1)", () => {
+			getTerminal.mockReturnValue({ show: vi.fn() });
+			const peekPendingReviewId = vi.fn(() => "review-1");
+			const acknowledgeReview = vi.fn();
+			const states: string[] = [];
+
+			buildService(undefined, {
+				peekPendingReviewId,
+				acknowledgeReview,
+			}).requestFocus("f1", "a1", track(states));
+
+			// The reveal itself is fully synchronous — no acknowledgement
+			// side effect has run yet on this same call stack.
+			expect(states).toEqual(["focused"]);
+			expect(acknowledgeReview).not.toHaveBeenCalled();
+
+			vi.runAllTimers();
+
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1", "review-1");
+		});
+
+		it("warm path: no receipt pending (peek returns undefined) never schedules an acknowledgement", () => {
+			getTerminal.mockReturnValue({ show: vi.fn() });
+			const peekPendingReviewId = vi.fn(() => undefined);
+			const acknowledgeReview = vi.fn();
+
+			buildService(undefined, {
+				peekPendingReviewId,
+				acknowledgeReview,
+			}).requestFocus("f1", "a1");
+
+			vi.runAllTimers();
+
+			expect(acknowledgeReview).not.toHaveBeenCalled();
+		});
+
+		it("cold path success: acknowledges only after reconciliation actually reveals a terminal", async () => {
+			getTerminal.mockReturnValue(undefined);
+			const peekPendingReviewId = vi.fn(() => "review-1");
+			const acknowledgeReview = vi.fn();
+
+			buildService(undefined, {
+				peekPendingReviewId,
+				acknowledgeReview,
+			}).requestFocus("f1", "a1");
+
+			expect(acknowledgeReview).not.toHaveBeenCalled();
+
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1", "review-1");
+		});
+
+		it("cold path failure: a reconciliation that never reveals a terminal never acknowledges the receipt", async () => {
+			getTerminal.mockReturnValue(undefined);
+			focusOrCreateTerminalAsync.mockResolvedValue(undefined);
+			const peekPendingReviewId = vi.fn(() => "review-1");
+			const acknowledgeReview = vi.fn();
+
+			buildService(undefined, {
+				peekPendingReviewId,
+				acknowledgeReview,
+			}).requestFocus("f1", "a1");
+
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(acknowledgeReview).not.toHaveBeenCalled();
+		});
+
+		it("cold path: a superseded reconciliation never acknowledges the receipt", async () => {
+			getTerminal.mockImplementation((id: string) =>
+				id === "a2" ? { show: vi.fn() } : undefined,
+			);
+			let resolveA!: (terminal: unknown) => void;
+			focusOrCreateTerminalAsync.mockReturnValue(
+				new Promise((resolve) => {
+					resolveA = resolve;
+				}),
+			);
+			const peekPendingReviewId = vi.fn(
+				(_featureId: string, agentId: string) =>
+					agentId === "a1" ? "review-a1" : "review-a2",
+			);
+			const acknowledgeReview = vi.fn();
+
+			const service = buildService(undefined, {
+				peekPendingReviewId,
+				acknowledgeReview,
+			});
+			service.requestFocus("f1", "a1");
+			service.requestFocus("f1", "a2");
+
+			resolveA({ show: vi.fn() });
+			await vi.advanceTimersByTimeAsync(0);
+
+			// Only the winning warm request (a2) acknowledges; the superseded
+			// cold request (a1) never does, even though its promise settled
+			// with a terminal.
+			expect(acknowledgeReview).toHaveBeenCalledTimes(1);
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a2", "review-a2");
+		});
+
+		it("isolates a throwing acknowledgeReview dep from focus itself", () => {
+			getTerminal.mockReturnValue({ show: vi.fn() });
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+			const peekPendingReviewId = vi.fn(() => "review-1");
+			const acknowledgeReview = vi.fn(() => {
+				throw new Error("store boom");
+			});
+			const states: string[] = [];
+
+			expect(() =>
+				buildService(undefined, {
+					peekPendingReviewId,
+					acknowledgeReview,
+				}).requestFocus("f1", "a1", track(states)),
+			).not.toThrow();
+			expect(states).toEqual(["focused"]);
+
+			expect(() => vi.runAllTimers()).not.toThrow();
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1", "review-1");
+		});
+
+		// PR2 review round 3: the ack must apply to the receipt the user was
+		// actually shown at click time, not whatever happens to be pending
+		// when the deferred timer fires. peekPendingReviewId is only ever
+		// called synchronously (at click time), so a later completion racing
+		// in before the timer fires can never be the one acknowledged.
+		it("captures expectedReviewId synchronously at click time, not at timer-fire time", () => {
+			getTerminal.mockReturnValue({ show: vi.fn() });
+			const peekPendingReviewId = vi.fn(() => "review-1");
+			const acknowledgeReview = vi.fn();
+
+			buildService(undefined, {
+				peekPendingReviewId,
+				acknowledgeReview,
+			}).requestFocus("f1", "a1");
+
+			expect(peekPendingReviewId).toHaveBeenCalledTimes(1);
+
+			// A newer completion races in before the deferred ack runs.
+			peekPendingReviewId.mockReturnValue("review-2");
+			vi.runAllTimers();
+
+			// Still exactly one peek (the synchronous one at click time), and
+			// the ack call carries the value captured then, not "review-2".
+			expect(peekPendingReviewId).toHaveBeenCalledTimes(1);
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1", "review-1");
+		});
 	});
 
 	it("missing terminal controller is a silent no-op", () => {

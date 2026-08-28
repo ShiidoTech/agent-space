@@ -85,6 +85,48 @@ describe("Store", () => {
 			store.deleteFeatureData("f1");
 			expect(store.loadAgents("f1")).toEqual([]);
 		});
+
+		it("also removes the review inbox", () => {
+			store.saveReviewInbox("f1", { a1: "review-1" });
+			store.deleteFeatureData("f1");
+			expect(store.loadReviewInbox("f1")).toEqual({});
+		});
+	});
+
+	describe("review inbox", () => {
+		it("returns an empty map when no file exists", () => {
+			expect(store.loadReviewInbox("f1")).toEqual({});
+		});
+
+		it("round-trips receipts through save and load", () => {
+			store.saveReviewInbox("f1", { a1: "review-1", a2: "review-2" });
+			expect(store.loadReviewInbox("f1")).toEqual({
+				a1: "review-1",
+				a2: "review-2",
+			});
+		});
+
+		it("writes to a dedicated file, never into agents.json", () => {
+			const agent: Agent = {
+				id: "a1",
+				featureId: "f1",
+				name: "test",
+				sessionId: null,
+				status: "stopped",
+				createdAt: "2026-03-04T00:00:00Z",
+			};
+			store.saveAgents("f1", [agent]);
+			store.saveReviewInbox("f1", { a1: "review-1" });
+
+			const rawAgents = fs.readFileSync(
+				path.join(tmpDir, "features", "f1", "agents.json"),
+				"utf-8",
+			);
+			expect(rawAgents).not.toContain("pendingReviewId");
+			expect(
+				fs.existsSync(path.join(tmpDir, "features", "f1", "review-inbox.json")),
+			).toBe(true);
+		});
 	});
 });
 

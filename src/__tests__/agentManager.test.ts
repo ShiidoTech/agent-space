@@ -348,11 +348,169 @@ describe("AgentManager", () => {
 		});
 	});
 
+	describe("recordTurnCompleted / acknowledgeReview", () => {
+		it("opens a review receipt that survives a reload and clears it on acknowledgement", () => {
+			const agent = manager.createAgent(feature);
+
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			expect(manager.getAgents("f1")[0]).toMatchObject({
+				pendingReviewId: "review-1",
+			});
+
+			// Persisted, not just in-memory: a fresh manager reading the same
+			// store still sees it.
+			const reloaded = new AgentManager(
+				store,
+				tmpDir,
+				path.join(tmpDir, ".worktrees"),
+				tmux as never,
+				undefined,
+				new CodingToolRegistry(),
+			);
+			expect(reloaded.getAgents("f1")[0]).toMatchObject({
+				pendingReviewId: "review-1",
+			});
+
+			manager.acknowledgeReview(agent.id, "f1");
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBeUndefined();
+		});
+
+		it("overwrites an unacknowledged receipt with the latest completion", () => {
+			const agent = manager.createAgent(feature);
+
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			manager.recordTurnCompleted(agent.id, "f1", "review-2");
+
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBe("review-2");
+		});
+
+		it("acknowledging with nothing pending is a silent no-op", () => {
+			const agent = manager.createAgent(feature);
+
+			expect(() => manager.acknowledgeReview(agent.id, "f1")).not.toThrow();
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBeUndefined();
+		});
+
+		// PR2 review round 2, blocker 2: the receipt must live in its own file
+		// so a self-write can never be mistaken for a structural agents.json
+		// change (add/remove an agent) by cross-window sync.
+		it("never writes the receipt into agents.json", () => {
+			const agent = manager.createAgent(feature);
+
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+
+			const raw = JSON.parse(
+				fs.readFileSync(
+					path.join(tmpDir, "features", "f1", "agents.json"),
+					"utf-8",
+				),
+			);
+			expect(raw.agents[0].pendingReviewId).toBeUndefined();
+			const inbox = JSON.parse(
+				fs.readFileSync(
+					path.join(tmpDir, "features", "f1", "review-inbox.json"),
+					"utf-8",
+				),
+			);
+			expect(inbox.pending[agent.id]).toBe("review-1");
+		});
+
+		it("recording completion for an unknown agent is a silent no-op", () => {
+			expect(() =>
+				manager.recordTurnCompleted("ghost", "f1", "review-1"),
+			).not.toThrow();
+			const inboxPath = path.join(
+				tmpDir,
+				"features",
+				"f1",
+				"review-inbox.json",
+			);
+			expect(fs.existsSync(inboxPath)).toBe(false);
+		});
+	});
+
+	describe("peekPendingReviewId / acknowledgeReviewIfMatches (PR2 review round 3)", () => {
+		it("peek is empty until a review-inbox read or write has happened in this process", () => {
+			const agent = manager.createAgent(feature);
+			expect(manager.peekPendingReviewId("f1", agent.id)).toBeUndefined();
+		});
+
+		it("recordTurnCompleted immediately updates the in-memory peek, without a read", () => {
+			const agent = manager.createAgent(feature);
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			expect(manager.peekPendingReviewId("f1", agent.id)).toBe("review-1");
+		});
+
+		it("a getAgents*/getAgent read also refreshes the in-memory peek", () => {
+			const agent = manager.createAgent(feature);
+			const reloaded = new AgentManager(
+				store,
+				tmpDir,
+				path.join(tmpDir, ".worktrees"),
+				tmux as never,
+				undefined,
+				new CodingToolRegistry(),
+			);
+			// Written by a different manager instance sharing the same store —
+			// `reloaded` has no in-memory knowledge of it yet.
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			expect(reloaded.peekPendingReviewId("f1", agent.id)).toBeUndefined();
+
+			reloaded.getAgents("f1");
+			expect(reloaded.peekPendingReviewId("f1", agent.id)).toBe("review-1");
+		});
+
+		it("clears the receipt only when it matches the expected id", () => {
+			const agent = manager.createAgent(feature);
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+
+			manager.acknowledgeReviewIfMatches(agent.id, "f1", "review-mismatch");
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBe("review-1");
+
+			manager.acknowledgeReviewIfMatches(agent.id, "f1", "review-1");
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBeUndefined();
+		});
+
+		// The exact race the reviewer's round-3 finding describes: a focus
+		// click captures R1 as the receipt to acknowledge; before that
+		// deferred acknowledgement runs, a newer completion R2 arrives. R2
+		// must survive the stale acknowledgement of R1.
+		it("a stale acknowledgement for an earlier receipt never clears a newer one", () => {
+			const agent = manager.createAgent(feature);
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			const expectedReviewId = manager.peekPendingReviewId("f1", agent.id);
+
+			// A newer completion races in before the (deferred, in the real
+			// AgentFocusService flow) acknowledgement of review-1 runs.
+			manager.recordTurnCompleted(agent.id, "f1", "review-2");
+
+			// biome-ignore lint/style/noNonNullAssertion: captured above, guaranteed defined
+			manager.acknowledgeReviewIfMatches(agent.id, "f1", expectedReviewId!);
+
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBe("review-2");
+		});
+	});
+
 	describe("deleteAgent", () => {
 		it("removes agent", () => {
 			const agent = manager.createAgent(feature);
 			manager.deleteAgent(agent.id, "f1");
 			expect(manager.getAgents("f1")).toHaveLength(0);
+		});
+
+		it("clears a pending review receipt so it cannot leak onto a later agent reusing the id space", () => {
+			const agent = manager.createAgent(feature);
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+
+			manager.deleteAgent(agent.id, "f1");
+
+			const inbox = JSON.parse(
+				fs.readFileSync(
+					path.join(tmpDir, "features", "f1", "review-inbox.json"),
+					"utf-8",
+				),
+			);
+			expect(inbox.pending[agent.id]).toBeUndefined();
 		});
 	});
 
@@ -426,6 +584,23 @@ describe("AgentManager", () => {
 			manager.deleteAllAgents("f1");
 			expect(manager.getAgents("f1")).toHaveLength(0);
 		});
+
+		it("clears pending review receipts for every removed agent", () => {
+			const agentA = manager.createAgent(feature);
+			const agentB = manager.createAgent(feature);
+			manager.recordTurnCompleted(agentA.id, "f1", "review-a");
+			manager.recordTurnCompleted(agentB.id, "f1", "review-b");
+
+			manager.deleteAllAgents("f1");
+
+			const inbox = JSON.parse(
+				fs.readFileSync(
+					path.join(tmpDir, "features", "f1", "review-inbox.json"),
+					"utf-8",
+				),
+			);
+			expect(inbox.pending).toEqual({});
+		});
 	});
 
 	describe("closeAgent", () => {
@@ -459,6 +634,17 @@ describe("AgentManager", () => {
 
 			expect(mockExecSync).not.toHaveBeenCalled();
 			expect(manager.getAgents("f1")[0].status).toBe("done");
+		});
+
+		it("clears a pending review receipt so it cannot resurface if the agent is reopened", () => {
+			const agent = manager.createAgent(feature);
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+
+			manager.closeAgent(agent.id, "f1");
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBeUndefined();
+
+			manager.reopenAgent(agent.id, feature);
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBeUndefined();
 		});
 
 		it("does nothing for unknown agent", () => {

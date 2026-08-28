@@ -1,5 +1,5 @@
 import type { Agent, Feature } from "../../types";
-import type { AttentionWatchedAgent } from "./agentAttentionNotifier";
+import type { AttentionWatchedAgent } from "./agentOperationalTransitions";
 
 /**
  * Minimal structural view of a project context for attention collection.
@@ -26,8 +26,17 @@ export interface AttentionCollectableContext {
  *
  * - features come from `listFeaturesCached()` — never from `getFeatures()`,
  *   which reconciles branches with synchronous Git execs;
- * - features with no running agent (per the cached read model) are skipped
- *   entirely — a waiting transition can only happen on a running agent;
+ * - features with no `running` or `errored` agent (per the cached read
+ *   model) are skipped entirely: a waiting/working/turn-completed
+ *   transition can only happen on a running agent, and `errored` is kept in
+ *   because `AgentManager.recordAgentFailure()` sets that lifecycle status
+ *   the instant a failure is recorded — skipping it here would mean the
+ *   `failed` transition (and its notification) is never observed for a
+ *   Feature whose only agent just crashed. `errored` never reaches a live
+ *   probe: `AgentAttentionResolver` short-circuits lifecycle-derived
+ *   failures before touching tmux/provider evidence, so this costs nothing
+ *   beyond the already-cheap `getAgentsAsync()` call itself. Definitively
+ *   quiescent lifecycle states (`stopped`, `done`) stay excluded;
  * - remaining agents are probed through `getAgentsAsync()` — async tmux and
  *   provider evidence only, no `execSync`/`execFileSync`.
  */
@@ -38,7 +47,13 @@ export async function collectWatchedAgents(
 	for (const ctx of contexts) {
 		for (const feature of ctx.featureManager.listFeaturesCached()) {
 			const known = ctx.agentManager.getAgentsReadModel?.(feature.id) ?? [];
-			if (!known.some((agent) => agent.status === "running")) continue;
+			if (
+				!known.some(
+					(agent) => agent.status === "running" || agent.status === "errored",
+				)
+			) {
+				continue;
+			}
 			const agents = await ctx.agentManager.getAgentsAsync(feature.id);
 			for (const agent of agents) {
 				watched.push({
@@ -48,6 +63,7 @@ export async function collectWatchedAgents(
 					featureName: feature.name,
 					attentionStatus: agent.attentionStatus,
 					attentionReason: agent.attentionReason,
+					attentionSource: agent.attentionSource,
 				});
 			}
 		}

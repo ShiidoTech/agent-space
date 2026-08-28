@@ -1,9 +1,12 @@
 import { execFile as execFileCallback } from "node:child_process";
+import * as crypto from "node:crypto";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { AgentFocusService } from "./agents/agentFocusService";
 import { collectWatchedAgents } from "./agents/attention/agentAttentionCollector";
 import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor";
+import { presentOperationalNotification } from "./agents/attention/agentOperationalNotificationPolicy";
+import type { AgentOperationalTransition } from "./agents/attention/agentOperationalTransitions";
 import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { SessionBinder } from "./agents/sessionBinder";
@@ -62,6 +65,41 @@ function shortSessionId(sessionId: string): string {
 	return sessionId.length > 16
 		? `${sessionId.slice(0, 8)}…${sessionId.slice(-6)}`
 		: sessionId;
+}
+
+/**
+ * Surface one normalized operational transition (issue #120, section B) per
+ * the default notification policy in {@link presentOperationalNotification}.
+ * Each transition kind is gated by its own setting so a user can mute e.g.
+ * turn-completed pings without losing attention-required warnings.
+ */
+function notifyOperationalTransition(
+	transition: AgentOperationalTransition,
+): void {
+	const presentation = presentOperationalNotification(transition);
+	if (!presentation) return;
+	if (
+		!vscode.workspace
+			.getConfiguration("agentSpace")
+			.get<boolean>(presentation.configKey, true)
+	) {
+		return;
+	}
+	const show =
+		presentation.severity === "warning"
+			? vscode.window.showWarningMessage
+			: presentation.severity === "error"
+				? vscode.window.showErrorMessage
+				: vscode.window.showInformationMessage;
+	void show(presentation.message, presentation.actionLabel).then((choice) => {
+		if (choice === presentation.actionLabel && transition.featureId) {
+			void vscode.commands.executeCommand(
+				"agentSpace.focusAgent",
+				transition.featureId,
+				transition.agentId,
+			);
+		}
+	});
 }
 
 export async function activate(
@@ -189,6 +227,23 @@ export async function activate(
 	const agentFocusService = new AgentFocusService({
 		getTerminalController: () => terminalController,
 		resolveFeature: (featureId) => projectManager.resolveFeature(featureId),
+		// Strictly cache-only: never falls back to reading projects.json or
+		// constructing a context, unlike findContextByFeatureIdFast — this
+		// runs synchronously on every focus click, including the warm path,
+		// so it must never touch disk (issue #120 PR2, review round 4).
+		peekPendingReviewId: (featureId, agentId) =>
+			projectManager
+				.peekWarmContext(featureId)
+				?.agentManager.peekPendingReviewId(featureId, agentId),
+		acknowledgeReview: (featureId, agentId, expectedReviewId) => {
+			projectManager
+				.findContextByFeatureIdFast(featureId)
+				?.agentManager.acknowledgeReviewIfMatches(
+					agentId,
+					featureId,
+					expectedReviewId,
+				);
+		},
 	});
 
 	const sidebarProvider = new FeatureSidebarProvider(
@@ -580,34 +635,23 @@ export async function activate(
 	// read-model pre-filter, getAgentsAsync probes — never a synchronous
 	// process call on the Extension Host), because the coordinator's light
 	// poll uses non-probing read models: a working -> waiting_for_user
-	// transition alone never surfaces there. Notifications fire on the
-	// transition itself; coordinator changes only nudge the monitor —
-	// coalesced and off the change stack.
+	// transition alone never surfaces there. Each normalized transition
+	// (issue #120, section B) fires on the edge itself; coordinator changes
+	// only nudge the monitor — coalesced and off the change stack.
 	const attentionMonitor = new AgentAttentionMonitor(
 		{
 			collect: () => collectWatchedAgents(projectManager.getAllContexts()),
-			onAlert: (alert) => {
-				if (
-					!vscode.workspace
-						.getConfiguration("agentSpace")
-						.get<boolean>("notifyWhenAgentsNeedYou", true)
-				) {
-					return;
+			onTransition: (transition) => {
+				if (transition.kind === "turn_completed" && transition.featureId) {
+					projectManager
+						.findContextByFeatureIdFast(transition.featureId)
+						?.agentManager.recordTurnCompleted(
+							transition.agentId,
+							transition.featureId,
+							crypto.randomUUID(),
+						);
 				}
-				const label = alert.featureName
-					? `${alert.agentName} needs you (${alert.featureName})`
-					: `${alert.agentName} needs you`;
-				void vscode.window
-					.showWarningMessage(label, "Focus terminal")
-					.then((choice) => {
-						if (choice === "Focus terminal" && alert.featureId) {
-							void vscode.commands.executeCommand(
-								"agentSpace.focusAgent",
-								alert.featureId,
-								alert.agentId,
-							);
-						}
-					});
+				notifyOperationalTransition(transition);
 			},
 			onError: (error) => {
 				console.warn(`[AgentSpace] attention scan failed: ${error}`);
