@@ -290,10 +290,12 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 });
 
 describe("issue #120: non-structural notifyChange scope (zero-reload eligible)", () => {
-	// stopService/restartService/renameAgent never add or remove a card in the
-	// Project/Feature/Agent tree — they must mark their notifyChange scope
-	// `structural: false` so extension.ts can patch the sidebar/Home DOM in
-	// place instead of rebuilding the whole webview.
+	// renameAgent never adds/removes a card, so it reports `structural: false`
+	// and extension.ts can patch the sidebar/Home DOM in place. stopService/
+	// restartService move a service card between the running/stopped DOM
+	// sections (renderServicesSection) with a different action button —
+	// today's incremental patch doesn't perform that move, so they must stay
+	// structural (full rebuild) until it does (PR review on #121).
 	function buildProvider(overrides: {
 		serviceManager?: Record<string, unknown>;
 		agentManager?: Record<string, unknown>;
@@ -330,26 +332,20 @@ describe("issue #120: non-structural notifyChange scope (zero-reload eligible)",
 		return { provider, notifyChange, ctx };
 	}
 
-	it("handleStopService reports a non-structural, feature-scoped change", () => {
+	it("handleStopService still reports a structural (full-rebuild) change", () => {
 		const { provider, notifyChange } = buildProvider({});
 		// biome-ignore lint/suspicious/noExplicitAny: invoking the private handler directly
 		(provider as any).handleStopService("f1", "s1");
 
-		expect(notifyChange).toHaveBeenCalledWith({
-			featureId: "f1",
-			structural: false,
-		});
+		expect(notifyChange).toHaveBeenCalledWith({ featureId: "f1" });
 	});
 
-	it("handleRestartService reports a non-structural, feature-scoped change", () => {
+	it("handleRestartService still reports a structural (full-rebuild) change", () => {
 		const { provider, notifyChange } = buildProvider({});
 		// biome-ignore lint/suspicious/noExplicitAny: invoking the private handler directly
 		(provider as any).handleRestartService("f1", "s1");
 
-		expect(notifyChange).toHaveBeenCalledWith({
-			featureId: "f1",
-			structural: false,
-		});
+		expect(notifyChange).toHaveBeenCalledWith({ featureId: "f1" });
 	});
 
 	it("handleRenameAgent reports a non-structural, feature-scoped change", async () => {

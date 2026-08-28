@@ -331,7 +331,13 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			);
 		}
 		ctx.serviceManager.stopService(serviceId, featureId);
-		this.projectManager.notifyChange({ featureId, structural: false });
+		// Not (yet) safe as `structural: false`: running/stopped services live
+		// in two different DOM sections with different action buttons
+		// (renderServicesSection), and the incremental patch only updates the
+		// existing node's class — it doesn't move the card or swap the
+		// button. Revisit once the sidebar/Home patch actually performs that
+		// move (issue #120 PR2+).
+		this.projectManager.notifyChange({ featureId });
 	}
 
 	private handleRestartService(featureId: string, serviceId: string): void {
@@ -343,7 +349,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			featureId,
 			feature.worktreePath,
 		);
-		this.projectManager.notifyChange({ featureId, structural: false });
+		// See handleStopService: not structural-safe until the running/stopped
+		// section move is implemented incrementally.
+		this.projectManager.notifyChange({ featureId });
 	}
 
 	private async handleRenameAgent(

@@ -20,6 +20,7 @@ import {
 	shouldCleanupSession,
 } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
+import { createFeatureChangeFlusher } from "./features/featureChangeRouting";
 import { runFeatureFinish } from "./features/featureFinishCommand";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
@@ -574,7 +575,6 @@ export async function activate(
 		),
 	);
 
-	let featureRefreshQueued = false;
 	// Dedicated attention observation source: polls provider attention on its
 	// own clock through the fully asynchronous collector (cached feature list,
 	// read-model pre-filter, getAgentsAsync probes — never a synchronous
@@ -618,16 +618,14 @@ export async function activate(
 	attentionMonitor.start();
 	context.subscriptions.push(attentionMonitor);
 	context.subscriptions.push(
-		featureStateCoordinator.onDidChange(() => {
-			if (featureRefreshQueued) return;
-			featureRefreshQueued = true;
-			setTimeout(() => {
-				featureRefreshQueued = false;
-				sidebarProvider.refreshState();
-				HomePanel.refreshAll();
-				attentionMonitor.nudge();
-			}, 150);
-		}),
+		featureStateCoordinator.onDidChange(
+			createFeatureChangeFlusher({
+				refreshSidebarState: () => sidebarProvider.refreshState(),
+				refreshHomeAll: () => HomePanel.refreshAll(),
+				refreshHomeLive: (scope) => HomePanel.refreshLive(scope),
+				nudgeAttention: () => attentionMonitor.nudge(),
+			}),
+		),
 	);
 	projectManager.onChange((scope) => {
 		// Only the affected Feature/Project is invalidated: last-known facts
@@ -642,12 +640,22 @@ export async function activate(
 		// `structural: false` (status/name/service changes on agents/services
 		// that already exist) patches the live webview DOM in place; anything
 		// else (add/remove, unscoped, or unknown) still gets a full rebuild.
+		// The incremental path first re-syncs the coordinator's cheap presence
+		// cache — `invalidateFeature` deliberately never touches it — so the
+		// patch actually carries the fresh name/status rather than whatever
+		// was last committed by the periodic reconcile tick.
 		if (scope?.structural === false) {
-			sidebarProvider.refreshState();
+			featureStateCoordinator
+				.reconcilePresence()
+				.catch(() => {})
+				.then(() => {
+					sidebarProvider.refreshState();
+					HomePanel.refreshLive(scope);
+				});
 		} else {
 			sidebarProvider.refresh();
+			HomePanel.refreshLive(scope);
 		}
-		HomePanel.refreshLive(scope);
 	});
 	featureStateCoordinator.start();
 	context.subscriptions.push(featureStateCoordinator);
