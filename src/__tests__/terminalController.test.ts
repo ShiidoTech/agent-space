@@ -5,11 +5,15 @@ const {
 	showErrorMessageMock,
 	onDidOpenTerminalMock,
 	onDidCloseTerminalMock,
+	ensureHermesProjectSkillsTrustedMock,
+	ensureHermesProjectSkillsTrustedAsyncMock,
 } = vi.hoisted(() => ({
 	createTerminalMock: vi.fn(),
 	showErrorMessageMock: vi.fn(),
 	onDidOpenTerminalMock: vi.fn(() => ({ dispose: vi.fn() })),
 	onDidCloseTerminalMock: vi.fn(() => ({ dispose: vi.fn() })),
+	ensureHermesProjectSkillsTrustedMock: vi.fn(),
+	ensureHermesProjectSkillsTrustedAsyncMock: vi.fn(),
 }));
 
 vi.mock("../utils/platform", () => ({
@@ -19,6 +23,13 @@ vi.mock("../utils/platform", () => ({
 		shellPath: "tmux",
 		shellArgs: ["attach-session", "-t", "session"],
 	})),
+}));
+
+vi.mock("../agents/hermesSkillTrust", () => ({
+	hasProjectSkills: vi.fn().mockReturnValue(true),
+	ensureHermesProjectSkillsTrusted: ensureHermesProjectSkillsTrustedMock,
+	ensureHermesProjectSkillsTrustedAsync:
+		ensureHermesProjectSkillsTrustedAsyncMock,
 }));
 
 vi.mock("../constants/colors", () => ({
@@ -1086,6 +1097,87 @@ describe("TerminalController", () => {
 			// Cold create must not reveal by itself — the caller owns the
 			// show decision so a stale resolution cannot steal focus.
 			expect(terminalInstance.show).not.toHaveBeenCalled();
+		});
+
+		it("uses the async trust primitive on the cold path, never the sync one", async () => {
+			const isSessionAliveAsync = vi.fn().mockResolvedValue(true);
+			const adoptSessionAsync = vi.fn().mockResolvedValue(false);
+			const hermesAgent: Agent = {
+				...agent,
+				hermesProfile: "agent-space",
+			};
+			const controller = new TerminalController(
+				{ findContextByFeatureId, notifyChange } as never,
+				{
+					sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+					legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+					adoptSession,
+					createCommand,
+					configureSession,
+					isSessionAlive,
+					isSessionAliveAsync,
+					adoptSessionAsync,
+					getPaneStatus,
+				} as never,
+				{
+					resolveAgentTool,
+					resolveAgentToolForAgent,
+					buildLaunchCommand,
+					buildResumeLaunchCommand,
+				} as never,
+			);
+
+			ensureHermesProjectSkillsTrustedAsyncMock.mockResolvedValue(undefined);
+			vi.mocked(execAsync).mockResolvedValue({ stdout: "", stderr: "" });
+
+			const terminal = await controller.focusOrCreateTerminalAsync(
+				feature,
+				hermesAgent,
+				0,
+				true,
+			);
+
+			expect(terminal).toBeDefined();
+			expect(ensureHermesProjectSkillsTrustedAsyncMock).toHaveBeenCalledOnce();
+			expect(ensureHermesProjectSkillsTrustedMock).not.toHaveBeenCalled();
+		});
+
+		it("prevents tmux creation when async trust fails", async () => {
+			const isSessionAliveAsync = vi.fn().mockResolvedValue(true);
+			const adoptSessionAsync = vi.fn().mockResolvedValue(false);
+			const hermesAgent: Agent = {
+				...agent,
+				hermesProfile: "agent-space",
+			};
+			const controller = new TerminalController(
+				{ findContextByFeatureId, notifyChange } as never,
+				{
+					sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+					legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+					adoptSession,
+					createCommand,
+					configureSession,
+					isSessionAlive,
+					isSessionAliveAsync,
+					adoptSessionAsync,
+					getPaneStatus,
+				} as never,
+				{
+					resolveAgentTool,
+					resolveAgentToolForAgent,
+					buildLaunchCommand,
+					buildResumeLaunchCommand,
+				} as never,
+			);
+
+			ensureHermesProjectSkillsTrustedAsyncMock.mockRejectedValue(
+				new Error("hermes skills trust failed"),
+			);
+
+			await expect(
+				controller.focusOrCreateTerminalAsync(feature, hermesAgent, 0, true),
+			).rejects.toThrow("hermes skills trust failed");
+			expect(createTerminalMock).not.toHaveBeenCalled();
 		});
 	});
 
