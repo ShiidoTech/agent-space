@@ -172,7 +172,10 @@ const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
 		resumeArgs: (sessionId) => (sessionId ? ["--resume", sessionId] : []),
 	},
 	codex: {
-		launchArgs: () => [],
+		// PR4: the thread is created by app-server before the TUI starts. A
+		// session id on a fresh launch is therefore an exact thread receipt, not
+		// a discovery hint.
+		launchArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 		resumeArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 	},
 };
@@ -233,7 +236,10 @@ function providerForTool(
 		family === "claude"
 			? (sessionId?: string | null) =>
 					sessionId ? ["--session-id", sessionId] : []
-			: () => [];
+			: family === "codex"
+				? (sessionId?: string | null) =>
+						sessionId ? ["resume", sessionId] : []
+				: () => [];
 	const resumeArgs =
 		family === "claude"
 			? (sessionId?: string | null) =>

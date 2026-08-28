@@ -39,7 +39,7 @@ second card status.
 | Provider | Lifecycle | Session binding | Naming | Working | Waiting user | Idle | Failed |
 |---|---|---|---|---|---|---|---|
 | Claude | supported | supported | supported | supported | supported | supported | supported |
-| Codex | supported | best-effort | best-effort | supported | supported | supported | supported |
+| Codex | supported | app-server receipt | app-server/session | supported | supported | supported | supported |
 | OpenCode | supported | best-effort | best-effort | supported | supported | supported | supported |
 | Hermes | supported | supported | unsupported | unsupported | unsupported | unsupported | unsupported |
 | Copilot | supported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |

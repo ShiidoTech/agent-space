@@ -6,7 +6,11 @@ import type {
 import type { Agent, AgentSessionBinding, Feature } from "../types";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import type { ProviderSessionAdapter } from "./providers/types";
-import type { SessionInfo } from "./sessionProviders/types";
+import type {
+	ProviderConversationReceipt,
+	SessionCorrelationContext,
+	SessionInfo,
+} from "./sessionProviders/types";
 import type { TmuxIntegration } from "./tmux";
 
 const RECONCILE_INTERVAL_MS = 15_000;
@@ -264,6 +268,80 @@ export class SessionBinder {
 	}
 
 	/**
+	 * Acquire a provider-assigned identity before launching its UI. The receipt
+	 * is persisted immediately; no later scan is allowed to replace it.
+	 */
+	async acquireConversation(
+		ctx: ProjectContext,
+		featureId: string,
+		agent: Agent,
+		cwd: string,
+		resume: boolean,
+	): Promise<ProviderConversationReceipt | undefined> {
+		const adapter = this.adapterFor(agent);
+		if (!adapter) return undefined;
+		const context: SessionCorrelationContext = {
+			agentId: agent.id,
+			featureId,
+			cwd,
+			knownSessionIds: new Set(agent.sessionBaseline ?? []),
+			tmuxSession:
+				agent.tmuxSession ?? this.tmux.sessionName(featureId, agent.id),
+			launchedAtMs: Date.now(),
+		};
+		if (resume && agent.sessionId && adapter.resumeConversation) {
+			if (!(await adapter.resumeConversation(agent.sessionId))) {
+				throw new Error(
+					"Codex app-server could not resume the persisted thread",
+				);
+			}
+			return { sessionId: agent.sessionId, proof: "persisted provider thread" };
+		}
+		if (resume || !adapter.acquireConversation) return undefined;
+		const receipt = await adapter.acquireConversation(context);
+		if (!receipt?.sessionId) {
+			throw new Error(
+				"Provider did not return an exact conversation identity; refusing to launch",
+			);
+		}
+		ctx.agentManager.updateAgentSessionId(
+			agent.id,
+			featureId,
+			receipt.sessionId,
+		);
+		// Keep the launch object in sync so the command built immediately after
+		// this callback resumes/starts the exact receipt, not a stale read model.
+		agent.sessionId = receipt.sessionId;
+		agent.sessionBinding = {
+			state: "bound",
+			checkedAt: new Date().toISOString(),
+			attempts: 0,
+			detail: `Exact provider receipt: ${receipt.proof}`,
+		};
+		ctx.agentManager.updateSessionBinding(agent.id, featureId, {
+			state: "bound",
+			checkedAt: new Date().toISOString(),
+			attempts: 0,
+			detail: `Exact provider receipt: ${receipt.proof}`,
+		});
+		return receipt;
+	}
+
+	/** Reconnect every persisted exact conversation after an Extension Host reload. */
+	async reconnectBoundConversations(): Promise<void> {
+		for (const ctx of this.projectManager?.getAllContexts() ?? []) {
+			for (const { featureId } of managedFeatures(ctx)) {
+				for (const agent of ctx.agentManager.getAgents(featureId)) {
+					if (!agent.sessionId) continue;
+					const adapter = this.adapterFor(agent);
+					if (!adapter?.resumeConversation) continue;
+					await adapter.resumeConversation(agent.sessionId);
+				}
+			}
+		}
+	}
+
+	/**
 	 * Reconcile every live, unbound agent. Returns the outcomes that changed, so
 	 * callers can refresh the UI and re-run name synchronization only when
 	 * something actually moved.
@@ -483,6 +561,9 @@ export class SessionBinder {
 		// async boundary. An adapter without an async `hasSession` is trusted
 		// within its revalidation window, never re-checked synchronously.
 		if (agent.sessionBinding?.state === "bound" && agent.sessionId) {
+			if (agent.sessionBinding.detail?.startsWith("Exact provider receipt:")) {
+				return { kind: "settled" };
+			}
 			const checkedMs = toMs(agent.sessionBinding.checkedAt);
 			const fresh =
 				checkedMs !== null && Date.now() - checkedMs < REVALIDATE_BOUND_MS;
@@ -580,6 +661,9 @@ export class SessionBinder {
 		// a binding that stopped being true. Between checks the answer is reused,
 		// because `hasSession` walks the provider store.
 		if (agent.sessionBinding?.state === "bound" && agent.sessionId) {
+			if (agent.sessionBinding.detail?.startsWith("Exact provider receipt:")) {
+				return { kind: "settled" };
+			}
 			const checkedMs = toMs(agent.sessionBinding.checkedAt);
 			const fresh =
 				checkedMs !== null && Date.now() - checkedMs < REVALIDATE_BOUND_MS;
@@ -845,6 +929,8 @@ function safeCorrelate(
 	try {
 		const known = new Set([...(entry.agent.sessionBaseline ?? []), ...taken]);
 		const discovered = entry.adapter.correlateOwnedSession({
+			agentId: entry.agent.id,
+			featureId: entry.featureId,
 			cwd: entry.cwd,
 			knownSessionIds: known,
 			tmuxSession: entry.agent.tmuxSession,
@@ -884,6 +970,8 @@ async function safeCorrelateAsync(
 	try {
 		const known = new Set([...(entry.agent.sessionBaseline ?? []), ...taken]);
 		const discovered = await entry.adapter.async.correlateOwnedSession({
+			agentId: entry.agent.id,
+			featureId: entry.featureId,
 			cwd: entry.cwd,
 			knownSessionIds: known,
 			tmuxSession: entry.agent.tmuxSession,

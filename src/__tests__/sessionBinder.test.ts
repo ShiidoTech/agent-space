@@ -475,6 +475,40 @@ describe("SessionBinder", () => {
 		expect(ctx.store.loadAgents("f1")[0].sessionId).toBe("ses_provider_owned");
 	});
 
+	it("persists controlled receipts immediately and never cross-binds sibling agents", async () => {
+		const { projectManager, ctx } = setup([feature()]);
+		const first = agentFixture({ id: "a", name: "A" });
+		const second = agentFixture({ id: "b", name: "B" });
+		ctx.store.saveAgents("f1", [first, second]);
+		const controlled = adapter([]);
+		controlled.acquireConversation = vi.fn(async (context) => ({
+			sessionId: context.agentId === "a" ? "thread-a" : "thread-b",
+			proof: "codex.app-server.thread/start",
+		}));
+		const binder = new SessionBinder(registry(controlled), tmux());
+		binder.start(projectManager, 0);
+
+		// Simulate B receiving the first prompt: the order of prompt arrival is
+		// deliberately unrelated to Agent Space creation order.
+		await binder.acquireConversation(ctx, "f1", second, WORKTREE, false);
+		await binder.acquireConversation(ctx, "f1", first, WORKTREE, false);
+
+		expect(ctx.store.loadAgents("f1")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "a",
+					sessionId: "thread-a",
+					sessionBinding: expect.objectContaining({
+						state: "bound",
+						detail: expect.stringContaining("Exact provider receipt"),
+					}),
+				}),
+				expect.objectContaining({ id: "b", sessionId: "thread-b" }),
+			]),
+		);
+		expect(controlled.acquireConversation).toHaveBeenCalledTimes(2);
+	});
+
 	it("binds a preassigned session when the provider store resolves it", () => {
 		const { projectManager, ctx } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture({ sessionId: "ses_claude" })]);

@@ -3,6 +3,11 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { ProviderAttentionSignal } from "../providers/types";
 import {
+	type CodexAppServerEvent,
+	type CodexAppServerTransport,
+	CodexAppServerTransportImpl,
+} from "./codexAppServer";
+import {
 	type IncrementalJsonlState,
 	readFirstJsonlLine,
 	readFirstJsonlLineAsync,
@@ -10,6 +15,8 @@ import {
 	readIncrementalJsonlAsync,
 } from "./incrementalJsonl";
 import type {
+	ProviderConversationReceipt,
+	SessionCorrelationContext,
 	SessionInfo,
 	SessionProvider,
 	SessionRenameAdapter,
@@ -62,13 +69,58 @@ export class CodexSessionProvider
 		string,
 		IncrementalJsonlState<ProviderAttentionSignal>
 	>();
+	private readonly appServer: CodexAppServerTransport;
+	private readonly appServerAttention = new Map<
+		string,
+		ProviderAttentionSignal
+	>();
+	private readonly removeAppServerListener: () => void;
+	private readonly removeAppServerCloseListener: () => void;
 
-	constructor(sessionsDir?: string, sessionIndexPath?: string) {
+	constructor(
+		sessionsDir?: string,
+		sessionIndexPath?: string,
+		appServer: CodexAppServerTransport = new CodexAppServerTransportImpl(),
+	) {
 		this.sessionsDir = sessionsDir ?? DEFAULT_CODEX_SESSIONS_DIR;
 		this.sessionIndexPath = resolveCodexIndexPath(
 			sessionsDir,
 			sessionIndexPath,
 		);
+		this.appServer = appServer;
+		this.removeAppServerListener = appServer.onEvent((event) =>
+			this.handleAppServerEvent(event),
+		);
+		this.removeAppServerCloseListener =
+			appServer.onClose?.(() => this.appServerAttention.clear()) ?? (() => {});
+	}
+
+	/** Create the exact thread before the interactive Codex CLI is launched. */
+	async acquireConversation(
+		context: SessionCorrelationContext,
+	): Promise<ProviderConversationReceipt | undefined> {
+		try {
+			const result = await this.appServer.request<{
+				thread?: { id?: unknown };
+			}>("thread/start", { cwd: context.cwd, ephemeral: false });
+			const id = result.thread?.id;
+			if (typeof id !== "string" || id.length === 0) return undefined;
+			return { sessionId: id, proof: "codex.app-server.thread/start" };
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Reconnect the app-server to exactly the persisted thread, never a recent one. */
+	async resumeConversation(sessionId: string): Promise<boolean> {
+		try {
+			const result = await this.appServer.request<{
+				thread?: { id?: unknown };
+			}>("thread/resume", { threadId: sessionId });
+			return result.thread?.id === sessionId;
+		} catch {
+			return false;
+		}
 	}
 
 	/**
@@ -93,7 +145,8 @@ export class CodexSessionProvider
 			}
 		},
 		hasSession: async (sessionId: string): Promise<boolean> =>
-			(await this.findSessionFileAsync(sessionId)) !== null,
+			(await this.findSessionFileAsync(sessionId)) !== null ||
+			(await this.resumeConversation(sessionId)),
 		readName: async (sessionId: string): Promise<string | null> => {
 			await this.loadSessionIndexAsync();
 			return (
@@ -459,6 +512,8 @@ export class CodexSessionProvider
 	}
 
 	readAttention(sessionId: string): ProviderAttentionSignal | undefined {
+		const structured = this.appServerAttention.get(sessionId);
+		if (structured) return structured;
 		const filePath = this.findSessionFile(sessionId);
 		if (!filePath) return undefined;
 
@@ -480,6 +535,8 @@ export class CodexSessionProvider
 	async readAttentionAsync(
 		sessionId: string,
 	): Promise<ProviderAttentionSignal | undefined> {
+		const structured = this.appServerAttention.get(sessionId);
+		if (structured) return structured;
 		const filePath = await this.findSessionFileAsync(sessionId);
 		if (!filePath) return undefined;
 
@@ -561,6 +618,59 @@ export class CodexSessionProvider
 		return signal;
 	}
 
+	private handleAppServerEvent(event: CodexAppServerEvent): void {
+		const params = event.params;
+		if (!params) return;
+		const threadId =
+			typeof params.threadId === "string"
+				? params.threadId
+				: typeof (params.thread as { id?: unknown } | undefined)?.id ===
+						"string"
+					? (params.thread as { id: string }).id
+					: undefined;
+		if (!threadId) return;
+		const observedAt = new Date().toISOString();
+		let signal: ProviderAttentionSignal | undefined;
+		if (event.method === "turn/started") {
+			signal = {
+				status: "working",
+				evidence: "codex.app-server.turn/started",
+				observedAt,
+			};
+		} else if (event.method === "turn/completed") {
+			const turn = params.turn as { status?: { type?: unknown } } | undefined;
+			const status = turn?.status?.type;
+			signal =
+				status === "failed" || status === "error"
+					? {
+							status: "failed",
+							evidence: "codex.app-server.turn/completed.failed",
+							observedAt,
+						}
+					: {
+							status: "idle",
+							evidence: "codex.app-server.turn/completed",
+							observedAt,
+						};
+		} else if (
+			event.method.includes("requestApproval") ||
+			event.method === "item/tool/requestUserInput"
+		) {
+			signal = {
+				status: "waiting_for_user",
+				evidence: `codex.app-server.${event.method}`,
+				observedAt,
+			};
+		} else if (event.method === "error") {
+			signal = {
+				status: "failed",
+				evidence: "codex.app-server.error",
+				observedAt,
+			};
+		}
+		if (signal) this.appServerAttention.set(threadId, signal);
+	}
+
 	clearCache(sessionId: string): void {
 		this.pathCache.delete(sessionId);
 		this.nameCache.delete(sessionId);
@@ -569,6 +679,9 @@ export class CodexSessionProvider
 	}
 
 	dispose(): void {
+		this.removeAppServerListener();
+		this.removeAppServerCloseListener();
+		this.appServer.close();
 		this.pathCache.clear();
 		this.nameCache.clear();
 		this.lastIndexMtimeMs = null;

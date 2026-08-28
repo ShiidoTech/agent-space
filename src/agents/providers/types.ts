@@ -1,6 +1,7 @@
 import type { AgentAttentionStatus } from "../../types";
 import type {
 	AsyncSessionObservationAdapter,
+	ProviderConversationReceipt,
 	SessionCorrelationContext,
 	SessionInfo,
 	SessionRenameAdapter,
@@ -63,6 +64,12 @@ export interface ProviderSessionAdapter extends SessionRenameAdapter {
 	correlateOwnedSession?(
 		context: SessionCorrelationContext,
 	): string | undefined | Promise<string | undefined>;
+	/** Acquire ownership from a provider control plane before the CLI starts. */
+	acquireConversation?(
+		context: SessionCorrelationContext,
+	): Promise<ProviderConversationReceipt | undefined>;
+	/** Rejoin the exact provider conversation after an Extension Host reload. */
+	resumeConversation?(sessionId: string): Promise<boolean>;
 }
 
 export type ProviderConversationIdentity =

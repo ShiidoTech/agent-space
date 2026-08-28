@@ -1,7 +1,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+	CodexAppServerEvent,
+	CodexAppServerTransport,
+} from "../agents/sessionProviders/codexAppServer";
 import { CodexSessionProvider } from "../agents/sessionProviders/codexSessionProvider";
 
 describe("CodexSessionProvider", () => {
@@ -49,6 +53,131 @@ describe("CodexSessionProvider", () => {
 		fs.writeFileSync(sessionIndexPath, `${lines.join("\n")}\n`);
 		return sessionIndexPath;
 	}
+
+	function appServerFake(ids: string[]) {
+		let listener: ((event: CodexAppServerEvent) => void) | undefined;
+		const transport: CodexAppServerTransport = {
+			request: vi.fn(async (method: string) => {
+				if (method === "thread/start") return { thread: { id: ids.shift() } };
+				if (method === "thread/resume") return { thread: { id: "thread-a" } };
+				return {};
+			}) as unknown as CodexAppServerTransport["request"],
+			onEvent(next) {
+				listener = next;
+				return () => {
+					listener = undefined;
+				};
+			},
+			close: vi.fn(),
+		};
+		return {
+			transport,
+			emit(event: CodexAppServerEvent) {
+				listener?.(event);
+			},
+		};
+	}
+
+	describe("controlled app-server identity and events", () => {
+		it("persists and observes the exact thread returned by thread/start", async () => {
+			const fake = appServerFake(["thread-a"]);
+			const provider = new CodexSessionProvider(
+				tmpDir,
+				sessionIndexPath,
+				fake.transport,
+			);
+			const receipt = await provider.acquireConversation({
+				agentId: "agent-a",
+				featureId: "feature-a",
+				cwd: "/tmp/project",
+				knownSessionIds: new Set(),
+			});
+
+			expect(receipt).toEqual({
+				sessionId: "thread-a",
+				proof: "codex.app-server.thread/start",
+			});
+			fake.emit({
+				method: "turn/started",
+				params: { threadId: "thread-a", turn: { id: "turn-a" } },
+			});
+			expect(provider.readAttention("thread-a")?.status).toBe("working");
+		});
+
+		it("keeps two same-worktree threads isolated, including reversed prompt order", async () => {
+			const fake = appServerFake(["thread-a", "thread-b"]);
+			const provider = new CodexSessionProvider(
+				tmpDir,
+				sessionIndexPath,
+				fake.transport,
+			);
+			const context = {
+				cwd: "/tmp/shared",
+				knownSessionIds: new Set<string>(),
+			};
+			const [a, b] = await Promise.all([
+				provider.acquireConversation({ ...context, agentId: "a" }),
+				provider.acquireConversation({ ...context, agentId: "b" }),
+			]);
+			expect(new Set([a?.sessionId, b?.sessionId])).toEqual(
+				new Set(["thread-a", "thread-b"]),
+			);
+
+			fake.emit({ method: "turn/started", params: { threadId: "thread-b" } });
+			expect(provider.readAttention("thread-b")?.status).toBe("working");
+			expect(provider.readAttention("thread-a")).toBeUndefined();
+			fake.emit({
+				method: "item/tool/requestUserInput",
+				params: {
+					threadId: "thread-a",
+					turnId: "turn-a",
+					itemId: "item-a",
+					isBlocking: true,
+					questions: [],
+				},
+			});
+			expect(provider.readAttention("thread-a")?.status).toBe(
+				"waiting_for_user",
+			);
+			expect(provider.readAttention("thread-b")?.status).toBe("working");
+		});
+
+		it("maps provider-native completion once and keeps structured failures thread-local", () => {
+			const fake = appServerFake([]);
+			const provider = new CodexSessionProvider(
+				tmpDir,
+				sessionIndexPath,
+				fake.transport,
+			);
+			fake.emit({ method: "turn/started", params: { threadId: "thread-a" } });
+			fake.emit({
+				method: "turn/completed",
+				params: {
+					threadId: "thread-a",
+					turn: { status: { type: "completed" } },
+				},
+			});
+			expect(provider.readAttention("thread-a")?.evidence).toBe(
+				"codex.app-server.turn/completed",
+			);
+			fake.emit({ method: "error", params: { threadId: "thread-b" } });
+			expect(provider.readAttention("thread-b")?.status).toBe("failed");
+			expect(provider.readAttention("thread-a")?.status).toBe("idle");
+		});
+
+		it("resumes only the persisted thread id", async () => {
+			const fake = appServerFake([]);
+			const provider = new CodexSessionProvider(
+				tmpDir,
+				sessionIndexPath,
+				fake.transport,
+			);
+			expect(await provider.resumeConversation("thread-a")).toBe(true);
+			expect(fake.transport.request).toHaveBeenCalledWith("thread/resume", {
+				threadId: "thread-a",
+			});
+		});
+	});
 
 	describe("scanSessions", () => {
 		it("parses session_meta from JSONL files in nested dirs", () => {
