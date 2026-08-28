@@ -5,6 +5,7 @@ import type {
 	CompanionState,
 	Feature,
 	FeatureAgents,
+	FeatureReviewInbox,
 	FeatureServices,
 	Service,
 } from "../types";
@@ -55,6 +56,36 @@ export class Store {
 		this.ensureDir(dir);
 		const filePath = path.join(dir, "agents.json");
 		const data: FeatureAgents = { agents };
+		this.atomicWriteSync(filePath, JSON.stringify(data, null, "\t"));
+	}
+
+	/**
+	 * Review-inbox receipts (issue #120 PR2 review round 2, blocker 2) live
+	 * in their own file, never in `agents.json`: a write here can never be
+	 * structural (add/remove an agent), so cross-window sync can always
+	 * treat it as a live patch. See {@link Agent.pendingReviewId}.
+	 */
+	loadReviewInbox(featureId: string): Record<string, string> {
+		const filePath = path.join(
+			this.baseDir,
+			"features",
+			featureId,
+			"review-inbox.json",
+		);
+		try {
+			const raw = fs.readFileSync(filePath, "utf-8");
+			const data: FeatureReviewInbox = JSON.parse(raw);
+			return data.pending ?? {};
+		} catch {
+			return {};
+		}
+	}
+
+	saveReviewInbox(featureId: string, pending: Record<string, string>): void {
+		const dir = path.join(this.baseDir, "features", featureId);
+		this.ensureDir(dir);
+		const filePath = path.join(dir, "review-inbox.json");
+		const data: FeatureReviewInbox = { pending };
 		this.atomicWriteSync(filePath, JSON.stringify(data, null, "\t"));
 	}
 

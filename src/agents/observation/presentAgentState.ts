@@ -30,22 +30,32 @@ export function presentAgentState(
 			detail: lifecycle.reason ?? "Agent lifecycle could not be observed",
 		};
 	}
+	// Priority (issue #120, PR2 review round 2, blocker 3): Needs you > Failed
+	// > Ready for review > Working > Idle/Unknown/Unsupported. A pending
+	// review receipt is independent of the current runtime attention
+	// reading — it stays true until the user actually opens this agent, so
+	// it must win over "Working" (an autonomous next turn already started)
+	// and over "Unknown"/"Unsupported" (the provider went quiet or lost
+	// structured evidence) alike, not just over plain "Idle". Only the two
+	// higher-priority live-attention states can still eclipse it.
+	if (attention.state === "waiting_for_user") {
+		return { label: "Needs you", tone: "warning", detail: attention.reason };
+	}
+	if (attention.state === "failed") {
+		return { label: "Failed", tone: "error", detail: attention.reason };
+	}
+	if (review.pending && lifecycle.state === "running") {
+		return {
+			label: "Ready for review",
+			tone: "review",
+			detail: attention.reason ?? "Finished a turn — not yet reviewed",
+		};
+	}
 	switch (attention.state) {
-		case "waiting_for_user":
-			return { label: "Needs you", tone: "warning", detail: attention.reason };
-		case "failed":
-			return { label: "Failed", tone: "error", detail: attention.reason };
 		case "working":
 			return { label: "Working", tone: "working", detail: attention.reason };
 		case "idle":
 			if (lifecycle.state === "running") {
-				if (review.pending) {
-					return {
-						label: "Ready for review",
-						tone: "review",
-						detail: attention.reason ?? "Finished a turn — not yet reviewed",
-					};
-				}
 				return { label: "Idle", tone: "normal", detail: attention.reason };
 			}
 			break;

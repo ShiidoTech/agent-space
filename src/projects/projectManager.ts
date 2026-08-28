@@ -200,6 +200,25 @@ export class ProjectManager {
 			return;
 		}
 
+		// projects/{id}/features/{fid}/review-inbox.json → live patch, never a
+		// full rebuild: this file can never add/remove an agent (issue #120
+		// PR2 review round 2, blocker 2), so a self-write from this window's
+		// own AgentFocusService.acknowledgeReview, or a genuine write from a
+		// sibling window, is always safely structural: false. No agent-cache
+		// invalidation needed: `AgentManager` re-reads the review inbox from
+		// disk on every call, uncached.
+		if (
+			parts.length === 5 &&
+			parts[0] === "projects" &&
+			parts[2] === "features" &&
+			parts[4] === "review-inbox.json"
+		) {
+			const projectId = parts[1];
+			const featureId = parts[3];
+			this.notifyChange({ projectId, featureId, structural: false });
+			return;
+		}
+
 		// projects/{id}/features/{fid}/services.json → invalidate service cache
 		if (
 			parts.length === 5 &&

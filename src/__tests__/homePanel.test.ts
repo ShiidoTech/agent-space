@@ -64,6 +64,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		lifecycle: { state: value.status, source: "tmux" },
 		attention: { state: "unknown", reason: "Provider activity unavailable" },
 		session: { state: "ambiguous", detail: "Several candidates" },
+		review: { pending: false },
 	}));
 	const ctx = { agentManager: { getAgents, observe } };
 	const resolveFeature = vi.fn().mockReturnValue({ ctx, feature });

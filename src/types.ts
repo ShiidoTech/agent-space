@@ -207,6 +207,13 @@ export interface Agent {
 	 * `attentionStatus` (recomputed transient evidence) and from Feature
 	 * delivery readiness ("Ready to finish"): this is per-agent, per-turn
 	 * review-inbox state.
+	 *
+	 * Not stored inline in `agents.json`: kept in a dedicated
+	 * `review-inbox.json` (see {@link FeatureReviewInbox}) and merged onto
+	 * this field only in `AgentManager`'s read methods. A separate file
+	 * means every review-inbox write is by construction never structural
+	 * (it can never add/remove an agent), so cross-window sync can always
+	 * route it as a live patch instead of a full rebuild.
 	 */
 	pendingReviewId?: string;
 	hasStarted?: boolean;
@@ -251,6 +258,15 @@ export interface CompanionState {
 
 export interface FeatureAgents {
 	agents: Agent[];
+}
+
+/**
+ * Per-feature review-inbox receipts, keyed by agent id. Deliberately its own
+ * file (not part of `FeatureAgents`/`agents.json`): see
+ * {@link Agent.pendingReviewId}.
+ */
+export interface FeatureReviewInbox {
+	pending: Record<string, string>;
 }
 
 export interface Project {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentFocusObserver } from "../agents/agentFocusService";
 import { AgentFocusService } from "../agents/agentFocusService";
 import type { Agent, Feature } from "../types";
@@ -215,41 +215,107 @@ describe("AgentFocusService (behavioral contract)", () => {
 		expect(states).toEqual([]);
 	});
 
-	it("acknowledges the review receipt on the warm path", () => {
-		getTerminal.mockReturnValue({ show: vi.fn() });
-		const acknowledgeReview = vi.fn();
-
-		buildService(undefined, acknowledgeReview).requestFocus("f1", "a1");
-
-		expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1");
-	});
-
-	it("acknowledges the review receipt on the cold path", async () => {
-		getTerminal.mockReturnValue(undefined);
-		const acknowledgeReview = vi.fn();
-
-		buildService(undefined, acknowledgeReview).requestFocus("f1", "a1");
-
-		expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1");
-	});
-
-	it("isolates a throwing acknowledgeReview dep from focus itself", () => {
-		getTerminal.mockReturnValue({ show: vi.fn() });
-		vi.spyOn(console, "warn").mockImplementation(() => {});
-		const acknowledgeReview = vi.fn(() => {
-			throw new Error("store boom");
+	describe("review receipt acknowledgement (PR2 review round 2, blocker 1)", () => {
+		beforeEach(() => {
+			vi.useFakeTimers();
 		});
-		const states: string[] = [];
 
-		expect(() =>
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("warm path: focuses synchronously and defers acknowledgement off the click stack (G1)", () => {
+			getTerminal.mockReturnValue({ show: vi.fn() });
+			const acknowledgeReview = vi.fn();
+			const states: string[] = [];
+
 			buildService(undefined, acknowledgeReview).requestFocus(
 				"f1",
 				"a1",
 				track(states),
-			),
-		).not.toThrow();
+			);
 
-		expect(states).toEqual(["focused"]);
+			// The reveal itself is fully synchronous — no acknowledgement
+			// side effect has run yet on this same call stack.
+			expect(states).toEqual(["focused"]);
+			expect(acknowledgeReview).not.toHaveBeenCalled();
+
+			vi.runAllTimers();
+
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1");
+		});
+
+		it("cold path success: acknowledges only after reconciliation actually reveals a terminal", async () => {
+			getTerminal.mockReturnValue(undefined);
+			const acknowledgeReview = vi.fn();
+
+			buildService(undefined, acknowledgeReview).requestFocus("f1", "a1");
+
+			expect(acknowledgeReview).not.toHaveBeenCalled();
+
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1");
+		});
+
+		it("cold path failure: a reconciliation that never reveals a terminal never acknowledges the receipt", async () => {
+			getTerminal.mockReturnValue(undefined);
+			focusOrCreateTerminalAsync.mockResolvedValue(undefined);
+			const acknowledgeReview = vi.fn();
+
+			buildService(undefined, acknowledgeReview).requestFocus("f1", "a1");
+
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(acknowledgeReview).not.toHaveBeenCalled();
+		});
+
+		it("cold path: a superseded reconciliation never acknowledges the receipt", async () => {
+			getTerminal.mockImplementation((id: string) =>
+				id === "a2" ? { show: vi.fn() } : undefined,
+			);
+			let resolveA!: (terminal: unknown) => void;
+			focusOrCreateTerminalAsync.mockReturnValue(
+				new Promise((resolve) => {
+					resolveA = resolve;
+				}),
+			);
+			const acknowledgeReview = vi.fn();
+
+			const service = buildService(undefined, acknowledgeReview);
+			service.requestFocus("f1", "a1");
+			service.requestFocus("f1", "a2");
+
+			resolveA({ show: vi.fn() });
+			await vi.advanceTimersByTimeAsync(0);
+
+			// Only the winning warm request (a2) acknowledges; the superseded
+			// cold request (a1) never does, even though its promise settled
+			// with a terminal.
+			expect(acknowledgeReview).toHaveBeenCalledTimes(1);
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a2");
+		});
+
+		it("isolates a throwing acknowledgeReview dep from focus itself", () => {
+			getTerminal.mockReturnValue({ show: vi.fn() });
+			vi.spyOn(console, "warn").mockImplementation(() => {});
+			const acknowledgeReview = vi.fn(() => {
+				throw new Error("store boom");
+			});
+			const states: string[] = [];
+
+			expect(() =>
+				buildService(undefined, acknowledgeReview).requestFocus(
+					"f1",
+					"a1",
+					track(states),
+				),
+			).not.toThrow();
+			expect(states).toEqual(["focused"]);
+
+			expect(() => vi.runAllTimers()).not.toThrow();
+			expect(acknowledgeReview).toHaveBeenCalledWith("f1", "a1");
+		});
 	});
 
 	it("missing terminal controller is a silent no-op", () => {

@@ -53,9 +53,12 @@ export interface AgentFocusDeps {
 	resolveFeature: ProjectManager["resolveFeature"];
 	/**
 	 * Best-effort receipt-acknowledgement hook: clears a pending "ready for
-	 * review" receipt for this exact agent. Must stay cheap and
-	 * non-blocking (in-memory lookup only, no Git exec) — it runs on every
-	 * focus request, including the warm path's zero-exec guarantee (G1).
+	 * review" receipt for this exact agent. Called only after a request has
+	 * genuinely reveled a terminal to the user — never on a request that
+	 * fails, is superseded, or targets an unknown feature/agent — and always
+	 * deferred off the calling stack (see {@link requestFocus}), so it can
+	 * do real (synchronous disk) work without violating the warm path's
+	 * zero-exec-on-the-click guarantee (G1).
 	 */
 	acknowledgeReview?(featureId: string, agentId: string): void;
 }
@@ -81,16 +84,6 @@ export class AgentFocusService {
 		const terminalController = this.deps.getTerminalController();
 		if (!terminalController || !featureId) return;
 
-		// Opening/focusing this exact agent is the acknowledgement signal for
-		// its "ready for review" receipt (issue #120 section B/PR2). Runs on
-		// every request, warm or cold, so it must be cheap and non-blocking —
-		// isolated so a misbehaving dep can never break focus itself.
-		try {
-			this.deps.acknowledgeReview?.(featureId, agentId);
-		} catch (error) {
-			console.warn(`[AgentSpace] review acknowledgement failed: ${error}`);
-		}
-
 		// G1 — strict fast path FIRST, before any feature/agent resolution:
 		// resolving a feature can run synchronous git execs on the Extension
 		// Host, and this is the hot interactive path. A tracked terminal is
@@ -102,6 +95,12 @@ export class AgentFocusService {
 			this.focusSequence += 1;
 			existing.show();
 			observer?.onState?.("focused");
+			// Opening/focusing this exact agent is the acknowledgement signal
+			// for its "ready for review" receipt (issue #120 section B/PR2).
+			// Fired only now that the reveal has genuinely happened, and
+			// deferred off this call stack so its disk write can never count
+			// against G1's zero-exec-on-the-click guarantee.
+			this.deferAcknowledgeReview(featureId, agentId);
 			return;
 		}
 
@@ -140,6 +139,10 @@ export class AgentFocusService {
 			const current = focusSeq === this.focusSequence;
 			if (current && terminal) {
 				terminal.show();
+				// Only a genuine, non-superseded reveal acknowledges the
+				// receipt — never on failure, never when a newer request has
+				// already taken over.
+				this.deferAcknowledgeReview(featureId, agentId);
 			}
 			settle(current ? (terminal ? "focused" : "failed") : undefined);
 		};
@@ -151,5 +154,22 @@ export class AgentFocusService {
 				);
 				finish(undefined);
 			});
+	}
+
+	/**
+	 * Runs the review-acknowledgement dep off the calling stack (a macrotask
+	 * away) so its synchronous disk write never counts against the warm
+	 * path's "zero exec on the click" guarantee (G1) — isolated in a
+	 * try/catch so a misbehaving dep can never surface as a focus failure.
+	 */
+	private deferAcknowledgeReview(featureId: string, agentId: string): void {
+		if (!this.deps.acknowledgeReview) return;
+		setTimeout(() => {
+			try {
+				this.deps.acknowledgeReview?.(featureId, agentId);
+			} catch (error) {
+				console.warn(`[AgentSpace] review acknowledgement failed: ${error}`);
+			}
+		}, 0);
 	}
 }

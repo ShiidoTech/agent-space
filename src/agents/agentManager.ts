@@ -70,8 +70,9 @@ export class AgentManager {
 	}
 
 	getAgents(featureId: string): Agent[] {
+		const pending = this.store.loadReviewInbox(featureId);
 		return this.loadAgents(featureId).map((agent) =>
-			this.withAttentionStatus(agent),
+			this.withPendingReview(this.withAttentionStatus(agent), pending),
 		);
 	}
 
@@ -82,15 +83,19 @@ export class AgentManager {
 	 */
 	async getAgentsAsync(featureId: string): Promise<Agent[]> {
 		const agents = this.loadAgents(featureId);
+		const pending = this.store.loadReviewInbox(featureId);
 		return Promise.all(
 			agents.map(async (agent) => {
 				const attention = await this.attentionResolver.resolveAsync(agent);
-				return {
-					...agent,
-					attentionStatus: attention.status,
-					attentionReason: attention.reason,
-					attentionSource: attention.source,
-				};
+				return this.withPendingReview(
+					{
+						...agent,
+						attentionStatus: attention.status,
+						attentionReason: attention.reason,
+						attentionSource: attention.source,
+					},
+					pending,
+				);
 			}),
 		);
 	}
@@ -101,7 +106,10 @@ export class AgentManager {
 	 * and must never block the Extension Host or replace the last-known model.
 	 */
 	getAgentsReadModel(featureId: string): Agent[] {
-		return this.store.loadAgents(featureId).map((agent) => ({ ...agent }));
+		const pending = this.store.loadReviewInbox(featureId);
+		return this.store
+			.loadAgents(featureId)
+			.map((agent) => this.withPendingReview({ ...agent }, pending));
 	}
 
 	/** Persist startup restore state without populating the normalized cache. */
@@ -117,7 +125,9 @@ export class AgentManager {
 
 	getAgent(featureId: string, agentId: string): Agent | undefined {
 		const agent = this.loadAgents(featureId).find((a) => a.id === agentId);
-		return agent ? this.withAttentionStatus(agent) : undefined;
+		if (!agent) return undefined;
+		const pending = this.store.loadReviewInbox(featureId);
+		return this.withPendingReview(this.withAttentionStatus(agent), pending);
 	}
 
 	getObservation(featureId: string, agentId: string) {
@@ -321,11 +331,10 @@ export class AgentManager {
 		featureId: string,
 		reviewId: string,
 	): void {
-		const agents = this.loadAgents(featureId);
-		const agent = agents.find((a) => a.id === agentId);
-		if (!agent) return;
-		agent.pendingReviewId = reviewId;
-		this.saveAgents(featureId, agents);
+		if (!this.loadAgents(featureId).some((a) => a.id === agentId)) return;
+		const pending = this.store.loadReviewInbox(featureId);
+		pending[agentId] = reviewId;
+		this.store.saveReviewInbox(featureId, pending);
 	}
 
 	/**
@@ -336,11 +345,10 @@ export class AgentManager {
 	 * `AgentFocusService`'s no-op-on-unknown semantics.
 	 */
 	acknowledgeReview(agentId: string, featureId: string): void {
-		const agents = this.loadAgents(featureId);
-		const agent = agents.find((a) => a.id === agentId);
-		if (!agent?.pendingReviewId) return;
-		agent.pendingReviewId = undefined;
-		this.saveAgents(featureId, agents);
+		const pending = this.store.loadReviewInbox(featureId);
+		if (!(agentId in pending)) return;
+		delete pending[agentId];
+		this.store.saveReviewInbox(featureId, pending);
 	}
 
 	updateAgentSessionId(
@@ -416,6 +424,11 @@ export class AgentManager {
 		delete agent.lastError;
 		delete agent.lastExitCode;
 		this.saveAgents(featureId, agents);
+		// A closed agent takes no further turns, so any unacknowledged
+		// receipt can never be reviewed by opening it again; clear it here
+		// rather than let it resurface as "Ready for review" if the agent
+		// is later reopened.
+		this.acknowledgeReview(agentId, featureId);
 	}
 
 	/**
@@ -533,14 +546,22 @@ export class AgentManager {
 			featureId,
 			agents.filter((a) => a.id !== agentId),
 		);
+		this.acknowledgeReview(agentId, featureId);
 	}
 
 	deleteAllAgents(featureId: string): void {
-		const remaining = this.loadAgents(featureId).filter((agent) => {
+		const before = this.loadAgents(featureId);
+		const remaining = before.filter((agent) => {
 			if (!agent.worktreePath) return false;
 			return !this.removeWorktree(agent.worktreePath).removed;
 		});
 		this.saveAgents(featureId, remaining);
+		const stillPresent = new Set(remaining.map((a) => a.id));
+		for (const agent of before) {
+			if (!stillPresent.has(agent.id)) {
+				this.acknowledgeReview(agent.id, featureId);
+			}
+		}
 	}
 
 	/** Remove only the agent worktree; keep its record until Feature cleanup succeeds. */
@@ -570,6 +591,21 @@ export class AgentManager {
 			attentionReason: attention.reason,
 			attentionSource: attention.source,
 		};
+	}
+
+	/**
+	 * Merge a review-inbox receipt onto a read-path copy of an agent. The
+	 * receipt lives in its own file (see `Store.loadReviewInbox`), never in
+	 * `agents.json`, so this merge happens only here — never inside
+	 * `loadAgents()`/`saveAgents()`, which stay the single source of truth
+	 * for what actually gets written to `agents.json`.
+	 */
+	private withPendingReview(
+		agent: Agent,
+		pending: Record<string, string>,
+	): Agent {
+		const reviewId = pending[agent.id];
+		return reviewId ? { ...agent, pendingReviewId: reviewId } : agent;
 	}
 
 	private loadAgents(featureId: string): Agent[] {

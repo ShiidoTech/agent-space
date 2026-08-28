@@ -241,6 +241,63 @@ describe("ProjectManager", () => {
 		});
 	});
 
+	describe("handleExternalFileChange", () => {
+		it("routes agents.json as structural (fail-safe default) and invalidates the agent cache", () => {
+			const project = manager.addProject(tmpDir);
+			const ctx = manager.getContext(project.id);
+			// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+			const invalidateSpy = vi.spyOn(ctx!.agentManager, "invalidateFeature");
+			const cb = vi.fn();
+			manager.onChange(cb);
+
+			manager.handleExternalFileChange({
+				fsPath: path.join(
+					tmpDir,
+					"projects",
+					project.id,
+					"features",
+					"feat-1",
+					"agents.json",
+				),
+			});
+
+			expect(invalidateSpy).toHaveBeenCalledWith("feat-1");
+			expect(cb).toHaveBeenCalledWith({
+				projectId: project.id,
+				featureId: "feat-1",
+			});
+			// Fail-safe default: no `structural: false` means a full rebuild.
+			expect(cb.mock.calls[0][0].structural).toBeUndefined();
+		});
+
+		it("routes review-inbox.json as structural: false, without touching the agent cache (PR2 review round 2, blocker 2)", () => {
+			const project = manager.addProject(tmpDir);
+			const ctx = manager.getContext(project.id);
+			// biome-ignore lint/style/noNonNullAssertion: test assertion guarantees defined
+			const invalidateSpy = vi.spyOn(ctx!.agentManager, "invalidateFeature");
+			const cb = vi.fn();
+			manager.onChange(cb);
+
+			manager.handleExternalFileChange({
+				fsPath: path.join(
+					tmpDir,
+					"projects",
+					project.id,
+					"features",
+					"feat-1",
+					"review-inbox.json",
+				),
+			});
+
+			expect(invalidateSpy).not.toHaveBeenCalled();
+			expect(cb).toHaveBeenCalledWith({
+				projectId: project.id,
+				featureId: "feat-1",
+				structural: false,
+			});
+		});
+	});
+
 	describe("initializeContext uses storagePath", () => {
 		it("stores data under storagePath/projects/<id>", () => {
 			const project = manager.addProject(tmpDir);
