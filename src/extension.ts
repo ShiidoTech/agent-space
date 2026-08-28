@@ -227,10 +227,18 @@ export async function activate(
 	const agentFocusService = new AgentFocusService({
 		getTerminalController: () => terminalController,
 		resolveFeature: (featureId) => projectManager.resolveFeature(featureId),
-		acknowledgeReview: (featureId, agentId) => {
+		peekPendingReviewId: (featureId, agentId) =>
 			projectManager
 				.findContextByFeatureIdFast(featureId)
-				?.agentManager.acknowledgeReview(agentId, featureId);
+				?.agentManager.peekPendingReviewId(featureId, agentId),
+		acknowledgeReview: (featureId, agentId, expectedReviewId) => {
+			projectManager
+				.findContextByFeatureIdFast(featureId)
+				?.agentManager.acknowledgeReviewIfMatches(
+					agentId,
+					featureId,
+					expectedReviewId,
+				);
 		},
 	});
 

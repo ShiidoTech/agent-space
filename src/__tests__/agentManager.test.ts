@@ -429,6 +429,68 @@ describe("AgentManager", () => {
 		});
 	});
 
+	describe("peekPendingReviewId / acknowledgeReviewIfMatches (PR2 review round 3)", () => {
+		it("peek is empty until a review-inbox read or write has happened in this process", () => {
+			const agent = manager.createAgent(feature);
+			expect(manager.peekPendingReviewId("f1", agent.id)).toBeUndefined();
+		});
+
+		it("recordTurnCompleted immediately updates the in-memory peek, without a read", () => {
+			const agent = manager.createAgent(feature);
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			expect(manager.peekPendingReviewId("f1", agent.id)).toBe("review-1");
+		});
+
+		it("a getAgents*/getAgent read also refreshes the in-memory peek", () => {
+			const agent = manager.createAgent(feature);
+			const reloaded = new AgentManager(
+				store,
+				tmpDir,
+				path.join(tmpDir, ".worktrees"),
+				tmux as never,
+				undefined,
+				new CodingToolRegistry(),
+			);
+			// Written by a different manager instance sharing the same store —
+			// `reloaded` has no in-memory knowledge of it yet.
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			expect(reloaded.peekPendingReviewId("f1", agent.id)).toBeUndefined();
+
+			reloaded.getAgents("f1");
+			expect(reloaded.peekPendingReviewId("f1", agent.id)).toBe("review-1");
+		});
+
+		it("clears the receipt only when it matches the expected id", () => {
+			const agent = manager.createAgent(feature);
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+
+			manager.acknowledgeReviewIfMatches(agent.id, "f1", "review-mismatch");
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBe("review-1");
+
+			manager.acknowledgeReviewIfMatches(agent.id, "f1", "review-1");
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBeUndefined();
+		});
+
+		// The exact race the reviewer's round-3 finding describes: a focus
+		// click captures R1 as the receipt to acknowledge; before that
+		// deferred acknowledgement runs, a newer completion R2 arrives. R2
+		// must survive the stale acknowledgement of R1.
+		it("a stale acknowledgement for an earlier receipt never clears a newer one", () => {
+			const agent = manager.createAgent(feature);
+			manager.recordTurnCompleted(agent.id, "f1", "review-1");
+			const expectedReviewId = manager.peekPendingReviewId("f1", agent.id);
+
+			// A newer completion races in before the (deferred, in the real
+			// AgentFocusService flow) acknowledgement of review-1 runs.
+			manager.recordTurnCompleted(agent.id, "f1", "review-2");
+
+			// biome-ignore lint/style/noNonNullAssertion: captured above, guaranteed defined
+			manager.acknowledgeReviewIfMatches(agent.id, "f1", expectedReviewId!);
+
+			expect(manager.getAgents("f1")[0].pendingReviewId).toBe("review-2");
+		});
+	});
+
 	describe("deleteAgent", () => {
 		it("removes agent", () => {
 			const agent = manager.createAgent(feature);

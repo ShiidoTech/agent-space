@@ -52,15 +52,33 @@ export interface AgentFocusDeps {
 	getTerminalController(): TerminalController | undefined;
 	resolveFeature: ProjectManager["resolveFeature"];
 	/**
-	 * Best-effort receipt-acknowledgement hook: clears a pending "ready for
-	 * review" receipt for this exact agent. Called only after a request has
-	 * genuinely reveled a terminal to the user — never on a request that
-	 * fails, is superseded, or targets an unknown feature/agent — and always
-	 * deferred off the calling stack (see {@link requestFocus}), so it can
-	 * do real (synchronous disk) work without violating the warm path's
-	 * zero-exec-on-the-click guarantee (G1).
+	 * Cheap, synchronous, in-memory peek at the review receipt currently
+	 * shown for this agent — never a disk read. Called synchronously at the
+	 * top of {@link requestFocus}, before any async work, to capture exactly
+	 * which receipt this click is about to acknowledge. This snapshot is
+	 * what later gets compared against in {@link acknowledgeReview}: a
+	 * receipt that arrives *after* the click but before the deferred
+	 * acknowledgement runs must never be silently swallowed by it (issue
+	 * #120 PR2, review round 3).
 	 */
-	acknowledgeReview?(featureId: string, agentId: string): void;
+	peekPendingReviewId?(featureId: string, agentId: string): string | undefined;
+	/**
+	 * Compare-and-clear receipt acknowledgement: clears the receipt only if
+	 * it still equals `expectedReviewId` (the value captured by
+	 * {@link peekPendingReviewId} at click time) — a newer, unrelated
+	 * completion that raced in after the click is left untouched. Called
+	 * only after a request has genuinely revealed a terminal to the user —
+	 * never on a request that fails, is superseded, or targets an unknown
+	 * feature/agent — and always deferred off the calling stack (see
+	 * {@link requestFocus}), so it can do real (synchronous disk) work
+	 * without violating the warm path's zero-exec-on-the-click guarantee
+	 * (G1).
+	 */
+	acknowledgeReview?(
+		featureId: string,
+		agentId: string,
+		expectedReviewId: string,
+	): void;
 }
 
 /** Unified agent-listing policy: prefer the non-probing read model. */
@@ -84,6 +102,16 @@ export class AgentFocusService {
 		const terminalController = this.deps.getTerminalController();
 		if (!terminalController || !featureId) return;
 
+		// Captured synchronously, before any async work — including before
+		// the warm-path reveal below — so the receipt this click ends up
+		// acknowledging is exactly the one the user was shown, never one
+		// that races in later. Cheap in-memory peek only (never disk), so
+		// it costs nothing against G1's warm-path guarantee.
+		const expectedReviewId = this.deps.peekPendingReviewId?.(
+			featureId,
+			agentId,
+		);
+
 		// G1 — strict fast path FIRST, before any feature/agent resolution:
 		// resolving a feature can run synchronous git execs on the Extension
 		// Host, and this is the hot interactive path. A tracked terminal is
@@ -100,7 +128,9 @@ export class AgentFocusService {
 			// Fired only now that the reveal has genuinely happened, and
 			// deferred off this call stack so its disk write can never count
 			// against G1's zero-exec-on-the-click guarantee.
-			this.deferAcknowledgeReview(featureId, agentId);
+			if (expectedReviewId) {
+				this.deferAcknowledgeReview(featureId, agentId, expectedReviewId);
+			}
 			return;
 		}
 
@@ -142,7 +172,9 @@ export class AgentFocusService {
 				// Only a genuine, non-superseded reveal acknowledges the
 				// receipt — never on failure, never when a newer request has
 				// already taken over.
-				this.deferAcknowledgeReview(featureId, agentId);
+				if (expectedReviewId) {
+					this.deferAcknowledgeReview(featureId, agentId, expectedReviewId);
+				}
 			}
 			settle(current ? (terminal ? "focused" : "failed") : undefined);
 		};
@@ -161,12 +193,19 @@ export class AgentFocusService {
 	 * away) so its synchronous disk write never counts against the warm
 	 * path's "zero exec on the click" guarantee (G1) — isolated in a
 	 * try/catch so a misbehaving dep can never surface as a focus failure.
+	 * `expectedReviewId` is the snapshot captured synchronously at click
+	 * time (see {@link AgentFocusDeps.peekPendingReviewId}), not whatever
+	 * happens to be pending when this timer fires.
 	 */
-	private deferAcknowledgeReview(featureId: string, agentId: string): void {
+	private deferAcknowledgeReview(
+		featureId: string,
+		agentId: string,
+		expectedReviewId: string,
+	): void {
 		if (!this.deps.acknowledgeReview) return;
 		setTimeout(() => {
 			try {
-				this.deps.acknowledgeReview?.(featureId, agentId);
+				this.deps.acknowledgeReview?.(featureId, agentId, expectedReviewId);
 			} catch (error) {
 				console.warn(`[AgentSpace] review acknowledgement failed: ${error}`);
 			}
