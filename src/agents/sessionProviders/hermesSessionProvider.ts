@@ -366,12 +366,18 @@ export class HermesSessionProvider implements ProviderSessionAdapter {
 	 * Derive the Hermes terminal id for an Agent Space tmux session by reading
 	 * the pane's pty path. Within tmux the pane always owns a pty, so this
 	 * mirrors the tty-device branch of Hermes' `get_terminal_id()` exactly.
+	 *
+	 * Ownership proof must come EXCLUSIVELY from the pane identified by
+	 * `context.tmuxSession`. If that pane has no readable tty, return
+	 * `undefined` — never fall back to `process.env` (the Extension Host's own
+	 * terminal, which could be a *different* tmux/zellij pane with a valid but
+	 * unrelated Hermes session).
 	 */
 	private resolveTerminalId(tmuxSession?: string): string | undefined {
 		if (!tmuxSession) return undefined;
 		const tty = this.paneTty.getPaneTty?.(tmuxSession) ?? null;
-		if (tty) return deriveHermesTerminalId(tty);
-		return deriveHermesTerminalIdFromEnv();
+		if (!tty) return undefined;
+		return deriveHermesTerminalId(tty);
 	}
 
 	private async resolveTerminalIdAsync(
@@ -382,8 +388,8 @@ export class HermesSessionProvider implements ProviderSessionAdapter {
 			(await this.paneTty.getPaneTtyAsync?.(tmuxSession)) ??
 			this.paneTty.getPaneTty?.(tmuxSession) ??
 			null;
-		if (tty) return deriveHermesTerminalId(tty);
-		return deriveHermesTerminalIdFromEnv();
+		if (!tty) return undefined;
+		return deriveHermesTerminalId(tty);
 	}
 
 	private readBreadcrumbFile(terminalId: string): HermesBreadcrumb | undefined {
@@ -468,6 +474,12 @@ export function deriveHermesTerminalId(ttyPath: string): string {
 /**
  * The terminal id Hermes would use when it cannot read a tty, derived from the
  * first multiplexer/emulator env var present (mirrors Hermes' fallback branch).
+ *
+ * Available as a helper for diagnostic/other uses ONLY. It MUST NOT be used as
+ * an Agent Space ownership proof: it reads the calling process's environment
+ * (potentially the Extension Host's own terminal), not the pane identified by
+ * an agent's `context.tmuxSession`. `correlateOwnedSession` deliberately never
+ * calls it (see {@link HermesSessionProvider.resolveTerminalId}).
  */
 export function deriveHermesTerminalIdFromEnv(): string | undefined {
 	for (const varName of HERMES_TERMINAL_ENV_VARS) {

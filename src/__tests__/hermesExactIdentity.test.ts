@@ -278,6 +278,51 @@ describe("Hermes exact identity — correlateOwnedSession", () => {
 			}),
 		).resolves.toBe("her_a");
 	});
+
+	it("pane tty absent, env points at a valid session -> still refuses (sync)", () => {
+		// Review blocker (PR3): the fallback to process.env must never be used as
+		// ownership proof. If the agent's pane has no readable tty, Hermes may have
+		// written a breadcrumb for a *different* terminal (the Extension Host's), so
+		// the env-derived id must not bind this agent to it.
+		const home = tmpHome("hermes-env-sync-");
+		makeStateDb(home, [{ id: "her_env", title: "env", cwd: WORKTREE }]);
+		// TMUX_PANE=%99 -> Hermes env id "tmux_pane--99".
+		makeBreadcrumb(home, "tmux_pane--99", "her_env", WORKTREE);
+		process.env.TMUX_PANE = "%99";
+		try {
+			// No pane returned by the resolver; the env says "a pane exists" but that
+			// is the Extension Host's own terminal, NOT this agent's pane.
+			const provider = new HermesSessionProvider(home, panes({}));
+			expect(
+				provider.correlateOwnedSession({
+					cwd: WORKTREE,
+					knownSessionIds: new Set(),
+					tmuxSession: "agent-space-base-a",
+				}),
+			).toBeUndefined();
+		} finally {
+			delete process.env.TMUX_PANE;
+		}
+	});
+
+	it("pane tty absent, env points at a valid session -> still refuses (async)", async () => {
+		const home = tmpHome("hermes-env-async-");
+		makeStateDb(home, [{ id: "her_env", title: "env", cwd: WORKTREE }]);
+		makeBreadcrumb(home, "tmux_pane--99", "her_env", WORKTREE);
+		process.env.TMUX_PANE = "%99";
+		try {
+			const provider = new HermesSessionProvider(home, panes({}));
+			await expect(
+				provider.async.correlateOwnedSession?.({
+					cwd: WORKTREE,
+					knownSessionIds: new Set(),
+					tmuxSession: "agent-space-base-a",
+				}),
+			).resolves.toBeUndefined();
+		} finally {
+			delete process.env.TMUX_PANE;
+		}
+	});
 });
 
 describe("Hermes native attention — honest, never invented", () => {
