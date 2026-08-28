@@ -8,6 +8,7 @@ import type { ProjectManager } from "../projects/projectManager";
 import type { Agent, CodingTool, Feature, Service } from "../types";
 import { exec, execAsync, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
+import { ensureHermesProjectSkillsTrusted } from "./hermesSkillTrust";
 import type { SessionBinder } from "./sessionBinder";
 import type { TmuxIntegration } from "./tmux";
 
@@ -155,6 +156,12 @@ export class TerminalController implements vscode.Disposable {
 					agent.sessionId,
 				);
 			}
+			// Ensure Hermes project skills in this worktree are trusted before
+			// launch, so skills load automatically without a manual trust step.
+			if (agent.hermesProfile && cwd) {
+				ensureHermesProjectSkillsTrusted(cwd, agent.hermesProfile);
+			}
+
 			// Fresh launches get the project's operational knowledge note so
 			// the agent's launch context shows which instructions/runbooks
 			// were made available. Resume/attach launches stay quiet.
@@ -373,6 +380,12 @@ export class TerminalController implements vscode.Disposable {
 					agent.sessionId,
 				);
 			}
+			// Ensure Hermes project skills in this worktree are trusted before
+			// launch, so skills load automatically without a manual trust step.
+			if (agent.hermesProfile && cwd) {
+				ensureHermesProjectSkillsTrusted(cwd, agent.hermesProfile);
+			}
+
 			const launchContextNote = shouldResume
 				? undefined
 				: this.buildAgentLaunchNote(feature);
