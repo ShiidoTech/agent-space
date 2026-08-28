@@ -1138,9 +1138,7 @@ describe("TerminalController", () => {
 			);
 
 			expect(terminal).toBeDefined();
-			expect(
-				ensureHermesProjectSkillsTrustedAsyncMock,
-			).toHaveBeenCalledOnce();
+			expect(ensureHermesProjectSkillsTrustedAsyncMock).toHaveBeenCalledOnce();
 			expect(ensureHermesProjectSkillsTrustedMock).not.toHaveBeenCalled();
 		});
 

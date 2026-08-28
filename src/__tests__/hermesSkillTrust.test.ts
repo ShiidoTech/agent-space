@@ -138,9 +138,9 @@ describe("ensureHermesProjectSkillsTrusted (sync)", () => {
 			throw new Error("hermes: command not found");
 		});
 
-		expect(() =>
-			ensureHermesProjectSkillsTrusted(wt, "agent-space"),
-		).toThrow("Failed to trust project skills");
+		expect(() => ensureHermesProjectSkillsTrusted(wt, "agent-space")).toThrow(
+			"Failed to trust project skills",
+		);
 	});
 
 	it("two different worktrees each invoke trust independently", () => {
