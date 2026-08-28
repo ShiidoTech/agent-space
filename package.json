@@ -250,6 +250,16 @@
 					"default": true,
 					"description": "Show a notification when a coding agent starts waiting for your input."
 				},
+				"agentSpace.notifyOnTurnCompleted": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show a notification when a coding agent finishes a turn after working (idle after working, not lifecycle done)."
+				},
+				"agentSpace.notifyOnAgentFailure": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show a notification when a coding agent fails."
+				},
 				"agentSpace.enablePerAgentIsolation": {
 					"type": "boolean",
 					"default": false,

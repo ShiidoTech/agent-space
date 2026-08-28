@@ -1,8 +1,8 @@
 import type {
-	AgentAttentionAlert,
+	AgentOperationalTransition,
 	AttentionWatchedAgent,
-} from "./agentAttentionNotifier";
-import { AgentAttentionNotifier } from "./agentAttentionNotifier";
+} from "./agentOperationalTransitions";
+import { AgentOperationalTransitionDetector } from "./agentOperationalTransitions";
 
 export interface AgentAttentionMonitorDeps {
 	/**
@@ -12,8 +12,8 @@ export interface AgentAttentionMonitorDeps {
 	 * coalesced: while a collection is in flight, further ticks are skipped.
 	 */
 	collect(): Promise<readonly AttentionWatchedAgent[]>;
-	/** Surface one alert — the host decides how (notification, sound, ...). */
-	onAlert(alert: AgentAttentionAlert): void;
+	/** Surface one transition — the host decides how (notification, sound, ...). */
+	onTransition(transition: AgentOperationalTransition): void;
 	onError?(error: unknown): void;
 }
 
@@ -33,15 +33,17 @@ const DEFAULT_NUDGE_DEBOUNCE_MS = 150;
  * change — and reacting to every unrelated change would turn each one into
  * a probe sweep of the whole fleet.
  *
- * This monitor polls on its own clock, fires alerts on the transition
- * itself (one alert per continuous waiting episode, deduplicated by
- * {@link AgentAttentionNotifier}) and keeps the Extension Host free:
+ * This monitor polls on its own clock, fires each normalized transition
+ * (`working_started`/`attention_required`/`turn_completed`/`failed`) on the
+ * edge itself — one per continuous episode, deduplicated by
+ * {@link AgentOperationalTransitionDetector} — and keeps the Extension Host
+ * free:
  * collection is asynchronous end to end and in-flight scans coalesce —
  * a slow tick never stacks up behind itself. External change hints arrive
  * via {@link nudge}, which coalesces bursts off the caller's stack.
  */
 export class AgentAttentionMonitor {
-	private readonly notifier = new AgentAttentionNotifier();
+	private readonly detector = new AgentOperationalTransitionDetector();
 	private timer?: ReturnType<typeof setInterval>;
 	private nudgeTimer?: ReturnType<typeof setTimeout>;
 	private scanning = false;
@@ -88,8 +90,8 @@ export class AgentAttentionMonitor {
 			const watched = await this.deps.collect();
 			if (this.disposed) return;
 			try {
-				for (const alert of this.notifier.scan(watched)) {
-					this.deps.onAlert(alert);
+				for (const transition of this.detector.scan(watched)) {
+					this.deps.onTransition(transition);
 				}
 			} catch (error) {
 				this.deps.onError?.(error);

@@ -1,5 +1,5 @@
 import type { Agent, Feature } from "../../types";
-import type { AttentionWatchedAgent } from "./agentAttentionNotifier";
+import type { AttentionWatchedAgent } from "./agentOperationalTransitions";
 
 /**
  * Minimal structural view of a project context for attention collection.
