@@ -413,9 +413,15 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 	// `commitRuntime()` recomputes) could keep showing stale state — e.g. an
 	// agent going `waiting_for_user` updated the sidebar/agent card badge but
 	// left the page's headline on the old "In progress" banner until the next
-	// full rebuild. This proves the runtime patch now also refreshes the
-	// cockpit/services/diagnostics containers, without ever assigning
-	// `webview.html`.
+	// full rebuild. Fourth review: the first fix sent whole rendered HTML
+	// subtrees (`cockpitHtml`/`servicesHtml`/`diagnosticsHtml`) for `home.js`
+	// to `innerHTML`-replace wholesale — which would have recreated any
+	// `<details>` nested inside (work/committed files, diagnostics) and
+	// discarded their open state, and could wipe live service-activity
+	// content on an unrelated agent-attention tick. `sendRuntimeUpdateAsync`
+	// now sends only the specific changed fields (see
+	// `homeRuntimePatchDom.test.ts` for the `home.js`-side DOM contract that
+	// proves those fields are patched by leaf id, never a parent container).
 	it("a working -> waiting_for_user runtime transition patches the Feature page's cockpit headline/primary action, not just the agent card, with zero webview.html assignments", async () => {
 		let currentSnapshot = buildFullSnapshot({ attention: [] });
 		const { panel, getHtmlAssignments, postMessage } = buildHomeFeaturePanel(
@@ -449,7 +455,12 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 			.map(([message]) => message)
 			.find((message) => message.type === "featureRuntimeUpdate");
 		expect(runtimeUpdate).toBeDefined();
-		expect(runtimeUpdate.cockpitHtml).toContain("Needs you");
+		expect(runtimeUpdate.headline).toBe("Needs you");
+		expect(runtimeUpdate.primaryActionHtml).toContain("Open Agent 1");
+		// No whole-subtree HTML blobs — only the specific changed fields.
+		expect(runtimeUpdate).not.toHaveProperty("cockpitHtml");
+		expect(runtimeUpdate).not.toHaveProperty("servicesHtml");
+		expect(runtimeUpdate).not.toHaveProperty("diagnosticsHtml");
 
 		const attentionUpdate = postMessage.mock.calls
 			.map(([message]) => message)

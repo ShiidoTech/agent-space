@@ -808,14 +808,17 @@ export class HomePanel {
 	/**
 	 * Re-render and patch every Feature-page projection that depends only on
 	 * runtime evidence (agent/service liveness) and the `attention` it
-	 * drives — cockpit headline/primary action/runtime label/alerts, the
-	 * services section, and tmux diagnostics — plus the agent cards and Git
-	 * stats block. Never assigns `webview.html`: issue #120 review flagged
-	 * that a `"runtime"`-kind change previously only patched the agent card
-	 * and Git stats, leaving the cockpit headline/primary action stale (e.g.
-	 * an agent going `waiting_for_user` updated the sidebar/agent card but
-	 * not the Feature page's "Needs you" banner) until the next full
-	 * rebuild — a cross-surface semantic divergence #120 requires eliminated.
+	 * drives — cockpit headline/primary action/runtime label/alerts and tmux
+	 * diagnostics — plus the agent cards and Git stats block. Every patch
+	 * targets a specific leaf element by id, never a parent container's
+	 * `innerHTML`, so `<details>` open/closed state and focus elsewhere on
+	 * the page survive. Never assigns `webview.html`: issue #120 review
+	 * flagged that a `"runtime"`-kind change previously only patched the
+	 * agent card and Git stats, leaving the cockpit headline/primary action
+	 * stale (e.g. an agent going `waiting_for_user` updated the sidebar/
+	 * agent card but not the Feature page's "Needs you" banner) until the
+	 * next full rebuild — a cross-surface semantic divergence #120 requires
+	 * eliminated.
 	 */
 	private async sendRuntimeUpdateAsync(): Promise<void> {
 		if (!this.currentFeatureId) return;
@@ -844,23 +847,33 @@ export class HomePanel {
 			});
 		}
 
+		// Patches only the specific runtime-derived fields via stable ids —
+		// never a parent container's `innerHTML` — so any `<details>` the
+		// user has expanded elsewhere on the page (work/committed files,
+		// diagnostics, service activity panels) and any focus/scroll
+		// position survive the patch (issue #120 review: a full-subtree
+		// replace recreates child `<details>` and silently resets `open`).
+		// The Services section is intentionally not touched here: it never
+		// changes from a runtime-only attention tick — stop/restart/add/
+		// remove already go through the structural (full-rebuild) path.
 		const cockpit = presentFeatureCockpit(
 			snapshot,
 			this.featureStateCoordinator.getProjectReferenceHealth(
 				snapshot.projectId,
 			),
 		);
-		const servicesKnown = snapshot.runtime.services.status === "known";
 		this.panel.webview.postMessage({
 			type: "featureRuntimeUpdate",
-			cockpitHtml: this.renderFeatureCockpit(cockpit, snapshot),
-			servicesHtml: servicesKnown
-				? this.renderServicesSection(
-						this.snapshotServices(snapshot),
-						snapshot.feature as Feature,
-					)
-				: undefined,
-			diagnosticsHtml: this.renderFeatureDiagnostics(snapshot),
+			headline: cockpit.summary.label,
+			detail: cockpit.summary.detail ?? "",
+			runtimeLabel: cockpit.runtime.label,
+			primaryActionHtml: this.renderCockpitPrimaryAction(
+				cockpit.primaryAction,
+				snapshot.feature.id,
+			),
+			alertsHtml: this.renderCockpitAlerts(cockpit),
+			diagnosticsSummary: this.diagnosticsSessionSummary(snapshot),
+			diagnosticsContentHtml: this.renderFeatureTmuxSection(snapshot),
 		});
 	}
 
@@ -1388,7 +1401,7 @@ export class HomePanel {
 						feature,
 						ctx.featureManager?.isProvisioningActive?.(feature.id) ?? false,
 					)}
-				<div id="feature-cockpit-container">${this.renderFeatureCockpit(cockpit, snapshot)}</div>
+				${this.renderFeatureCockpit(cockpit, snapshot)}
 				${runtimeNotice}
 			${
 				agentsKnown
@@ -1402,8 +1415,8 @@ export class HomePanel {
 						)
 					: ""
 			}
-			<div id="feature-services-container">${servicesKnown ? this.renderServicesSection(services, feature) : ""}</div>
-			<div id="feature-diagnostics-container">${this.renderFeatureDiagnostics(snapshot)}</div>
+			${servicesKnown ? this.renderServicesSection(services, feature) : ""}
+			${this.renderFeatureDiagnostics(snapshot)}
 			${this.renderQuickActions(
 				feature,
 				ctx.featureManager.getBootstrapCommands().length > 0,
@@ -1517,23 +1530,20 @@ export class HomePanel {
 </html>`;
 	}
 
-	private renderFeatureCockpit(
-		cockpit: FeatureCockpitPresentation,
-		snapshot: FeatureSnapshot,
-	): string {
-		const primary = this.renderCockpitPrimaryAction(
-			cockpit.primaryAction,
-			snapshot.feature.id,
-		);
-		const headline = cockpit.summary.label;
-		const summaryDetail = cockpit.summary.detail;
+	/**
+	 * The `<details class="feature-attention-card">` "more alerts" widget.
+	 * Extracted so the runtime patch path (`sendRuntimeUpdateAsync`) can
+	 * regenerate just this fragment — its own `<details>` open/closed state
+	 * is expected to reset when alerts genuinely change (that's the update
+	 * being reported), unlike the unrelated work/committed/diagnostics
+	 * `<details>` elsewhere on the page, which a runtime tick must not touch.
+	 */
+	private renderCockpitAlerts(cockpit: FeatureCockpitPresentation): string {
 		const remainingAlerts = cockpit.alerts.slice(1);
 		const remainingAlertCount =
 			remainingAlerts.length + cockpit.hiddenAlertCount;
-		const alerts =
-			remainingAlertCount === 0
-				? ""
-				: `<details class="feature-attention-card">
+		if (remainingAlertCount === 0) return "";
+		return `<details class="feature-attention-card">
 					<summary>${remainingAlertCount} more item${remainingAlertCount === 1 ? "" : "s"} need attention</summary>
 					${remainingAlerts
 						.map(
@@ -1547,6 +1557,19 @@ export class HomePanel {
 						.join("")}
 					${cockpit.hiddenAlertCount > 0 ? `<div class="feature-cockpit-observed">${cockpit.hiddenAlertCount} additional item${cockpit.hiddenAlertCount === 1 ? "" : "s"} available after refresh</div>` : ""}
 				</details>`;
+	}
+
+	private renderFeatureCockpit(
+		cockpit: FeatureCockpitPresentation,
+		snapshot: FeatureSnapshot,
+	): string {
+		const primary = this.renderCockpitPrimaryAction(
+			cockpit.primaryAction,
+			snapshot.feature.id,
+		);
+		const headline = cockpit.summary.label;
+		const summaryDetail = cockpit.summary.detail;
+		const alerts = this.renderCockpitAlerts(cockpit);
 		const working = cockpit.work.workingTree;
 		const workingBreakdown =
 			working.status === "known"
@@ -1574,13 +1597,13 @@ export class HomePanel {
 		return `<section class="feature-cockpit">
 			<div class="feature-cockpit-summary">
 				<div class="feature-cockpit-summary-copy">
-					<strong>${this.escapeHtml(headline)}</strong>
-					${summaryDetail ? `<span class="feature-cockpit-summary-detail">${this.escapeHtml(summaryDetail)}</span>` : ""}
-					<span class="feature-cockpit-summary-meta">${this.escapeHtml(cockpit.runtime.label)}</span>
+					<strong id="feature-cockpit-headline">${this.escapeHtml(headline)}</strong>
+					<span id="feature-cockpit-detail" class="feature-cockpit-summary-detail" style="${summaryDetail ? "" : "display:none"}">${summaryDetail ? this.escapeHtml(summaryDetail) : ""}</span>
+					<span id="feature-cockpit-runtime-label" class="feature-cockpit-summary-meta">${this.escapeHtml(cockpit.runtime.label)}</span>
 				</div>
-				${primary}
+				<div id="feature-cockpit-primary-action">${primary}</div>
 			</div>
-			${alerts}
+			<div id="feature-cockpit-alerts">${alerts}</div>
 			<div class="feature-cockpit-grid">
 				<div class="feature-cockpit-card">
 					<h3>Work</h3>
@@ -2346,15 +2369,25 @@ export class HomePanel {
 		</div>`;
 	}
 
-	private renderFeatureDiagnostics(snapshot: FeatureSnapshot): string {
+	private diagnosticsSessionSummary(snapshot: FeatureSnapshot): string {
 		const { liveRows, unknownRows } = this.getTmuxSessionRows(snapshot);
-		const sessionSummary =
-			unknownRows.length > 0
-				? "session state unknown"
-				: `${liveRows.length} live session${liveRows.length === 1 ? "" : "s"}`;
+		return unknownRows.length > 0
+			? "session state unknown"
+			: `${liveRows.length} live session${liveRows.length === 1 ? "" : "s"}`;
+	}
+
+	/**
+	 * The `<details>` element itself is only ever produced here, at initial
+	 * render — the runtime patch path (`sendRuntimeUpdateAsync`) only ever
+	 * replaces the inner `#feature-diagnostics-content`/`#feature-diagnostics-summary`
+	 * text, so a user-expanded `<details open>` survives a tmux-liveness tick
+	 * (issue #120 review: a parent `innerHTML` reassignment would recreate
+	 * the `<details>` and silently discard its `open` state).
+	 */
+	private renderFeatureDiagnostics(snapshot: FeatureSnapshot): string {
 		return `<details class="feature-diagnostics">
-			<summary>Diagnostics · ${sessionSummary}</summary>
-			<div class="feature-diagnostics-content">${this.renderFeatureTmuxSection(snapshot)}</div>
+			<summary id="feature-diagnostics-summary">Diagnostics · ${this.diagnosticsSessionSummary(snapshot)}</summary>
+			<div id="feature-diagnostics-content" class="feature-diagnostics-content">${this.renderFeatureTmuxSection(snapshot)}</div>
 		</details>`;
 	}
 

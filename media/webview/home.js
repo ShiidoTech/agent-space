@@ -81,8 +81,7 @@ function filterProblems(severity) {
 	for (const btn of document.querySelectorAll(".problems-filter")) {
 		btn.classList.toggle(
 			"active",
-			(/** @type {HTMLElement} */ (btn).dataset.severity ?? "all") ===
-				severity,
+			/** @type {HTMLElement} */ (btn.dataset.severity ?? "all") === severity,
 		);
 	}
 }
@@ -400,25 +399,63 @@ window.addEventListener("message", (event) => {
 			break;
 		}
 		case "featureRuntimeUpdate": {
-			// Patches every Feature-page projection derived from runtime
-			// evidence (cockpit headline/primary action/runtime label/alerts,
-			// services, tmux diagnostics) without a full document reload —
-			// issue #120 (cross-surface staleness after a runtime-only change).
-			const cockpitEl = document.getElementById("feature-cockpit-container");
-			if (cockpitEl && typeof message.cockpitHtml === "string") {
-				cockpitEl.innerHTML = message.cockpitHtml;
+			// Patches only the specific runtime-derived Feature-page fields
+			// (cockpit headline/primary action/runtime label/alerts, tmux
+			// diagnostics) via stable ids — never a parent container's
+			// innerHTML — so any <details> the user has expanded elsewhere
+			// on the page (work/committed files, services activity panels)
+			// and any focus/scroll position are left untouched. Issue #120
+			// review: a prior version replaced whole subtrees, which silently
+			// recreated nested <details> (resetting their open state) and
+			// could wipe live service-activity content on an unrelated agent
+			// attention tick. The Services section is never touched here —
+			// stop/restart/add/remove already go through a full rebuild.
+			const headlineEl = document.getElementById("feature-cockpit-headline");
+			if (headlineEl && typeof message.headline === "string") {
+				headlineEl.textContent = message.headline;
 			}
-			if (typeof message.servicesHtml === "string") {
-				const servicesEl = document.getElementById(
-					"feature-services-container",
-				);
-				if (servicesEl) servicesEl.innerHTML = message.servicesHtml;
+			const detailEl = document.getElementById("feature-cockpit-detail");
+			if (detailEl) {
+				if (message.detail) {
+					detailEl.textContent = message.detail;
+					detailEl.style.display = "";
+				} else {
+					detailEl.style.display = "none";
+				}
 			}
-			const diagnosticsEl = document.getElementById(
-				"feature-diagnostics-container",
+			const runtimeLabelEl = document.getElementById(
+				"feature-cockpit-runtime-label",
 			);
-			if (diagnosticsEl && typeof message.diagnosticsHtml === "string") {
-				diagnosticsEl.innerHTML = message.diagnosticsHtml;
+			if (runtimeLabelEl && typeof message.runtimeLabel === "string") {
+				runtimeLabelEl.textContent = message.runtimeLabel;
+			}
+			const primaryActionEl = document.getElementById(
+				"feature-cockpit-primary-action",
+			);
+			if (primaryActionEl && typeof message.primaryActionHtml === "string") {
+				primaryActionEl.innerHTML = message.primaryActionHtml;
+			}
+			const alertsEl = document.getElementById("feature-cockpit-alerts");
+			if (alertsEl && typeof message.alertsHtml === "string") {
+				alertsEl.innerHTML = message.alertsHtml;
+			}
+			const diagnosticsSummaryEl = document.getElementById(
+				"feature-diagnostics-summary",
+			);
+			if (
+				diagnosticsSummaryEl &&
+				typeof message.diagnosticsSummary === "string"
+			) {
+				diagnosticsSummaryEl.textContent = `Diagnostics · ${message.diagnosticsSummary}`;
+			}
+			const diagnosticsContentEl = document.getElementById(
+				"feature-diagnostics-content",
+			);
+			if (
+				diagnosticsContentEl &&
+				typeof message.diagnosticsContentHtml === "string"
+			) {
+				diagnosticsContentEl.innerHTML = message.diagnosticsContentHtml;
 			}
 			break;
 		}
