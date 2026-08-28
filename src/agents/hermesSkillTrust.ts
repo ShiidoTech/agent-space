@@ -1,6 +1,6 @@
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFile, execFileAsync } from "../utils/platform";
 
 /**
  * Hermes project-skill trust locations, matching Hermes' own discovery order.
@@ -25,6 +25,13 @@ export function hasProjectSkills(worktreePath: string): boolean {
 	});
 }
 
+function trustArgs(
+	hermesProfile: string,
+	worktreePath: string,
+): [string, string[]] {
+	return ["hermes", ["-p", hermesProfile, "skills", "trust", worktreePath]];
+}
+
 /**
  * Ensure a worktree is trusted by Hermes so its project skills load
  * automatically on session start.
@@ -40,6 +47,9 @@ export function hasProjectSkills(worktreePath: string): boolean {
  * scoped to the resolved profile via `-p <profile>`. Agent Space never
  * manipulates Hermes config files directly.
  *
+ * **Synchronous** variant — use {@link ensureHermesProjectSkillsTrustedAsync}
+ * on interactive/async code paths to keep the extension host event loop free.
+ *
  * @param worktreePath  Absolute path to the feature worktree.
  * @param hermesProfile Profile name frozen on the agent (e.g. "agent-space").
  * @throws When the `hermes skills trust` command exits non-zero.
@@ -50,17 +60,37 @@ export function ensureHermesProjectSkillsTrusted(
 ): void {
 	if (!hasProjectSkills(worktreePath)) return;
 
+	const [file, args] = trustArgs(hermesProfile, worktreePath);
 	try {
-		execFileSync(
-			"hermes",
-			["-p", hermesProfile, "skills", "trust", worktreePath],
-			{
-				encoding: "utf8",
-				timeout: 10_000,
-				cwd: worktreePath,
-				stdio: ["ignore", "pipe", "pipe"],
-			},
+		execFile(file, args, { cwd: worktreePath });
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		throw new Error(
+			`Failed to trust project skills in ${worktreePath}: ` +
+				`hermes skills trust exited with: ${detail}`,
 		);
+	}
+}
+
+/**
+ * Async twin of {@link ensureHermesProjectSkillsTrusted}. Uses
+ * `execFileAsync` so the extension host event loop stays free while
+ * the subprocess runs — mandatory on the interactive click path
+ * (see `TerminalController.createTerminalAsync`).
+ *
+ * @param worktreePath  Absolute path to the feature worktree.
+ * @param hermesProfile Profile name frozen on the agent (e.g. "agent-space").
+ * @throws When the `hermes skills trust` command exits non-zero.
+ */
+export async function ensureHermesProjectSkillsTrustedAsync(
+	worktreePath: string,
+	hermesProfile: string,
+): Promise<void> {
+	if (!hasProjectSkills(worktreePath)) return;
+
+	const [file, args] = trustArgs(hermesProfile, worktreePath);
+	try {
+		await execFileAsync(file, args, { cwd: worktreePath });
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
 		throw new Error(

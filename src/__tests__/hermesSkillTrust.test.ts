@@ -3,21 +3,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:child_process")>();
-	return {
-		...actual,
-		execFileSync: vi.fn(actual.execFileSync),
-	};
-});
+vi.mock("../utils/platform", () => ({
+	execFile: vi.fn(),
+	execFileAsync: vi.fn(),
+}));
 
-import { execFileSync } from "node:child_process";
 import {
 	ensureHermesProjectSkillsTrusted,
+	ensureHermesProjectSkillsTrustedAsync,
 	hasProjectSkills,
 } from "../agents/hermesSkillTrust";
+import { execFile, execFileAsync } from "../utils/platform";
 
-const mockExecFileSync = vi.mocked(execFileSync);
+const mockExecFile = vi.mocked(execFile);
+const mockExecFileAsync = vi.mocked(execFileAsync);
 
 describe("hasProjectSkills", () => {
 	const tmpDirs: string[] = [];
@@ -70,11 +69,11 @@ describe("hasProjectSkills", () => {
 	});
 });
 
-describe("ensureHermesProjectSkillsTrusted", () => {
+describe("ensureHermesProjectSkillsTrusted (sync)", () => {
 	const tmpDirs: string[] = [];
 
 	afterEach(() => {
-		mockExecFileSync.mockReset();
+		mockExecFile.mockReset();
 		for (const dir of tmpDirs.splice(0)) {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -89,59 +88,59 @@ describe("ensureHermesProjectSkillsTrusted", () => {
 	it("does nothing when no project skills exist", () => {
 		const wt = makeWorktree();
 		ensureHermesProjectSkillsTrusted(wt, "agent-space");
-		expect(mockExecFileSync).not.toHaveBeenCalled();
+		expect(mockExecFile).not.toHaveBeenCalled();
 	});
 
 	it("invokes hermes skills trust with the correct profile and path", () => {
 		const wt = makeWorktree();
 		fs.mkdirSync(path.join(wt, ".agents", "skills"), { recursive: true });
-		mockExecFileSync.mockReturnValue("");
+		mockExecFile.mockReturnValue("");
 
 		ensureHermesProjectSkillsTrusted(wt, "agent-space");
 
-		expect(mockExecFileSync).toHaveBeenCalledOnce();
-		expect(mockExecFileSync).toHaveBeenCalledWith(
+		expect(mockExecFile).toHaveBeenCalledOnce();
+		expect(mockExecFile).toHaveBeenCalledWith(
 			"hermes",
 			["-p", "agent-space", "skills", "trust", wt],
-			expect.objectContaining({ cwd: wt }),
+			{ cwd: wt },
 		);
 	});
 
 	it("passes the default profile via -p default", () => {
 		const wt = makeWorktree();
 		fs.mkdirSync(path.join(wt, ".agents", "skills"), { recursive: true });
-		mockExecFileSync.mockReturnValue("");
+		mockExecFile.mockReturnValue("");
 
 		ensureHermesProjectSkillsTrusted(wt, "default");
 
-		expect(mockExecFileSync).toHaveBeenCalledWith(
+		expect(mockExecFile).toHaveBeenCalledWith(
 			"hermes",
 			["-p", "default", "skills", "trust", wt],
-			expect.objectContaining({ cwd: wt }),
+			{ cwd: wt },
 		);
 	});
 
 	it("is idempotent — repeated calls do not fail", () => {
 		const wt = makeWorktree();
 		fs.mkdirSync(path.join(wt, ".hermes", "skills"), { recursive: true });
-		mockExecFileSync.mockReturnValue("");
+		mockExecFile.mockReturnValue("");
 
 		ensureHermesProjectSkillsTrusted(wt, "agent-space");
 		ensureHermesProjectSkillsTrusted(wt, "agent-space");
 
-		expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+		expect(mockExecFile).toHaveBeenCalledTimes(2);
 	});
 
 	it("throws when the CLI exits non-zero with skills present", () => {
 		const wt = makeWorktree();
 		fs.mkdirSync(path.join(wt, ".agents", "skills"), { recursive: true });
-		mockExecFileSync.mockImplementation(() => {
+		mockExecFile.mockImplementation(() => {
 			throw new Error("hermes: command not found");
 		});
 
-		expect(() => ensureHermesProjectSkillsTrusted(wt, "agent-space")).toThrow(
-			"Failed to trust project skills",
-		);
+		expect(() =>
+			ensureHermesProjectSkillsTrusted(wt, "agent-space"),
+		).toThrow("Failed to trust project skills");
 	});
 
 	it("two different worktrees each invoke trust independently", () => {
@@ -149,23 +148,71 @@ describe("ensureHermesProjectSkillsTrusted", () => {
 		fs.mkdirSync(path.join(wtA, ".agents", "skills"), { recursive: true });
 		const wtB = makeWorktree();
 		fs.mkdirSync(path.join(wtB, ".hermes", "skills"), { recursive: true });
-		mockExecFileSync.mockReturnValue("");
+		mockExecFile.mockReturnValue("");
 
 		ensureHermesProjectSkillsTrusted(wtA, "agent-space");
 		ensureHermesProjectSkillsTrusted(wtB, "agent-space");
 
-		expect(mockExecFileSync).toHaveBeenCalledTimes(2);
-		expect(mockExecFileSync).toHaveBeenNthCalledWith(
+		expect(mockExecFile).toHaveBeenCalledTimes(2);
+		expect(mockExecFile).toHaveBeenNthCalledWith(
 			1,
 			"hermes",
 			["-p", "agent-space", "skills", "trust", wtA],
-			expect.objectContaining({ cwd: wtA }),
+			{ cwd: wtA },
 		);
-		expect(mockExecFileSync).toHaveBeenNthCalledWith(
+		expect(mockExecFile).toHaveBeenNthCalledWith(
 			2,
 			"hermes",
 			["-p", "agent-space", "skills", "trust", wtB],
-			expect.objectContaining({ cwd: wtB }),
+			{ cwd: wtB },
 		);
+	});
+});
+
+describe("ensureHermesProjectSkillsTrustedAsync", () => {
+	const tmpDirs: string[] = [];
+
+	afterEach(() => {
+		mockExecFileAsync.mockReset();
+		for (const dir of tmpDirs.splice(0)) {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	function makeWorktree(): string {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ht-trust-async-"));
+		tmpDirs.push(dir);
+		return dir;
+	}
+
+	it("does nothing when no project skills exist", async () => {
+		const wt = makeWorktree();
+		await ensureHermesProjectSkillsTrustedAsync(wt, "agent-space");
+		expect(mockExecFileAsync).not.toHaveBeenCalled();
+	});
+
+	it("invokes hermes skills trust asynchronously", async () => {
+		const wt = makeWorktree();
+		fs.mkdirSync(path.join(wt, ".agents", "skills"), { recursive: true });
+		mockExecFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
+
+		await ensureHermesProjectSkillsTrustedAsync(wt, "agent-space");
+
+		expect(mockExecFileAsync).toHaveBeenCalledOnce();
+		expect(mockExecFileAsync).toHaveBeenCalledWith(
+			"hermes",
+			["-p", "agent-space", "skills", "trust", wt],
+			{ cwd: wt },
+		);
+	});
+
+	it("throws when the async CLI exits non-zero", async () => {
+		const wt = makeWorktree();
+		fs.mkdirSync(path.join(wt, ".agents", "skills"), { recursive: true });
+		mockExecFileAsync.mockRejectedValue(new Error("trust failed"));
+
+		await expect(
+			ensureHermesProjectSkillsTrustedAsync(wt, "agent-space"),
+		).rejects.toThrow("Failed to trust project skills");
 	});
 });
