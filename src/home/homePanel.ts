@@ -862,18 +862,24 @@ export class HomePanel {
 				snapshot.projectId,
 			),
 		);
+		const primaryActionHtml = this.renderCockpitPrimaryAction(
+			cockpit.primaryAction,
+			snapshot.feature.id,
+		);
+		const alertsHtml = this.renderCockpitAlerts(cockpit);
+		const diagnosticsContentHtml = this.renderFeatureTmuxSection(snapshot);
 		this.panel.webview.postMessage({
 			type: "featureRuntimeUpdate",
 			headline: cockpit.summary.label,
 			detail: cockpit.summary.detail ?? "",
 			runtimeLabel: cockpit.runtime.label,
-			primaryActionHtml: this.renderCockpitPrimaryAction(
-				cockpit.primaryAction,
-				snapshot.feature.id,
-			),
-			alertsHtml: this.renderCockpitAlerts(cockpit),
+			primaryActionHtml,
+			primaryActionKey: this.contentKey(primaryActionHtml),
+			alertsHtml,
+			alertsKey: this.contentKey(alertsHtml),
 			diagnosticsSummary: this.diagnosticsSessionSummary(snapshot),
-			diagnosticsContentHtml: this.renderFeatureTmuxSection(snapshot),
+			diagnosticsContentHtml,
+			diagnosticsContentKey: this.contentKey(diagnosticsContentHtml),
 		});
 	}
 
@@ -1601,9 +1607,9 @@ export class HomePanel {
 					<span id="feature-cockpit-detail" class="feature-cockpit-summary-detail" style="${summaryDetail ? "" : "display:none"}">${summaryDetail ? this.escapeHtml(summaryDetail) : ""}</span>
 					<span id="feature-cockpit-runtime-label" class="feature-cockpit-summary-meta">${this.escapeHtml(cockpit.runtime.label)}</span>
 				</div>
-				<div id="feature-cockpit-primary-action">${primary}</div>
+				<div id="feature-cockpit-primary-action" data-key="${this.contentKey(primary)}">${primary}</div>
 			</div>
-			<div id="feature-cockpit-alerts">${alerts}</div>
+			<div id="feature-cockpit-alerts" data-key="${this.contentKey(alerts)}">${alerts}</div>
 			<div class="feature-cockpit-grid">
 				<div class="feature-cockpit-card">
 					<h3>Work</h3>
@@ -2385,9 +2391,10 @@ export class HomePanel {
 	 * the `<details>` and silently discard its `open` state).
 	 */
 	private renderFeatureDiagnostics(snapshot: FeatureSnapshot): string {
+		const tmuxSection = this.renderFeatureTmuxSection(snapshot);
 		return `<details class="feature-diagnostics">
 			<summary id="feature-diagnostics-summary">Diagnostics · ${this.diagnosticsSessionSummary(snapshot)}</summary>
-			<div id="feature-diagnostics-content" class="feature-diagnostics-content">${this.renderFeatureTmuxSection(snapshot)}</div>
+			<div id="feature-diagnostics-content" class="feature-diagnostics-content" data-key="${this.contentKey(tmuxSection)}">${tmuxSection}</div>
 		</details>`;
 	}
 
@@ -2624,6 +2631,25 @@ export class HomePanel {
 			.replace(/>/g, "&gt;")
 			.replace(/"/g, "&quot;")
 			.replace(/'/g, "&#039;");
+	}
+
+	/**
+	 * Deterministic content signature for a rendered HTML fragment. Used to
+	 * make runtime-only leaf patches idempotent: `home.js` compares this key
+	 * against the one it stored from the last patch (in a `data-*` attribute,
+	 * never against the live DOM's own `innerHTML` getter, whose serialization
+	 * can differ from the literal string that was assigned) and only
+	 * reassigns `innerHTML` — recreating the fragment's own child state
+	 * (a "more alerts" `<details>` the user opened, a focused Kill button) —
+	 * when the fragment actually changed (issue #120 review: an unrelated
+	 * runtime tick must not reset a leaf that didn't change).
+	 */
+	private contentKey(html: string): string {
+		let hash = 0;
+		for (let i = 0; i < html.length; i++) {
+			hash = (hash * 31 + html.charCodeAt(i)) | 0;
+		}
+		return hash.toString(36);
 	}
 }
 

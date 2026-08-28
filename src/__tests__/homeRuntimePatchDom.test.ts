@@ -22,6 +22,7 @@ function loadHomeJs() {
 			innerHTMLSetCount: 0,
 			textContent: "",
 			style: {},
+			dataset: {},
 			get innerHTML() {
 				return this._innerHTML;
 			},
@@ -105,9 +106,12 @@ describe("home.js featureRuntimeUpdate DOM contract (issue #120, PR #121 fourth 
 			runtimeLabel: "1 agent waiting",
 			primaryActionHtml:
 				"<button onclick=\"focusAgent('f1','a1')\">Open Agent 1</button>",
+			primaryActionKey: "action-1",
 			alertsHtml: "",
+			alertsKey: "alerts-1",
 			diagnosticsSummary: "1 live session",
 			diagnosticsContentHtml: "<div>live</div>",
+			diagnosticsContentKey: "diag-1",
 		});
 
 		expect(elements.get("feature-cockpit-headline").textContent).toBe(
@@ -167,5 +171,78 @@ describe("home.js featureRuntimeUpdate DOM contract (issue #120, PR #121 fourth 
 		});
 
 		expect(elements.get("feature-cockpit-detail").style.display).toBe("none");
+	});
+
+	// PR #121 fifth review: an unrelated runtime tick (e.g. a different
+	// agent's attention changing) must leave an *unchanged* leaf fragment
+	// completely alone — not just avoid touching its parent/siblings — so a
+	// "more alerts" <details> the user opened, a collapsed tmux group, or
+	// focus inside a Kill button all survive. This proves the three
+	// innerHTML-based leaves (primary action, alerts, diagnostics content)
+	// are skipped when the server-computed key repeats, and only reassigned
+	// when the key actually changes.
+	it("only reassigns a leaf's innerHTML when its content key changes, leaving unchanged leaves untouched", () => {
+		const { dispatch, elements } = loadHomeJs();
+		const primaryAction = elements.get("feature-cockpit-primary-action");
+		const alerts = elements.get("feature-cockpit-alerts");
+		const diagnosticsContent = elements.get("feature-diagnostics-content");
+		// Simulate state a user set inside these leaves before the tick, to
+		// prove it isn't touched when the key repeats.
+		primaryAction.focusedSentinel = "user-focused-button";
+		alerts.openSentinel = "user-expanded-details";
+		diagnosticsContent.collapsedSentinel = "user-expanded-group";
+
+		const firstUpdate = {
+			type: "featureRuntimeUpdate",
+			headline: "1 agent working",
+			detail: "",
+			runtimeLabel: "1 agent running",
+			primaryActionHtml: "<button>Continue</button>",
+			primaryActionKey: "action-1",
+			alertsHtml: "<details>alerts</details>",
+			alertsKey: "alerts-1",
+			diagnosticsSummary: "1 live session",
+			diagnosticsContentHtml: "<div>diagnostics</div>",
+			diagnosticsContentKey: "diag-1",
+		};
+		dispatch(firstUpdate);
+		expect(primaryAction.innerHTMLSetCount).toBe(1);
+		expect(alerts.innerHTMLSetCount).toBe(1);
+		expect(diagnosticsContent.innerHTMLSetCount).toBe(1);
+
+		// Second tick: only the headline changed (a different agent went
+		// waiting_for_user); every leaf key repeats.
+		dispatch({
+			...firstUpdate,
+			headline: "Needs you",
+			runtimeLabel: "1 agent waiting",
+		});
+
+		expect(elements.get("feature-cockpit-headline").textContent).toBe(
+			"Needs you",
+		);
+		// The three keyed leaves were never reassigned a second time...
+		expect(primaryAction.innerHTMLSetCount).toBe(1);
+		expect(alerts.innerHTMLSetCount).toBe(1);
+		expect(diagnosticsContent.innerHTMLSetCount).toBe(1);
+		// ...and whatever lived inside them (a sentinel standing in for open/
+		// focused/collapsed UI state) is exactly as it was.
+		expect(primaryAction.focusedSentinel).toBe("user-focused-button");
+		expect(alerts.openSentinel).toBe("user-expanded-details");
+		expect(diagnosticsContent.collapsedSentinel).toBe("user-expanded-group");
+
+		// A third tick where diagnostics genuinely changed (a tmux session
+		// died) patches only that leaf.
+		dispatch({
+			...firstUpdate,
+			diagnosticsContentHtml: "<div>diagnostics — session stopped</div>",
+			diagnosticsContentKey: "diag-2",
+		});
+		expect(diagnosticsContent.innerHTML).toBe(
+			"<div>diagnostics — session stopped</div>",
+		);
+		expect(diagnosticsContent.innerHTMLSetCount).toBe(2);
+		expect(primaryAction.innerHTMLSetCount).toBe(1);
+		expect(alerts.innerHTMLSetCount).toBe(1);
 	});
 });

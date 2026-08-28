@@ -373,6 +373,22 @@ function updateAttention(agent) {
 	}
 }
 
+/**
+ * Reassigns `innerHTML` only when the fragment's server-computed content key
+ * differs from the one stored from the last patch — never by comparing
+ * against `el.innerHTML` itself, whose browser-serialized form can differ
+ * from the literal string that was assigned. A runtime tick that leaves this
+ * leaf's rendered output unchanged (e.g. an unrelated agent's attention
+ * changing) is then a true no-op: it never recreates a "more alerts"
+ * <details> the user opened, resets a collapsed tmux group, or steals focus
+ * from a button inside the fragment (issue #120 review: idempotence).
+ */
+function patchKeyedFragment(el, html, key) {
+	if (key !== undefined && el.dataset.key === key) return;
+	el.innerHTML = html;
+	if (key !== undefined) el.dataset.key = key;
+}
+
 window.addEventListener("message", (event) => {
 	const message = event.data;
 	switch (message.type) {
@@ -433,11 +449,15 @@ window.addEventListener("message", (event) => {
 				"feature-cockpit-primary-action",
 			);
 			if (primaryActionEl && typeof message.primaryActionHtml === "string") {
-				primaryActionEl.innerHTML = message.primaryActionHtml;
+				patchKeyedFragment(
+					primaryActionEl,
+					message.primaryActionHtml,
+					message.primaryActionKey,
+				);
 			}
 			const alertsEl = document.getElementById("feature-cockpit-alerts");
 			if (alertsEl && typeof message.alertsHtml === "string") {
-				alertsEl.innerHTML = message.alertsHtml;
+				patchKeyedFragment(alertsEl, message.alertsHtml, message.alertsKey);
 			}
 			const diagnosticsSummaryEl = document.getElementById(
 				"feature-diagnostics-summary",
@@ -455,7 +475,11 @@ window.addEventListener("message", (event) => {
 				diagnosticsContentEl &&
 				typeof message.diagnosticsContentHtml === "string"
 			) {
-				diagnosticsContentEl.innerHTML = message.diagnosticsContentHtml;
+				patchKeyedFragment(
+					diagnosticsContentEl,
+					message.diagnosticsContentHtml,
+					message.diagnosticsContentKey,
+				);
 			}
 			break;
 		}
