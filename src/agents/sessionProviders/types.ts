@@ -10,6 +10,10 @@
  * per-terminal state (e.g. Hermes `$HERMES_HOME/terminal-sessions/<terminal-id>`).
  */
 export interface SessionCorrelationContext {
+	/** Agent Space identity making this provider request. */
+	readonly agentId?: string;
+	/** Feature identity making this provider request. */
+	readonly featureId?: string;
 	/** The agent's worktree / effective working directory. */
 	readonly cwd: string;
 	/** Sessions already attributed elsewhere (pre-launch baseline + taken by other agents). */
@@ -32,6 +36,12 @@ export interface SessionInfo {
 export interface SessionProvider {
 	toolId: string;
 	scanSessions(options?: { fresh?: boolean }): SessionInfo[];
+}
+
+/** A provider receipt returned by the provider control plane itself. */
+export interface ProviderConversationReceipt {
+	readonly sessionId: string;
+	readonly proof: string;
 }
 
 export interface SessionRenameAdapter {

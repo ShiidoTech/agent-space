@@ -41,13 +41,16 @@ Current provider identity findings:
 
 - Claude remains preassigned: Agent Space creates the UUID and passes it to
   `--session-id`.
-- Codex 0.147.0 exposes `thread/start` and `thread/resume` through its
-  experimental app-server protocol. `thread/start` returns a provider thread
-  identity, but the existing integration is a CLI/TUI launch and does not yet
-  have a supported way to hand that app-server-owned thread into the
-  interactive CLI. Agent Space therefore does not pretend that app-server
-  discovery proves ownership; Codex remains provider-assigned and uses
-  explicit attachment when the CLI did not persist an id.
+- Codex 0.150.1 exposes `thread/start` and `thread/resume` through its
+  experimental JSON-RPC app-server protocol. PR4 starts one shared
+  `codex app-server --stdio` connection per Codex adapter, creates the thread
+  before launching the UI, persists the returned `thread.id`, and launches
+  `codex resume <thread.id>`. `turn/started`, `turn/completed`, approval
+  requests, and `item/tool/requestUserInput` are consumed only when they carry
+  that exact thread id. A connection crash clears live structured evidence;
+  the next exact `thread/resume` is the only recovery path. Existing agents
+  without a verifiable id remain unresolved and are never adopted from a
+  recent rollout.
 - OpenCode 1.18.17 exposes `--session` for resume and a session database, but
   no launch option or provider-native ownership receipt was found in the CLI
   contract. Directory and creation time remain insufficient, so OpenCode also
@@ -83,8 +86,9 @@ Add unit tests for:
 
 Document any provider behavior that was observed but not implemented. Hermes
 session binding and resume use its terminal breadcrumbs; attention remains
-unsupported. Claude and Codex currently provide structured turn
-boundaries for working/waiting/failed attention states.
+unsupported. Codex's app-server event shapes are parsed, but Codex attention
+must remain unsupported until a real cross-process TUI event path is proven or
+Agent Space directly controls turns through app-server.
 
 ## Project Curation
 

@@ -198,7 +198,7 @@ describe("CodingToolRegistry", () => {
 			}
 		});
 
-		it("exposes async attention for a custom codex-family tool", async () => {
+		it("keeps custom Codex attention unsupported until cross-process delivery is proven", async () => {
 			const sessionsDir = fs.mkdtempSync(
 				path.join(os.tmpdir(), "codex-perso-async-"),
 			);
@@ -233,15 +233,11 @@ describe("CodingToolRegistry", () => {
 
 				expect(
 					provider.capabilities.attention["attention.waitingForUser"],
-				).toBe(true);
+				).toBe(false);
 				expect(typeof provider.getAttentionSignalAsync).toBe("function");
 				await expect(
 					registry.getStructuredAttentionSignalAsync(tool, "codex-custom-1"),
-				).resolves.toEqual({
-					status: "waiting_for_user",
-					evidence: "codex.request_user_input",
-					observedAt: "2026-03-06T09:02:00Z",
-				});
+				).resolves.toBeUndefined();
 			} finally {
 				fs.rmSync(sessionsDir, { recursive: true, force: true });
 			}

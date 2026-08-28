@@ -51,14 +51,24 @@ A generic permission prompt is not guessed from terminal text. If Claude does no
 
 ### Codex
 
-Agent Space reads the rollout JSONL for the known session id.
+For PR4, the primary source is the controlled `codex app-server --stdio`
+connection, keyed by the persisted exact thread id. The native TUI is a
+separate process, and the cross-process smoke did not prove that this external
+server receives its live events. Codex attention is therefore advertised as
+`unsupported` for now. Rollout JSONL remains a diagnostic fallback and never
+establishes ownership.
 
 Strong signals include:
 
-- `task_started` / `turn_started` → `working`;
-- `request_user_input` or an `*_approval_request` event → `waiting_for_user`;
-- `task_complete` / `turn_complete` → `idle`;
-- terminal error event → `failed`.
+- `turn/started` → `working`;
+- thread-scoped `item/*/requestApproval` or
+  `item/tool/requestUserInput` → `waiting_for_user`;
+- thread-scoped `turn/completed` with a non-error status → `idle`;
+- thread-scoped `turn/completed` with failed status or `error` → `failed`.
+
+When the app-server process or connection is lost, the live signal is cleared
+to fail closed. Agent Space does not infer a completion from a closed terminal,
+exit code, silence, cwd, or a recent rollout.
 
 ### OpenCode
 

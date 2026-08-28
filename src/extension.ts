@@ -399,6 +399,23 @@ export async function activate(
 		const ctx = projectManager.findContextByFeatureId(feature.id);
 		if (ctx) sessionBinder.recordLaunch(ctx, feature.id, agent, cwd);
 	});
+	terminalController.onBeforeAgentLaunchAsync(
+		async (feature, agent, cwd, resume) => {
+			const ctx = projectManager.findContextByFeatureId(feature.id);
+			if (!ctx)
+				throw new Error("Feature context disappeared before Codex launch");
+			const adapter = toolRegistry.getSessionAdapterForAgent(agent);
+			if (!adapter?.acquireConversation && !adapter?.resumeConversation) return;
+			await sessionBinder.acquireConversation(
+				ctx,
+				feature.id,
+				agent,
+				cwd,
+				resume,
+			);
+			projectManager.notifyChange({ featureId: feature.id, structural: false });
+		},
+	);
 	terminalController.onAgentLaunched(() => {
 		// Cheap first attempt; the periodic pass covers the usual slower case.
 		if (
@@ -425,6 +442,7 @@ export async function activate(
 		toolRegistry,
 	})
 		.then((report) => {
+			void sessionBinder.reconnectBoundConversations();
 			if (report.reattached.length > 0 || report.resumed.length > 0) {
 				projectManager.notifyChange();
 			}
@@ -963,7 +981,7 @@ export async function activate(
 								.catch(() => {});
 							if (launchInitialAgent && initialAgent) {
 								const agents = ctx.agentManager.getAgents(feature.id);
-								terminalController.createTerminal(
+								void terminalController.createTerminalAsync(
 									feature,
 									initialAgent,
 									agents.length - 1,
@@ -1099,7 +1117,7 @@ export async function activate(
 							// startup indicator before tmux/provider setup can block.
 							await new Promise<void>((resolve) => setTimeout(resolve, 0));
 							try {
-								const terminal = terminalController.createTerminal(
+								const terminal = await terminalController.createTerminalAsync(
 									feature,
 									agent,
 									agents.length,
@@ -1306,7 +1324,12 @@ export async function activate(
 
 				const agents = ctx.agentManager.getAgents(featureIdArg);
 				const agentIndex = agents.findIndex((a) => a.id === agentIdArg);
-				terminalController.createTerminal(feature, agent, agentIndex, true);
+				void terminalController.createTerminalAsync(
+					feature,
+					agent,
+					agentIndex,
+					true,
+				);
 				sidebarProvider.refresh();
 				const home = HomePanel.getInstance();
 				if (home) home.refresh();

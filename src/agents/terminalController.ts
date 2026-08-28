@@ -52,6 +52,12 @@ export class TerminalController implements vscode.Disposable {
 		agent: Agent,
 		cwd: string,
 	) => void;
+	private beforeLaunchAsyncCallback?: (
+		feature: Feature,
+		agent: Agent,
+		cwd: string,
+		resume: boolean,
+	) => Promise<void>;
 	private afterLaunchCallback?: (feature: Feature, agent: Agent) => void;
 
 	constructor(
@@ -103,6 +109,17 @@ export class TerminalController implements vscode.Disposable {
 	/** Called once the CLI has been started in a live tmux session. */
 	onAgentLaunched(callback: (feature: Feature, agent: Agent) => void): void {
 		this.afterLaunchCallback = callback;
+	}
+
+	onBeforeAgentLaunchAsync(
+		callback: (
+			feature: Feature,
+			agent: Agent,
+			cwd: string,
+			resume: boolean,
+		) => Promise<void>,
+	): void {
+		this.beforeLaunchAsyncCallback = callback;
 	}
 
 	createTerminal(
@@ -189,7 +206,6 @@ export class TerminalController implements vscode.Disposable {
 				sessionReady = false;
 			}
 		}
-
 		if (!sessionReady) {
 			if (attachExisting) {
 				void vscode.window.showErrorMessage(
@@ -338,7 +354,7 @@ export class TerminalController implements vscode.Disposable {
 	 * synchronous `configureSession` and `discoverProjectKnowledge`. Do not
 	 * read this method as a general "never block" promise.
 	 */
-	private async createTerminalAsync(
+	async createTerminalAsync(
 		feature: Feature,
 		agent: Agent,
 		agentIndex: number,
@@ -360,6 +376,23 @@ export class TerminalController implements vscode.Disposable {
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 			const shouldResume = resume && agent.hasStarted === true;
+			try {
+				this.beforeLaunchCallback?.(feature, agent, cwd);
+				await this.beforeLaunchAsyncCallback?.(
+					feature,
+					agent,
+					cwd,
+					shouldResume,
+				);
+			} catch (error) {
+				const message =
+					error instanceof Error
+						? error.message
+						: "Provider identity acquisition failed";
+				this.recordAgentFailure(feature.id, agent.id, message);
+				void vscode.window.showErrorMessage(message);
+				return undefined;
+			}
 			let baseCommand: string;
 			if (shouldResume) {
 				// Same fail-closed guarantee as the sync path: never silently drop
@@ -402,7 +435,6 @@ export class TerminalController implements vscode.Disposable {
 				// before the CLI starts — identical ordering to the sync path —
 				// so a session created by THIS launch is the only one that can
 				// later be attributed to the agent.
-				this.beforeLaunchCallback?.(feature, agent, cwd);
 				await execAsync(this.tmux.createCommand(sessionName, launchCommand), {
 					cwd,
 				});
@@ -412,6 +444,15 @@ export class TerminalController implements vscode.Disposable {
 			} catch (err) {
 				console.warn(`[TerminalController] tmux session create failed: ${err}`);
 				sessionReady = false;
+			}
+		}
+		if (sessionReady && agent.sessionId && this.beforeLaunchAsyncCallback) {
+			try {
+				await this.beforeLaunchAsyncCallback(feature, agent, cwd, true);
+			} catch (error) {
+				console.warn(
+					`[TerminalController] provider reconnect failed: ${error}`,
+				);
 			}
 		}
 
@@ -677,10 +718,10 @@ export class TerminalController implements vscode.Disposable {
 
 			if (isAlive) {
 				// Tmux session alive — just reattach
-				this.createTerminal(feature, agent, i);
+				void this.createTerminalAsync(feature, agent, i);
 			} else {
 				// Tmux session dead — respawn with resume command
-				this.createTerminal(feature, agent, i, true);
+				void this.createTerminalAsync(feature, agent, i, true);
 			}
 		}
 	}

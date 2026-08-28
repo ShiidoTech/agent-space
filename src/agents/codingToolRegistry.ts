@@ -113,7 +113,8 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	{
 		id: "codex",
 		conversationIdentity: { ownership: "provider_assigned" },
-		capabilities: fullSessionCapabilities(FULL_ATTENTION_CAPABILITIES),
+		// Cross-process delivery from the native TUI is not proven yet.
+		capabilities: fullSessionCapabilities(NO_ATTENTION_CAPABILITIES),
 		getAttentionSignal: (sessionId) =>
 			codexSessionAdapter.readAttention(sessionId),
 		getAttentionSignalAsync: async (sessionId) =>
@@ -172,7 +173,10 @@ const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
 		resumeArgs: (sessionId) => (sessionId ? ["--resume", sessionId] : []),
 	},
 	codex: {
-		launchArgs: () => [],
+		// PR4: the thread is created by app-server before the TUI starts. A
+		// session id on a fresh launch is therefore an exact thread receipt, not
+		// a discovery hint.
+		launchArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 		resumeArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 	},
 };
@@ -233,7 +237,10 @@ function providerForTool(
 		family === "claude"
 			? (sessionId?: string | null) =>
 					sessionId ? ["--session-id", sessionId] : []
-			: () => [];
+			: family === "codex"
+				? (sessionId?: string | null) =>
+						sessionId ? ["resume", sessionId] : []
+				: () => [];
 	const resumeArgs =
 		family === "claude"
 			? (sessionId?: string | null) =>
@@ -281,9 +288,10 @@ function providerForTool(
 			resume: Boolean(sessionFamily),
 			sessionDiscovery: sessionCapable,
 			sessionNaming: sessionCapable,
-			attention: sessionCapable
-				? FULL_ATTENTION_CAPABILITIES
-				: NO_ATTENTION_CAPABILITIES,
+			attention:
+				sessionCapable && family !== "codex"
+					? FULL_ATTENTION_CAPABILITIES
+					: NO_ATTENTION_CAPABILITIES,
 		},
 		launchArgs,
 		resumeArgs,
