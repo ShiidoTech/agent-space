@@ -18,6 +18,7 @@ import {
 	ICON_RESTART,
 	ICON_STOP,
 } from "../constants/icons";
+import { recordFullRebuild } from "../diagnostics/webviewRebuildDiagnostics";
 import type {
 	ProjectContext,
 	ProjectManager,
@@ -221,6 +222,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			await this.featureStateCoordinator.reconcilePresence();
 
 			if (this._view) {
+				recordFullRebuild("sidebar");
 				this._view.webview.html = this.getHtml();
 			}
 		} catch {
@@ -329,7 +331,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			);
 		}
 		ctx.serviceManager.stopService(serviceId, featureId);
-		this.projectManager.notifyChange();
+		this.projectManager.notifyChange({ featureId, structural: false });
 	}
 
 	private handleRestartService(featureId: string, serviceId: string): void {
@@ -341,7 +343,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			featureId,
 			feature.worktreePath,
 		);
-		this.projectManager.notifyChange();
+		this.projectManager.notifyChange({ featureId, structural: false });
 	}
 
 	private async handleRenameAgent(
@@ -382,7 +384,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			}
 		}
 
-		this.projectManager.notifyChange();
+		this.projectManager.notifyChange({ featureId, structural: false });
 	}
 
 	private handleFocusAgent(featureId: string, agentId: string): void {
@@ -702,8 +704,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="status-dot primary-state-${presented.tone}" data-attention-dot="${a.id}"></div>
 			<div class="agent-copy">
 				<div class="agent-main-row">
-					<span class="agent-name" title="${this.escapeHtml(card.name)}">${this.escapeHtml(card.name)}<span class="agent-tool">${toolLabel}</span></span>
-					${card.secondaryTitle ? `<span class="agent-session-title" title="${this.escapeHtml(card.secondaryTitle)}">${this.escapeHtml(card.secondaryTitle)}</span>` : ""}
+					<span class="agent-name" title="${this.escapeHtml(card.name)}"><span data-agent-name="${a.id}">${this.escapeHtml(card.name)}</span><span class="agent-tool">${toolLabel}</span></span>
+					<span class="agent-session-title" data-agent-session-title="${a.id}" ${card.secondaryTitle ? "" : 'style="display:none"'} title="${this.escapeHtml(card.secondaryTitle ?? "")}">${this.escapeHtml(card.secondaryTitle ?? "")}</span>
 					<span class="agent-status">
 						<span class="lifecycle-badge primary-state-${presented.tone}" data-lifecycle-badge="${a.id}" title="${this.escapeHtml(presented.detail ?? "")}">${presented.label}</span>
 					</span>

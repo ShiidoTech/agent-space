@@ -820,7 +820,7 @@ export class TerminalController implements vscode.Disposable {
 		}
 
 		ctx.agentManager.recordAgentFailure(agentId, featureId, message, exitCode);
-		this.projectManager.notifyChange();
+		this.projectManager.notifyChange({ featureId, structural: false });
 	}
 
 	private markAgentTerminalReady(metadata: TerminalMetadata): void {

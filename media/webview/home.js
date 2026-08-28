@@ -348,6 +348,30 @@ function updateAttention(agent) {
 		lifecycleBadge.className = `agent-primary-state primary-state-${presented.tone}`;
 		lifecycleBadge.title = presented.detail || "";
 	}
+
+	// Provider-derived name/session title are projections of the same card
+	// presentation used at initial render — keep them live so a rename never
+	// needs a full document reload to become visible (issue #120).
+	if (card.name) {
+		const nameEl = document.getElementById(`agent-name-${agent.id}`);
+		if (nameEl) {
+			nameEl.textContent = card.name;
+			nameEl.title = card.name;
+		}
+	}
+
+	const sessionTitleEl = document.getElementById(
+		`agent-session-title-${agent.id}`,
+	);
+	if (sessionTitleEl) {
+		if (card.secondaryTitle) {
+			sessionTitleEl.textContent = `Session · ${card.secondaryTitle}`;
+			sessionTitleEl.title = card.secondaryTitle;
+			sessionTitleEl.style.display = "";
+		} else {
+			sessionTitleEl.style.display = "none";
+		}
+	}
 }
 
 window.addEventListener("message", (event) => {

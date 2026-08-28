@@ -192,6 +192,13 @@ describe("TerminalController", () => {
 			undefined,
 		);
 		expect(notifyChange).toHaveBeenCalledTimes(1);
+		// issue #120: a failure on an already-known agent never adds/removes a
+		// card, so the sidebar/Home can patch it in place instead of a full
+		// webview rebuild.
+		expect(notifyChange).toHaveBeenCalledWith({
+			featureId: "f1",
+			structural: false,
+		});
 		expect(showErrorMessageMock).toHaveBeenCalledWith(
 			"Failed to start Agent 1 with Claude Code. Check that the CLI is installed and launches from /repo/feature-one.",
 		);

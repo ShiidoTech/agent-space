@@ -639,8 +639,15 @@ export async function activate(
 		} else {
 			featureStateCoordinator.invalidateAll();
 		}
-		sidebarProvider.refresh();
-		HomePanel.refreshAll();
+		// `structural: false` (status/name/service changes on agents/services
+		// that already exist) patches the live webview DOM in place; anything
+		// else (add/remove, unscoped, or unknown) still gets a full rebuild.
+		if (scope?.structural === false) {
+			sidebarProvider.refreshState();
+		} else {
+			sidebarProvider.refresh();
+		}
+		HomePanel.refreshLive(scope);
 	});
 	featureStateCoordinator.start();
 	context.subscriptions.push(featureStateCoordinator);

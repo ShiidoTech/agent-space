@@ -7,6 +7,7 @@ import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_BRAND } from "../constants/icons";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
+import { recordFullRebuild } from "../diagnostics/webviewRebuildDiagnostics";
 import {
 	type FeatureCockpitPresentation,
 	type FeatureCockpitPrimaryAction,
@@ -296,6 +297,7 @@ export class HomePanel {
 
 	public refresh(): void {
 		try {
+			recordFullRebuild("home");
 			if (this.currentFeatureId) {
 				this.panel.webview.html = this.getFeatureHtml(this.currentFeatureId);
 			} else if (this.currentProjectId) {
@@ -314,6 +316,36 @@ export class HomePanel {
 		} catch {
 			// Panel may have been disposed
 		}
+	}
+
+	/**
+	 * Patch live agent state (name/session title/attention/lifecycle) for an
+	 * already-open Feature panel without replacing the webview document.
+	 * Only safe for state that never adds/removes a card — callers must know
+	 * the affected agents/services already exist in this panel's DOM.
+	 */
+	public refreshLiveState(): void {
+		if (!this.currentFeatureId) return;
+		this.sendGitStatsAsync().catch(() => {});
+	}
+
+	/**
+	 * Route a scoped, non-structural change to the exact open Feature panel
+	 * via an incremental patch; anything else (unscoped, structural, or no
+	 * matching open panel) falls back to a full rebuild of every open panel.
+	 */
+	public static refreshLive(scope?: {
+		featureId?: string;
+		structural?: boolean;
+	}): void {
+		if (scope?.structural === false && scope.featureId) {
+			const panel = HomePanel.featurePanels.get(scope.featureId);
+			if (panel) {
+				panel.refreshLiveState();
+				return;
+			}
+		}
+		HomePanel.refreshAll();
 	}
 
 	public getCurrentFeatureId(): string | null {
@@ -2072,7 +2104,7 @@ export class HomePanel {
 				</div>
 				<div class="agent-metadata">
 					<span class="agent-provider">Provider &middot; ${this.escapeHtml(tool.name)}</span>
-					${card.secondaryTitle ? `<span class="agent-session-title" title="${this.escapeHtml(card.secondaryTitle)}">Session &middot; ${this.escapeHtml(card.secondaryTitle)}</span>` : ""}
+					<span id="agent-session-title-${agent.id}" class="agent-session-title" ${card.secondaryTitle ? "" : 'style="display:none"'} title="${this.escapeHtml(card.secondaryTitle ?? "")}">Session &middot; ${this.escapeHtml(card.secondaryTitle ?? "")}</span>
 					${startupBadge}
 				</div>
 				<div class="agent-panel-actions">
