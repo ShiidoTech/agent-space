@@ -622,7 +622,8 @@ export async function activate(
 			createFeatureChangeFlusher({
 				refreshSidebarState: () => sidebarProvider.refreshState(),
 				refreshHomeAll: () => HomePanel.refreshAll(),
-				refreshHomeLive: (scope) => HomePanel.refreshLive(scope),
+				patchHomeFeature: (featureId) => HomePanel.patchLiveFeature(featureId),
+				refreshHomeInstance: () => HomePanel.refreshInstance(),
 				nudgeAttention: () => attentionMonitor.nudge(),
 			}),
 		),

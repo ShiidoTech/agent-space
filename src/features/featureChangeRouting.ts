@@ -6,8 +6,21 @@ export interface FeatureChangeRoutingDeps {
 	refreshSidebarState(): void;
 	/** Full rebuild of every open Home/Feature panel. */
 	refreshHomeAll(): void;
-	/** Incremental patch of one already-open Feature panel. */
-	refreshHomeLive(scope: { featureId: string; structural: false }): void;
+	/**
+	 * Patch one already-open Feature panel incrementally. Must return
+	 * `false` (no side effect) when that Feature has no open panel — the
+	 * flusher uses the return value to decide whether the portfolio
+	 * singleton needs a bounded fallback, and must never rebuild an
+	 * unrelated Feature panel to cover this case.
+	 */
+	patchHomeFeature(featureId: string): boolean;
+	/**
+	 * Rebuild only the singleton portfolio/project Home panel — never a
+	 * Feature panel. Called at most once per flush, only when at least one
+	 * runtime-changed Feature had no open panel to patch (portfolio/project
+	 * rollups aren't incremental yet — issue #120 follow-up).
+	 */
+	refreshHomeInstance(): void;
 	nudgeAttention(): void;
 }
 
@@ -20,6 +33,12 @@ export interface FeatureChangeRoutingDeps {
  * window (deep Git/GitHub evidence, a structural add/remove, or an unscoped
  * event) falls back to a full rebuild of every open Home/Feature panel, so
  * stale delivery/Git state is never shown.
+ *
+ * Within a runtime-only window, each changed Feature's own open panel (if
+ * any) is patched directly; a Feature with no open panel never triggers a
+ * rebuild of other, unrelated Feature panels — at most one bounded
+ * portfolio-singleton refresh covers that case, regardless of how many
+ * such Features changed in the window.
  */
 export function createFeatureChangeFlusher(
 	deps: FeatureChangeRoutingDeps,
@@ -50,9 +69,13 @@ export function createFeatureChangeFlusher(
 
 			deps.refreshSidebarState();
 			if (flushOnlyRuntime && flushFeatureIds.length > 0) {
+				let needsInstanceRefresh = false;
 				for (const featureId of flushFeatureIds) {
-					deps.refreshHomeLive({ featureId, structural: false });
+					if (!deps.patchHomeFeature(featureId)) {
+						needsInstanceRefresh = true;
+					}
 				}
+				if (needsInstanceRefresh) deps.refreshHomeInstance();
 			} else {
 				deps.refreshHomeAll();
 			}

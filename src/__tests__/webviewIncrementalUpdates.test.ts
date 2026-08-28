@@ -24,6 +24,7 @@ import {
 	getWebviewRebuildCounts,
 	resetWebviewRebuildCounts,
 } from "../diagnostics/webviewRebuildDiagnostics";
+import { createFeatureChangeFlusher } from "../features/featureChangeRouting";
 import { FeatureSidebarProvider } from "../features/featureSidebarProvider";
 import type { FeatureSnapshot } from "../features/featureSnapshot";
 import { HomePanel } from "../home/homePanel";
@@ -69,6 +70,8 @@ function buildSnapshot(): FeatureSnapshot {
 describe("issue #120: zero full-document rebuild for non-structural transitions", () => {
 	beforeEach(() => {
 		resetWebviewRebuildCounts();
+		HomePanel["featurePanels"].clear();
+		HomePanel["instance"] = undefined;
 	});
 
 	function buildSidebar() {
@@ -100,7 +103,7 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 		return { provider, getHtmlAssignments: () => htmlAssignments };
 	}
 
-	function buildHomeFeaturePanel() {
+	function buildHomePanelBase(featureId: string | undefined) {
 		const receiveMessage = vi.fn();
 		const webviewPanel = {
 			visible: false,
@@ -160,18 +163,32 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 			{} as never,
 			{} as never,
 			undefined,
-			feature.id,
+			featureId,
 		);
 		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
-		(panel as any).currentFeatureId = "f1";
+		if (featureId) (panel as any).currentFeatureId = featureId;
 		// The full HTML render path is exercised by featureCockpitPresentation
 		// tests; here we only care that the rebuild counter/webview.html write
 		// happen exactly when the incremental-vs-full routing contract says
 		// they should, so stub the (expensive-to-mock) render itself.
 		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
 		vi.spyOn(panel as any, "getFeatureHtml").mockReturnValue("<html></html>");
-		HomePanel["featurePanels"].set("f1", panel);
+		// biome-ignore lint/suspicious/noExplicitAny: focused unit test
+		vi.spyOn(panel as any, "getWelcomeHtml").mockReturnValue("<html></html>");
 		return { panel, getHtmlAssignments: () => htmlAssignments };
+	}
+
+	function buildHomeFeaturePanel(featureId = "f1") {
+		const built = buildHomePanelBase(featureId);
+		HomePanel["featurePanels"].set(featureId, built.panel);
+		return built;
+	}
+
+	/** The portfolio/project singleton panel (`HomePanel.instance`) — never a Feature panel. */
+	function buildHomeInstance() {
+		const built = buildHomePanelBase(undefined);
+		HomePanel["instance"] = built.panel;
+		return built;
 	}
 
 	it("sidebar.refreshState() never assigns webview.html or increments the rebuild counter", async () => {
@@ -242,5 +259,45 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 		expect(sidebarHtml()).toBe(sidebarBefore);
 		expect(homeHtml()).toBe(homeBefore);
 		expect(getWebviewRebuildCounts()).toEqual({ sidebar: 0, home: 0 });
+	});
+
+	// PR #121 second review: a runtime event for a Feature with no open panel
+	// must never fall back to `HomePanel.refreshAll()` (which would rebuild
+	// every unrelated open Feature panel too, and could do so N times per
+	// flush). This exercises the real `createFeatureChangeFlusher` wired to
+	// the real `HomePanel.patchLiveFeature`/`refreshInstance` fallback — not
+	// mocks of them — with f1 open and f2 unopened in the same flush.
+	it("real flusher + real HomePanel fallback: an unopened Feature's runtime change costs one bounded instance refresh, never touches f1's open panel", async () => {
+		const { getHtmlAssignments: f1Html } = buildHomeFeaturePanel("f1");
+		const { getHtmlAssignments: instanceHtml } = buildHomeInstance();
+		const f1Before = f1Html();
+		const instanceBefore = instanceHtml();
+
+		let scheduled: (() => void) | undefined;
+		const flush = createFeatureChangeFlusher(
+			{
+				refreshSidebarState: () => {},
+				refreshHomeAll: () => HomePanel.refreshAll(),
+				patchHomeFeature: (featureId) => HomePanel.patchLiveFeature(featureId),
+				refreshHomeInstance: () => HomePanel.refreshInstance(),
+				nudgeAttention: () => {},
+			},
+			150,
+			(fn) => {
+				scheduled = fn;
+			},
+		);
+
+		flush({ feature: { id: "f1" } } as unknown as FeatureSnapshot, "runtime");
+		flush({ feature: { id: "f2" } } as unknown as FeatureSnapshot, "runtime");
+		scheduled?.();
+		await Promise.resolve();
+
+		// f1's own open panel was patched incrementally — no rebuild.
+		expect(f1Html()).toBe(f1Before);
+		// f2 has no open panel: the portfolio singleton absorbs it, exactly
+		// once, and f1's unrelated panel is never touched by that fallback.
+		expect(instanceHtml()).toBe(instanceBefore + 1);
+		expect(getWebviewRebuildCounts()).toEqual({ sidebar: 0, home: 1 });
 	});
 });

@@ -330,20 +330,42 @@ export class HomePanel {
 	}
 
 	/**
+	 * Patch one already-open Feature panel incrementally. Returns `false`
+	 * (no side effect at all) when that Feature has no open panel — callers
+	 * decide separately whether anything else needs refreshing, so an
+	 * unrelated Feature's runtime change never touches other open panels.
+	 */
+	public static patchLiveFeature(featureId: string): boolean {
+		const panel = HomePanel.featurePanels.get(featureId);
+		if (!panel) return false;
+		panel.refreshLiveState();
+		return true;
+	}
+
+	/**
+	 * Full rebuild of only the singleton portfolio/project panel — never
+	 * touches any open Feature panel. Portfolio/project rollups aren't
+	 * incremental yet (issue #120 follow-up), so this is the bounded
+	 * fallback for a runtime change on a Feature with no open panel.
+	 */
+	public static refreshInstance(): void {
+		HomePanel.instance?.refresh();
+	}
+
+	/**
 	 * Route a scoped, non-structural change to the exact open Feature panel
 	 * via an incremental patch; anything else (unscoped, structural, or no
-	 * matching open panel) falls back to a full rebuild of every open panel.
+	 * matching open panel) falls back to rebuilding just the portfolio
+	 * singleton, never unrelated Feature panels.
 	 */
 	public static refreshLive(scope?: {
 		featureId?: string;
 		structural?: boolean;
 	}): void {
 		if (scope?.structural === false && scope.featureId) {
-			const panel = HomePanel.featurePanels.get(scope.featureId);
-			if (panel) {
-				panel.refreshLiveState();
-				return;
-			}
+			if (HomePanel.patchLiveFeature(scope.featureId)) return;
+			HomePanel.refreshInstance();
+			return;
 		}
 		HomePanel.refreshAll();
 	}
