@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import type { ProviderSessionAdapter } from "../agents/providers/types";
 import { SessionBinder } from "../agents/sessionBinder";
-import type { SessionInfo } from "../agents/sessionProviders/types";
+import type {
+	SessionCorrelationContext,
+	SessionInfo,
+} from "../agents/sessionProviders/types";
 import type { TmuxIntegration } from "../agents/tmux";
 import { ProjectManager } from "../projects/projectManager";
 import { GlobalStore } from "../storage/globalStore";
@@ -56,8 +59,8 @@ function adapter(
 	correlateOwnedSession?: ProviderSessionAdapter["correlateOwnedSession"],
 ): ProviderSessionAdapter {
 	const asyncCorrelate = correlateOwnedSession
-		? async (cwd: string, known: ReadonlySet<string>) =>
-				correlateOwnedSession(cwd, known)
+		? async (context: SessionCorrelationContext) =>
+				correlateOwnedSession(context)
 		: undefined;
 	return {
 		toolId: "stub",
@@ -236,7 +239,12 @@ describe("SessionBinder", () => {
 		});
 		const outcomes = await binder.reconcileAllAsync();
 
-		expect(correlate).toHaveBeenCalledWith(WORKTREE, expect.any(Set));
+		expect(correlate).toHaveBeenCalledWith(
+			expect.objectContaining({
+				cwd: WORKTREE,
+				knownSessionIds: expect.any(Set),
+			}),
+		);
 		expect(outcomes[0]?.boundSessionId).toBe("ses_late");
 		expect(ctx.store.loadAgents("f1")[0].sessionId).toBe("ses_late");
 	});
@@ -457,7 +465,12 @@ describe("SessionBinder", () => {
 
 		const outcomes = binder.reconcileAll();
 
-		expect(correlateOwnedSession).toHaveBeenCalledWith(WORKTREE, new Set());
+		expect(correlateOwnedSession).toHaveBeenCalledWith(
+			expect.objectContaining({
+				cwd: WORKTREE,
+				knownSessionIds: new Set(),
+			}),
+		);
 		expect(outcomes[0]?.boundSessionId).toBe("ses_provider_owned");
 		expect(ctx.store.loadAgents("f1")[0].sessionId).toBe("ses_provider_owned");
 	});

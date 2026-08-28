@@ -260,6 +260,43 @@ export class TmuxIntegration {
 		}
 	}
 
+	/**
+	 * The pty device path of the session's pane (e.g. `/dev/pts/5`). Mirrors
+	 * the tty Hermes reads with `os.ttyname()` inside the pane, so Agent Space
+	 * can derive the exact Hermes breadcrumb terminal id for this agent's own
+	 * pane — the deterministic, fail-closed Hermes identity link.
+	 * Returns null when the session is gone or has no pane tty.
+	 */
+	getPaneTty(sessionName: string): string | null {
+		try {
+			const output = exec(
+				`tmux display-message -t "${sessionName}" -p "#{pane_tty}"`,
+			).trim();
+			return output || null;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Non-blocking twin of {@link getPaneTty} for background observation
+	 * paths that must never block the Extension Host on a subprocess.
+	 */
+	async getPaneTtyAsync(sessionName: string): Promise<string | null> {
+		try {
+			const output = (
+				await execAsync(
+					`tmux display-message -t "${sessionName}" -p "#{pane_tty}"`,
+				)
+			)
+				.toString()
+				.trim();
+			return output || null;
+		} catch {
+			return null;
+		}
+	}
+
 	createCommand(sessionName: string, innerCommand: string): string {
 		return `tmux new-session -d -s "${sessionName}" "${innerCommand}"`;
 	}

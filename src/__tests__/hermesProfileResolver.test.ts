@@ -274,6 +274,10 @@ describe("resolveCreationProfile", () => {
 	});
 
 	it("returns default when nothing else is set", () => {
+		// This test asserts the no-config baseline; it must not inherit an
+		// ambient HERMES_HOME from the invoking shell (e.g. when a Hermes agent
+		// itself runs the suite under a named profile). afterEach restores env.
+		delete process.env.HERMES_HOME;
 		expect(resolveCreationProfile()).toBe("default");
 	});
 
