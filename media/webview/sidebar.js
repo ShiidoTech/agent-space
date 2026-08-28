@@ -308,6 +308,31 @@ window.addEventListener("message", function (event) {
 					label: "Unknown",
 					tone: "muted",
 				};
+
+				// Provider-derived name/session title are projections of the
+				// same card presentation used at initial render — keep them
+				// live so a rename never needs a full reload (issue #120).
+				var nameEl = agentEl.querySelector(
+					'[data-agent-name="' + agent.id + '"]',
+				);
+				if (nameEl && cardPresentation.name) {
+					nameEl.textContent = cardPresentation.name;
+					var nameWrap = nameEl.closest(".agent-name");
+					if (nameWrap) nameWrap.title = cardPresentation.name;
+				}
+				var sessionTitleEl = agentEl.querySelector(
+					'[data-agent-session-title="' + agent.id + '"]',
+				);
+				if (sessionTitleEl) {
+					if (cardPresentation.secondaryTitle) {
+						sessionTitleEl.textContent = cardPresentation.secondaryTitle;
+						sessionTitleEl.title = cardPresentation.secondaryTitle;
+						sessionTitleEl.style.display = "";
+					} else {
+						sessionTitleEl.style.display = "none";
+					}
+				}
+
 				var dot = agentEl.querySelector(
 					'[data-attention-dot="' + agent.id + '"]',
 				);

@@ -38,6 +38,14 @@ export interface ProjectContext {
 export interface ProjectChangeScope {
 	readonly projectId?: string;
 	readonly featureId?: string;
+	/**
+	 * `false` when the change is a live state update (status, name, service
+	 * status, ...) that never adds/removes a card in the Project/Feature/Agent
+	 * tree, so listeners may patch the existing webview DOM instead of
+	 * rebuilding it. Omit (or `true`) for anything structural — the default
+	 * is fail-safe: unknown scope means a full rebuild.
+	 */
+	readonly structural?: boolean;
 }
 
 export class ProjectManager {

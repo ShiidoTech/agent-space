@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("vscode", () => ({
 	commands: { executeCommand: vi.fn(() => Promise.resolve()) },
+	window: { showInputBox: vi.fn(() => Promise.resolve("New Name")) },
 	Uri: { joinPath: vi.fn(() => ({})) },
 	ThemeIcon: class {},
 	ThemeColor: class {},
@@ -285,5 +286,76 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 			"f1",
 			"a1",
 		);
+	});
+});
+
+describe("issue #120: non-structural notifyChange scope (zero-reload eligible)", () => {
+	// renameAgent never adds/removes a card, so it reports `structural: false`
+	// and extension.ts can patch the sidebar/Home DOM in place. stopService/
+	// restartService move a service card between the running/stopped DOM
+	// sections (renderServicesSection) with a different action button —
+	// today's incremental patch doesn't perform that move, so they must stay
+	// structural (full rebuild) until it does (PR review on #121).
+	function buildProvider(overrides: {
+		serviceManager?: Record<string, unknown>;
+		agentManager?: Record<string, unknown>;
+	}) {
+		const notifyChange = vi.fn();
+		const service = { id: "s1", tmuxSession: "svc" };
+		const agent = { id: "a1", name: "Agent 1" };
+		const feature = { id: "f1", worktreePath: "/repo/f1" };
+		const ctx = {
+			serviceManager: {
+				getServices: vi.fn(() => [service]),
+				stopService: vi.fn(),
+				restartService: vi.fn(),
+				...overrides.serviceManager,
+			},
+			agentManager: {
+				getAgentsReadModel: vi.fn(() => [agent]),
+				renameAgent: vi.fn(),
+				...overrides.agentManager,
+			},
+		};
+		const projectManager = {
+			findContextByFeatureId: vi.fn(() => ctx),
+			resolveFeature: vi.fn(() => ({ ctx, feature })),
+			notifyChange,
+		};
+		const provider = new FeatureSidebarProvider(
+			projectManager as never,
+			{} as never,
+			{} as never,
+			undefined,
+			{} as never,
+		);
+		return { provider, notifyChange, ctx };
+	}
+
+	it("handleStopService still reports a structural (full-rebuild) change", () => {
+		const { provider, notifyChange } = buildProvider({});
+		// biome-ignore lint/suspicious/noExplicitAny: invoking the private handler directly
+		(provider as any).handleStopService("f1", "s1");
+
+		expect(notifyChange).toHaveBeenCalledWith({ featureId: "f1" });
+	});
+
+	it("handleRestartService still reports a structural (full-rebuild) change", () => {
+		const { provider, notifyChange } = buildProvider({});
+		// biome-ignore lint/suspicious/noExplicitAny: invoking the private handler directly
+		(provider as any).handleRestartService("f1", "s1");
+
+		expect(notifyChange).toHaveBeenCalledWith({ featureId: "f1" });
+	});
+
+	it("handleRenameAgent reports a non-structural, feature-scoped change", async () => {
+		const { provider, notifyChange } = buildProvider({});
+		// biome-ignore lint/suspicious/noExplicitAny: invoking the private handler directly
+		await (provider as any).handleRenameAgent("f1", "a1");
+
+		expect(notifyChange).toHaveBeenCalledWith({
+			featureId: "f1",
+			structural: false,
+		});
 	});
 });

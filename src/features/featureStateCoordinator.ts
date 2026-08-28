@@ -61,6 +61,16 @@ const RECONCILE_INTERVAL_MS = 15_000;
 /** Deep Git/GitHub evidence older than this is refreshed on next focus. */
 const DEEP_STALE_MS = 45_000;
 
+/**
+ * Qualifies an `onDidChange` event so listeners can tell a pure runtime
+ * update (agent/service liveness — never adds/removes a card) apart from a
+ * deep Git/GitHub evidence refresh or a structural change (feature/project
+ * added or removed, reference-branch health, worktree inventory). Only
+ * `"runtime"` is currently safe for a listener to route to an incremental
+ * DOM patch instead of a full webview rebuild (see issue #120).
+ */
+export type FeatureSnapshotChangeKind = "runtime" | "deep" | "structural";
+
 export interface FeatureStateCoordinatorOptions {
 	/** Injectable GitHub transport factory (per repository). */
 	readonly createGithubBackend?: (repoRoot: string) => PullRequestBackend;
@@ -75,7 +85,10 @@ export class FeatureStateCoordinator implements Disposable {
 	private timer?: ReturnType<typeof setInterval>;
 	private snapshots = new Map<string, FeatureSnapshot>();
 	private listeners = new Set<
-		(snapshot: FeatureSnapshot | undefined) => void
+		(
+			snapshot: FeatureSnapshot | undefined,
+			kind: FeatureSnapshotChangeKind,
+		) => void
 	>();
 	private inFlight?: Promise<void>;
 	private reconcileAfterFlight = false;
@@ -363,7 +376,10 @@ export class FeatureStateCoordinator implements Disposable {
 	}
 
 	onDidChange(
-		listener: (snapshot: FeatureSnapshot | undefined) => void,
+		listener: (
+			snapshot: FeatureSnapshot | undefined,
+			kind: FeatureSnapshotChangeKind,
+		) => void,
 	): Disposable {
 		this.listeners.add(listener);
 		return { dispose: () => this.listeners.delete(listener) };
@@ -952,7 +968,7 @@ export class FeatureStateCoordinator implements Disposable {
 		this.featureDeepObservedAt.set(feature.id, Date.now());
 		if (previous && equivalent(previous, snapshot)) return false;
 		this.snapshots.set(feature.id, snapshot);
-		this.emit(snapshot);
+		this.emit(snapshot, "deep");
 		return true;
 	}
 
@@ -1006,7 +1022,7 @@ export class FeatureStateCoordinator implements Disposable {
 		});
 		if (previous && equivalent(previous, snapshot)) return false;
 		this.snapshots.set(feature.id, snapshot);
-		this.emit(snapshot);
+		this.emit(snapshot, "runtime");
 		return true;
 	}
 
@@ -1388,8 +1404,11 @@ export class FeatureStateCoordinator implements Disposable {
 		this.timer.unref?.();
 	}
 
-	private emit(snapshot: FeatureSnapshot | undefined): void {
-		for (const listener of this.listeners) listener(snapshot);
+	private emit(
+		snapshot: FeatureSnapshot | undefined,
+		kind: FeatureSnapshotChangeKind = "structural",
+	): void {
+		for (const listener of this.listeners) listener(snapshot, kind);
 	}
 }
 

@@ -81,8 +81,7 @@ function filterProblems(severity) {
 	for (const btn of document.querySelectorAll(".problems-filter")) {
 		btn.classList.toggle(
 			"active",
-			(/** @type {HTMLElement} */ (btn).dataset.severity ?? "all") ===
-				severity,
+			/** @type {HTMLElement} */ (btn.dataset.severity ?? "all") === severity,
 		);
 	}
 }
@@ -348,6 +347,46 @@ function updateAttention(agent) {
 		lifecycleBadge.className = `agent-primary-state primary-state-${presented.tone}`;
 		lifecycleBadge.title = presented.detail || "";
 	}
+
+	// Provider-derived name/session title are projections of the same card
+	// presentation used at initial render — keep them live so a rename never
+	// needs a full document reload to become visible (issue #120).
+	if (card.name) {
+		const nameEl = document.getElementById(`agent-name-${agent.id}`);
+		if (nameEl) {
+			nameEl.textContent = card.name;
+			nameEl.title = card.name;
+		}
+	}
+
+	const sessionTitleEl = document.getElementById(
+		`agent-session-title-${agent.id}`,
+	);
+	if (sessionTitleEl) {
+		if (card.secondaryTitle) {
+			sessionTitleEl.textContent = `Session · ${card.secondaryTitle}`;
+			sessionTitleEl.title = card.secondaryTitle;
+			sessionTitleEl.style.display = "";
+		} else {
+			sessionTitleEl.style.display = "none";
+		}
+	}
+}
+
+/**
+ * Reassigns `innerHTML` only when the fragment's server-computed content key
+ * differs from the one stored from the last patch — never by comparing
+ * against `el.innerHTML` itself, whose browser-serialized form can differ
+ * from the literal string that was assigned. A runtime tick that leaves this
+ * leaf's rendered output unchanged (e.g. an unrelated agent's attention
+ * changing) is then a true no-op: it never recreates a "more alerts"
+ * <details> the user opened, resets a collapsed tmux group, or steals focus
+ * from a button inside the fragment (issue #120 review: idempotence).
+ */
+function patchKeyedFragment(el, html, key) {
+	if (key !== undefined && el.dataset.key === key) return;
+	el.innerHTML = html;
+	if (key !== undefined) el.dataset.key = key;
 }
 
 window.addEventListener("message", (event) => {
@@ -373,6 +412,75 @@ window.addEventListener("message", (event) => {
 		case "gitStatsUpdate": {
 			const statsEl = document.getElementById("git-stats-content");
 			if (statsEl) statsEl.innerHTML = message.html;
+			break;
+		}
+		case "featureRuntimeUpdate": {
+			// Patches only the specific runtime-derived Feature-page fields
+			// (cockpit headline/primary action/runtime label/alerts, tmux
+			// diagnostics) via stable ids — never a parent container's
+			// innerHTML — so any <details> the user has expanded elsewhere
+			// on the page (work/committed files, services activity panels)
+			// and any focus/scroll position are left untouched. Issue #120
+			// review: a prior version replaced whole subtrees, which silently
+			// recreated nested <details> (resetting their open state) and
+			// could wipe live service-activity content on an unrelated agent
+			// attention tick. The Services section is never touched here —
+			// stop/restart/add/remove already go through a full rebuild.
+			const headlineEl = document.getElementById("feature-cockpit-headline");
+			if (headlineEl && typeof message.headline === "string") {
+				headlineEl.textContent = message.headline;
+			}
+			const detailEl = document.getElementById("feature-cockpit-detail");
+			if (detailEl) {
+				if (message.detail) {
+					detailEl.textContent = message.detail;
+					detailEl.style.display = "";
+				} else {
+					detailEl.style.display = "none";
+				}
+			}
+			const runtimeLabelEl = document.getElementById(
+				"feature-cockpit-runtime-label",
+			);
+			if (runtimeLabelEl && typeof message.runtimeLabel === "string") {
+				runtimeLabelEl.textContent = message.runtimeLabel;
+			}
+			const primaryActionEl = document.getElementById(
+				"feature-cockpit-primary-action",
+			);
+			if (primaryActionEl && typeof message.primaryActionHtml === "string") {
+				patchKeyedFragment(
+					primaryActionEl,
+					message.primaryActionHtml,
+					message.primaryActionKey,
+				);
+			}
+			const alertsEl = document.getElementById("feature-cockpit-alerts");
+			if (alertsEl && typeof message.alertsHtml === "string") {
+				patchKeyedFragment(alertsEl, message.alertsHtml, message.alertsKey);
+			}
+			const diagnosticsSummaryEl = document.getElementById(
+				"feature-diagnostics-summary",
+			);
+			if (
+				diagnosticsSummaryEl &&
+				typeof message.diagnosticsSummary === "string"
+			) {
+				diagnosticsSummaryEl.textContent = `Diagnostics · ${message.diagnosticsSummary}`;
+			}
+			const diagnosticsContentEl = document.getElementById(
+				"feature-diagnostics-content",
+			);
+			if (
+				diagnosticsContentEl &&
+				typeof message.diagnosticsContentHtml === "string"
+			) {
+				patchKeyedFragment(
+					diagnosticsContentEl,
+					message.diagnosticsContentHtml,
+					message.diagnosticsContentKey,
+				);
+			}
 			break;
 		}
 	}
