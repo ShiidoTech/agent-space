@@ -30,9 +30,9 @@ describe("FeatureSidebarProvider.handleFocusAgent (issue #69)", () => {
 		} as never;
 
 		expect(presentSidebarFeatureSummary(snapshot, false)).toEqual({
-			label: "Agent needs attention",
+			label: "Needs you",
 			tone: "warning",
-			detail: "The agent is waiting for input.",
+			detail: "Agent needs attention — The agent is waiting for input.",
 		});
 		expect(presentSidebarFeatureSummary(snapshot, false)?.label).not.toBe(
 			"Evidence unavailable",

@@ -23,6 +23,7 @@ import {
 	shouldCleanupSession,
 } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
+import { cleanupOrphanedFeatures } from "./features/cleanupOrphanedFeatures";
 import { createFeatureChangeFlusher } from "./features/featureChangeRouting";
 import { runFeatureFinish } from "./features/featureFinishCommand";
 import { validateFeatureNameInput } from "./features/featureName";
@@ -183,10 +184,29 @@ export async function activate(
 	// evidence and provider attention are fetched after activation/on focus.
 	// Do not await this: activation must not hold the Extension Host hostage to
 	// an active provider observation.
-	setTimeout(
-		() => void featureStateCoordinator.reconcilePresence(),
-		0,
-	).unref?.();
+	let orphanNotificationShown = false;
+	setTimeout(() => {
+		void featureStateCoordinator.reconcilePresence().then(() => {
+			if (orphanNotificationShown) return;
+			const orphans = projectManager
+				.getAllContexts()
+				.flatMap((ctx) => ctx.featureManager.getOrphanedFeatures());
+			if (orphans.length === 0) return;
+			orphanNotificationShown = true;
+			void vscode.window
+				.showWarningMessage(
+					`${orphans.length} orphaned feature(s) detected (worktree removed).`,
+					"Clean Up",
+				)
+				.then((action) => {
+					if (action === "Clean Up") {
+						void vscode.commands.executeCommand(
+							"agentSpace.cleanupOrphanedFeatures",
+						);
+					}
+				});
+		});
+	}, 0).unref?.();
 
 	const defaultToolId = toolRegistry.getDefaultToolId();
 	const availableTools = toolRegistry.getAvailableTools();
@@ -1513,6 +1533,58 @@ export async function activate(
 						copyToClipboard: (text) => vscode.env.clipboard.writeText(text),
 					},
 				);
+			},
+		),
+	);
+
+	// Command: Clean Up Orphaned Features
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.cleanupOrphanedFeatures",
+			async () => {
+				// Pre-check orphans to show confirmation modal.
+				const orphans: Array<{
+					ctx: { project: { id: string } };
+					feature: { name: string };
+				}> = [];
+				for (const ctx of projectManager.getAllContexts()) {
+					for (const orphan of ctx.featureManager.getOrphanedFeatures()) {
+						orphans.push({ ctx, feature: orphan });
+					}
+				}
+				if (orphans.length === 0) {
+					void vscode.window.showInformationMessage(
+						"No orphaned features detected.",
+					);
+					return;
+				}
+				const names = orphans.map((o) => o.feature.name).join(", ");
+				const action = await vscode.window.showWarningMessage(
+					`${orphans.length} orphaned feature(s) detected (${names}). Remove metadata?`,
+					{ modal: true },
+					"Clean Up",
+				);
+				if (action !== "Clean Up") return;
+
+				const outcome = await cleanupOrphanedFeatures({
+					projectManager,
+					terminalController,
+					tmux,
+					sessionNameSyncer,
+				});
+				switch (outcome.status) {
+					case "blocked":
+						void vscode.window.showErrorMessage(
+							`Cleanup aborted: ${outcome.reason}. Metadata preserved.`,
+						);
+						break;
+					case "cleaned":
+						for (const projectId of outcome.touchedProjectIds) {
+							projectManager.notifyChange({ projectId });
+							await featureStateCoordinator.reconcilePresence(projectId);
+						}
+						break;
+				}
 			},
 		),
 	);

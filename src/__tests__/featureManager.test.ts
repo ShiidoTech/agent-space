@@ -709,6 +709,78 @@ describe("FeatureManager", () => {
 		});
 	});
 
+	describe("getOrphanedFeatures", () => {
+		function saveFeature(worktreePath: string, branch = "feat/example") {
+			store.saveFeatures([
+				{
+					id: "feature-1",
+					name: "example",
+					branch,
+					worktreePath,
+					status: "active",
+					color: "terminal.ansiBlue",
+					isolation: "shared",
+					createdAt: new Date(0).toISOString(),
+				},
+			]);
+			manager.reload();
+		}
+
+		it("detects feature whose worktree path does not exist on disk", () => {
+			saveFeature(path.join(tmpDir, "missing"));
+			expect(manager.getOrphanedFeatures()).toHaveLength(1);
+			expect(manager.getOrphanedFeatures()[0].id).toBe("feature-1");
+		});
+
+		it("excludes features whose worktree path exists", () => {
+			const worktreePath = path.join(tmpDir, "present");
+			fs.mkdirSync(worktreePath);
+			saveFeature(worktreePath);
+			expect(manager.getOrphanedFeatures()).toHaveLength(0);
+		});
+
+		it("handles multiple features with mixed orphan status", () => {
+			store.saveFeatures([
+				{
+					id: "orphan",
+					name: "orphan",
+					branch: "feat/orphan",
+					worktreePath: path.join(tmpDir, "gone"),
+					status: "active",
+					color: "blue",
+					isolation: "shared",
+					createdAt: new Date(0).toISOString(),
+				},
+				{
+					id: "valid",
+					name: "valid",
+					branch: "feat/valid",
+					worktreePath: path.join(tmpDir, "ok"),
+					status: "active",
+					color: "blue",
+					isolation: "shared",
+					createdAt: new Date(0).toISOString(),
+				},
+			]);
+			fs.mkdirSync(path.join(tmpDir, "ok"));
+			manager.reload();
+			const orphaned = manager.getOrphanedFeatures();
+			expect(orphaned).toHaveLength(1);
+			expect(orphaned[0].id).toBe("orphan");
+		});
+
+		it("returns empty array when no features exist", () => {
+			expect(manager.getOrphanedFeatures()).toHaveLength(0);
+		});
+
+		it("does not mutate the feature record", () => {
+			saveFeature(path.join(tmpDir, "gone"));
+			const before = structuredClone(store.loadFeatures()[0]);
+			manager.getOrphanedFeatures();
+			expect(store.loadFeatures()[0]).toEqual(before);
+		});
+	});
+
 	describe("deleteFeature", () => {
 		it("can remove the worktree while preserving records for a resumable finish", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
@@ -828,6 +900,40 @@ describe("FeatureManager", () => {
 					args[1] === "remove",
 			);
 			expect(removeCalls).toHaveLength(0);
+		});
+
+		it("succeeds when git worktree remove fails but path is already absent", async () => {
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = fm.createFeature("already-gone", "shared");
+			// Do NOT create the worktree directory — it is already absent.
+			mockCleanMergedDeletion(() => {
+				throw new Error("git worktree remove failed");
+			});
+
+			const result = await fm.removeFeatureWorktreeForFinish(feature.id);
+
+			expect(result.deleted).toBe(true);
+		});
+
+		it("blocks when git worktree remove fails and path still exists", async () => {
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = fm.createFeature("still-here", "shared");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
+			mockExecSync.mockReset();
+			mockCleanMergedDeletion(() => {
+				throw new Error("git worktree remove failed");
+			});
+
+			const result = await fm.removeFeatureWorktreeForFinish(feature.id);
+
+			expect(result.deleted).toBe(false);
+			expect(result.reasons.join("\n")).toContain("refused to remove worktree");
 		});
 	});
 
