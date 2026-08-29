@@ -45,7 +45,14 @@ export class OpenCodeHttpClient {
 	 * List sessions from the OpenCode server.
 	 * Returns an array of session objects with at least `id` and `directory`.
 	 */
-	async listSessions(): Promise<Array<{ id: string; directory: string }>> {
+	async listSessions(): Promise<
+		Array<{
+			id: string;
+			directory: string;
+			title?: string;
+			timeCreated?: unknown;
+		}>
+	> {
 		const response = await this.get("/session");
 		const data = await response.json();
 		return extractSessionList(data);
@@ -72,9 +79,14 @@ export class OpenCodeHttpClient {
 	onSessionEvents(
 		sessionId: string,
 		listener: (event: OpenCodeServerEvent) => void,
+		onClosed?: () => void,
 	): () => void {
 		const controller = new AbortController();
-		void this.consumeEventStream(sessionId, listener, controller.signal);
+		void this.consumeEventStream(
+			sessionId,
+			listener,
+			controller.signal,
+		).finally(() => onClosed?.());
 		return () => controller.abort();
 	}
 
@@ -126,7 +138,8 @@ export class OpenCodeHttpClient {
 				}
 			}
 		} catch {
-			// Connection aborted or network error — silent close.
+			// The provider clears its active-stream state in onClosed. A later
+			// resume explicitly creates the next stream.
 		}
 	}
 
@@ -203,9 +216,12 @@ function extractSessionId(data: unknown): string | null {
  * The `/session` endpoint returns a flat array: `[{ id, directory, ... }, ...]`.
  * The `/api/session` endpoint wraps it: `{ data: [{ id, directory, ... }, ...] }`.
  */
-function extractSessionList(
-	data: unknown,
-): Array<{ id: string; directory: string }> {
+function extractSessionList(data: unknown): Array<{
+	id: string;
+	directory: string;
+	title?: string;
+	timeCreated?: unknown;
+}> {
 	if (!data || typeof data !== "object") return [];
 	const obj = data as Record<string, unknown>;
 	const raw = Array.isArray(obj.data)
@@ -219,9 +235,20 @@ function extractSessionList(
 			(item): item is Record<string, unknown> =>
 				item !== null && typeof item === "object",
 		)
-		.map((item) => ({
-			id: String(item.id ?? ""),
-			directory: String(item.directory ?? ""),
-		}))
+		.map((item) => {
+			const session: {
+				id: string;
+				directory: string;
+				title?: string;
+				timeCreated?: unknown;
+			} = {
+				id: String(item.id ?? ""),
+				directory: String(item.directory ?? ""),
+			};
+			if (typeof item.title === "string") session.title = item.title;
+			if (item.time_created !== undefined)
+				session.timeCreated = item.time_created;
+			return session;
+		})
 		.filter((s) => s.id);
 }

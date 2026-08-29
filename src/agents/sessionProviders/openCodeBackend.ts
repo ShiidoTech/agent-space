@@ -1,7 +1,20 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import {
+	type ChildProcess,
+	type SpawnOptions,
+	spawn,
+} from "node:child_process";
 import { createInterface } from "node:readline";
 import type { OpenCodeSessionProviderOptions } from "./openCodeSessionProvider";
 import { OpenCodeSessionProvider } from "./openCodeSessionProvider";
+
+export interface OpenCodeBackendManagerOptions {
+	/** Test seam for the process boundary; production uses node:child_process. */
+	spawn?: (
+		command: string,
+		args: readonly string[],
+		options: SpawnOptions,
+	) => ChildProcess;
+}
 
 export interface OpenCodeBackendHandle {
 	readonly baseUrl: string;
@@ -36,10 +49,17 @@ interface EnsurePromise {
  * (via `--port 0`) so two worktrees never collide.
  */
 export class OpenCodeBackendManager {
+	private readonly spawnProcess: NonNullable<
+		OpenCodeBackendManagerOptions["spawn"]
+	>;
 	private backends = new Map<string, OpenCodeBackendHandle>();
 	private pendingHealthChecks = new Map<string, PendingHealthCheck>();
 	/** In-flight ensure() promises, keyed by worktreePath, for coalescence. */
 	private ensurePromises = new Map<string, EnsurePromise>();
+
+	constructor(options: OpenCodeBackendManagerOptions = {}) {
+		this.spawnProcess = options.spawn ?? defaultSpawn;
+	}
 
 	/**
 	 * Ensure a backend is running for the given worktree. If one already exists,
@@ -157,7 +177,7 @@ export class OpenCodeBackendManager {
 			// Use explicit empty password for controlled loopback backend.
 			// The server prints a warning if no password is set, but loopback is
 			// intentionally unauthenticated. We do NOT inherit OPENCODE_SERVER_PASSWORD.
-			const child: ChildProcess = spawn(
+			const child: ChildProcess = this.spawnProcess(
 				openCodeBinary,
 				["serve", "--port", "0", "--hostname", "127.0.0.1"],
 				{
@@ -308,4 +328,12 @@ export class OpenCodeBackendManager {
 
 function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function defaultSpawn(
+	command: string,
+	args: readonly string[],
+	options: SpawnOptions,
+): ChildProcess {
+	return spawn(command, args, options);
 }

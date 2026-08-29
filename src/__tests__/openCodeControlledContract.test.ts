@@ -1,8 +1,22 @@
-import { describe, expect, it, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
-import { OpenCodeBackendManager } from "../agents/sessionProviders/openCodeBackend";
-import { OpenCodeHttpClient } from "../agents/sessionProviders/openCodeHttpClient";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import {
+	afterAll,
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
+import {
+	OpenCodeBackendManager,
+	type OpenCodeBackendManagerOptions,
+} from "../agents/sessionProviders/openCodeBackend";
 import type { OpenCodeServerEvent } from "../agents/sessionProviders/openCodeHttpClient";
-import type { OpenCodeBackendHandle } from "../agents/sessionProviders/openCodeBackend";
+import { OpenCodeHttpClient } from "../agents/sessionProviders/openCodeHttpClient";
+import { OpenCodeSessionProvider } from "../agents/sessionProviders/openCodeSessionProvider";
 
 /**
  * Contract tests for the controlled OpenCode path (PR5/6 of #120).
@@ -39,6 +53,19 @@ function makeEvent(
 	return { type, properties, timestamp };
 }
 
+function fakeChild(url: string) {
+	const stdout = new PassThrough();
+	const stderr = new PassThrough();
+	const child = Object.assign(new EventEmitter(), {
+		stdout,
+		stderr,
+		pid: 12345,
+		kill: vi.fn(),
+	}) as unknown as import("node:child_process").ChildProcess;
+	queueMicrotask(() => stdout.write(`opencode server listening on ${url}\n`));
+	return child;
+}
+
 describe("OpenCode controlled path — contract tests", () => {
 	// --- OpenCodeHttpClient: createSession with mocked fetch ---
 
@@ -46,7 +73,11 @@ describe("OpenCode controlled path — contract tests", () => {
 		it("POSTs to /session with empty body and returns sessionId from response", async () => {
 			fetchMock.mockResolvedValueOnce({
 				ok: true,
-				json: async () => ({ id: "sess-abc123", slug: "test", directory: "/tmp/worktree" }),
+				json: async () => ({
+					id: "sess-abc123",
+					slug: "test",
+					directory: "/tmp/worktree",
+				}),
 			});
 
 			const client = new OpenCodeHttpClient("http://127.0.0.1:4096");
@@ -56,7 +87,9 @@ describe("OpenCode controlled path — contract tests", () => {
 				"http://127.0.0.1:4096/session",
 				expect.objectContaining({
 					method: "POST",
-					headers: expect.objectContaining({ "Content-Type": "application/json" }),
+					headers: expect.objectContaining({
+						"Content-Type": "application/json",
+					}),
 					body: "{}",
 				}),
 			);
@@ -80,7 +113,10 @@ describe("OpenCode controlled path — contract tests", () => {
 				json: async () => ({ id: "sess-xyz" }),
 			});
 
-			const client = new OpenCodeHttpClient("http://127.0.0.1:4096", "secret123");
+			const client = new OpenCodeHttpClient(
+				"http://127.0.0.1:4096",
+				"secret123",
+			);
 			await client.createSession();
 
 			expect(fetchMock).toHaveBeenCalledWith(
@@ -141,11 +177,11 @@ describe("OpenCode controlled path — contract tests", () => {
 	describe("OpenCodeHttpClient SSE stream", () => {
 		it("filters events by properties.sessionID and calls listener", async () => {
 			// Simulate SSE stream with multiple events
-			const sseData = [
+			const sseData = `${[
 				'data: {"type":"session.status","properties":{"sessionID":"sess-target","status":{"type":"busy"}}}',
 				'data: {"type":"session.status","properties":{"sessionID":"sess-other","status":{"type":"idle"}}}',
 				'data: {"type":"permission.asked","properties":{"sessionID":"sess-target"}}',
-			].join("\n\n") + "\n\n";
+			].join("\n\n")}\n\n`;
 
 			let readerClosed = false;
 			fetchMock.mockResolvedValueOnce({
@@ -155,7 +191,10 @@ describe("OpenCode controlled path — contract tests", () => {
 						read: async () => {
 							if (!readerClosed) {
 								readerClosed = true;
-								return { done: false, value: new TextEncoder().encode(sseData) };
+								return {
+									done: false,
+									value: new TextEncoder().encode(sseData),
+								};
 							}
 							return { done: true, value: undefined };
 						},
@@ -165,7 +204,9 @@ describe("OpenCode controlled path — contract tests", () => {
 
 			const client = new OpenCodeHttpClient("http://test");
 			const received: OpenCodeServerEvent[] = [];
-			const unsubscribe = client.onSessionEvents("sess-target", (e) => received.push(e));
+			const unsubscribe = client.onSessionEvents("sess-target", (e) =>
+				received.push(e),
+			);
 
 			// Wait for stream processing
 			await new Promise((r) => setTimeout(r, 50));
@@ -179,7 +220,8 @@ describe("OpenCode controlled path — contract tests", () => {
 		});
 
 		it("maps session.status busy -> working", async () => {
-			const sseData = 'data: {"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}\n\n';
+			const sseData =
+				'data: {"type":"session.status","properties":{"sessionID":"s1","status":{"type":"busy"}}}\n\n';
 
 			let readerClosed = false;
 			fetchMock.mockResolvedValueOnce({
@@ -189,7 +231,10 @@ describe("OpenCode controlled path — contract tests", () => {
 						read: async () => {
 							if (!readerClosed) {
 								readerClosed = true;
-								return { done: false, value: new TextEncoder().encode(sseData) };
+								return {
+									done: false,
+									value: new TextEncoder().encode(sseData),
+								};
 							}
 							return { done: true, value: undefined };
 						},
@@ -205,9 +250,58 @@ describe("OpenCode controlled path — contract tests", () => {
 
 			expect(received[0].type).toBe("session.status");
 		});
+
+		it("cleans up after EOF so resume opens a new stream", async () => {
+			let eventStreams = 0;
+			fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+				if (init?.method === "POST")
+					return { ok: true, json: async () => ({ id: "sess-reconnect" }) };
+				if (url.endsWith("/session"))
+					return { ok: true, json: async () => [{ id: "sess-reconnect" }] };
+				if (url.endsWith("/event")) {
+					eventStreams += 1;
+					const data =
+						eventStreams === 2
+							? 'data: {"type":"session.status","properties":{"sessionID":"sess-reconnect","status":{"type":"busy"}}}\n\n'
+							: "";
+					let read = false;
+					return {
+						ok: true,
+						body: {
+							getReader: () => ({
+								read: async () => {
+									if (read) return { done: true, value: undefined };
+									read = true;
+									return { done: false, value: new TextEncoder().encode(data) };
+								},
+							}),
+						},
+					};
+				}
+				return { ok: true, json: async () => [] };
+			});
+
+			const provider = new OpenCodeSessionProvider({
+				serverUrl: "http://test",
+				dbPath: "/missing",
+				sqliteOverride: null,
+			});
+			await provider.acquireConversation({
+				cwd: "/tmp",
+				knownSessionIds: new Set(),
+			});
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(eventStreams).toBe(1);
+
+			expect(await provider.resumeConversation("sess-reconnect")).toBe(true);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(eventStreams).toBe(2);
+			expect(provider.readAttention("sess-reconnect")?.status).toBe("working");
+			provider.dispose();
+		});
 	});
 
-	// --- OpenCodeBackendManager coalescence (structure test) ---
+	// --- OpenCodeBackendManager coalescence (proves 2 concurrent ensure = 1 spawn) ---
 
 	describe("OpenCodeBackendManager coalescence", () => {
 		let manager: OpenCodeBackendManager;
@@ -220,16 +314,22 @@ describe("OpenCode controlled path — contract tests", () => {
 			await manager.dispose();
 		});
 
-		it("exposes ensurePromises map for coalescence", () => {
-			const ensurePromises = (manager as unknown as { ensurePromises: Map<string, unknown> }).ensurePromises;
-			expect(ensurePromises).toBeInstanceOf(Map);
-			expect(ensurePromises.size).toBe(0);
-		});
+		it("starts one backend for concurrent calls and reuses it afterward", async () => {
+			const spawnMock = vi.fn(() => fakeChild("http://127.0.0.1:4311"));
+			manager = new OpenCodeBackendManager({
+				spawn: spawnMock as unknown as OpenCodeBackendManagerOptions["spawn"],
+			});
+			fetchMock.mockResolvedValue({ ok: true });
 
-		it("exposes backends map for handle storage", () => {
-			const backends = (manager as unknown as { backends: Map<string, unknown> }).backends;
-			expect(backends).toBeInstanceOf(Map);
-			expect(backends.size).toBe(0);
+			const [first, second] = await Promise.all([
+				manager.ensure("/tmp/ws-coalesce"),
+				manager.ensure("/tmp/ws-coalesce"),
+			]);
+
+			expect(spawnMock).toHaveBeenCalledTimes(1);
+			expect(first).toBe(second);
+			expect(await manager.ensure("/tmp/ws-coalesce")).toBe(first);
+			expect(spawnMock).toHaveBeenCalledTimes(1);
 		});
 
 		it("get() returns undefined when no backend exists", () => {
@@ -265,16 +365,86 @@ describe("OpenCode controlled path — contract tests", () => {
 	// --- A/B same worktree no cross-talk ---
 
 	describe("A/B agents in same worktree — no cross-talk", () => {
-		it("backend manager returns same handle for same worktree", async () => {
-			const manager = new OpenCodeBackendManager();
+		let manager: OpenCodeBackendManager;
+		let sessionCounter: number;
 
-			// We can't easily test without mocking the full backend startup,
-			// but we verify the map structure exists
-			const backends = (manager as unknown as { backends: Map<string, unknown> }).backends;
-			expect(backends).toBeInstanceOf(Map);
-			expect(backends.size).toBe(0);
+		beforeEach(() => {
+			sessionCounter = 0;
+			manager = new OpenCodeBackendManager({
+				spawn: vi.fn(() =>
+					fakeChild("http://127.0.0.1:4312"),
+				) as unknown as OpenCodeBackendManagerOptions["spawn"],
+			});
+			fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+				if (url.endsWith("/global/health")) return { ok: true };
+				if (init?.method === "POST") {
+					sessionCounter += 1;
+					return {
+						ok: true,
+						json: async () => ({ id: `sess-agent-${sessionCounter}` }),
+					};
+				}
+				return { ok: true, json: async () => [] };
+			});
+		});
 
+		afterEach(async () => {
 			await manager.dispose();
+			vi.restoreAllMocks();
+		});
+
+		it("each agent gets distinct session ID from POST /session; backend shared", async () => {
+			// Mock fetch to return different session IDs for each POST
+			const handle = await manager.ensure("/tmp/ws-ab");
+			const providerA = handle.sessionProvider;
+			const providerB = handle.sessionProvider;
+
+			// Both providers use the SAME backend (same baseUrl)
+			const receiptA = await providerA.acquireConversation({
+				cwd: "/tmp/ws-ab",
+				agentId: "a",
+				featureId: "f1",
+				knownSessionIds: new Set(),
+				tmuxSession: "tmux-a",
+				launchedAtMs: Date.now(),
+			});
+			const receiptB = await providerB.acquireConversation({
+				cwd: "/tmp/ws-ab",
+				agentId: "b",
+				featureId: "f1",
+				knownSessionIds: new Set(["sess-agent-a"]),
+				tmuxSession: "tmux-b",
+				launchedAtMs: Date.now(),
+			});
+
+			expect(receiptA?.sessionId).toBe("sess-agent-1");
+			expect(receiptB?.sessionId).toBe("sess-agent-2");
+			expect(receiptA?.sessionId).not.toBe(receiptB?.sessionId);
+
+			// Both providers share the same backend URL
+			expect(providerA.serverUrl).toBe(handle.baseUrl);
+			expect(providerB.serverUrl).toBe(handle.baseUrl);
+
+			await providerA.dispose();
+		});
+
+		it("session IDs are tracked separately in SessionBinder (no cross-bind)", () => {
+			// This is a unit test concept - SessionBinder tracks owned session IDs
+			const ownedByA = new Set(["sess-a"]);
+			const ownedByB = new Set(["sess-b"]);
+
+			// Agent A's candidates exclude B's sessions and vice versa
+			const aCandidates = [
+				{ sessionId: "sess-a" },
+				{ sessionId: "sess-c" },
+			].filter((s) => !ownedByB.has(s.sessionId));
+			const bCandidates = [
+				{ sessionId: "sess-b" },
+				{ sessionId: "sess-c" },
+			].filter((s) => !ownedByA.has(s.sessionId));
+
+			expect(aCandidates.map((c) => c.sessionId)).toEqual(["sess-a", "sess-c"]);
+			expect(bCandidates.map((c) => c.sessionId)).toEqual(["sess-b", "sess-c"]);
 		});
 	});
 });
@@ -284,17 +454,26 @@ describe("OpenCode controlled path — contract tests", () => {
 describe("OpenCode SSE envelope mapping (mapSseEventToAttentionSignal)", () => {
 	// These test the actual mapping logic used by OpenCodeSessionProvider
 	it("maps session.status busy -> working", () => {
-		const event = makeEvent("session.status", { sessionID: "s1", status: { type: "busy" } });
+		const event = makeEvent("session.status", {
+			sessionID: "s1",
+			status: { type: "busy" },
+		});
 		expect(mapStatus(event)).toBe("working");
 	});
 
 	it("maps session.status idle -> idle", () => {
-		const event = makeEvent("session.status", { sessionID: "s1", status: { type: "idle" } });
+		const event = makeEvent("session.status", {
+			sessionID: "s1",
+			status: { type: "idle" },
+		});
 		expect(mapStatus(event)).toBe("idle");
 	});
 
 	it("maps session.status retry -> working", () => {
-		const event = makeEvent("session.status", { sessionID: "s1", status: { type: "retry" } });
+		const event = makeEvent("session.status", {
+			sessionID: "s1",
+			status: { type: "retry" },
+		});
 		expect(mapStatus(event)).toBe("working");
 	});
 

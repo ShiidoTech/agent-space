@@ -625,14 +625,9 @@ export class CodingToolRegistry {
 		const provider = this.getProvider(tool);
 		// Only OpenCode has a controlled backend currently.
 		if (toolId === "opencode" && provider.sessionAdapter?.acquireConversation) {
-			const handle = await openCodeBackendManager.ensure(
-				cwd,
-				"opencode",
-				10_000,
-				{
-					serverPassword: "",
-				},
-			);
+			await openCodeBackendManager.ensure(cwd, "opencode", 10_000, {
+				serverPassword: "",
+			});
 			// Use the scoped provider from the backend manager (cached per worktree).
 			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
 			if (!scopedProvider) {

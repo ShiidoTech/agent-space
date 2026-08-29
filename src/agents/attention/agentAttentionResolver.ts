@@ -1,6 +1,5 @@
 import type { Agent, AgentAttentionStatus, AgentStatus } from "../../types";
 import type { CodingToolRegistry } from "../codingToolRegistry";
-import { openCodeBackendManager } from "../codingToolRegistry";
 import type { ProviderAttentionSignal } from "../providers/types";
 import type { TmuxIntegration } from "../tmux";
 

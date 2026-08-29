@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CodingToolRegistry } from "../agents/codingToolRegistry";
+import {
+	CodingToolRegistry,
+	openCodeBackendManager,
+} from "../agents/codingToolRegistry";
 import type { CodingAgentProvider } from "../agents/providers/types";
 import {
 	RuntimeOwnershipGuard,
@@ -387,6 +390,44 @@ describe("restoreAgentRuntimes", () => {
 		const stored = ctx.store.loadAgents("f1")[0];
 		expect(stored.status).toBe("running");
 		expect(stored.restore).toMatchObject({ state: "resumed" });
+	});
+
+	it("blocks only an OpenCode agent when its backend cannot be ensured", async () => {
+		const { ctx, registry, st, projectManager } = setup([feature()]);
+		ctx.store.saveAgents("f1", [
+			agentFixture({ id: "oc-a", toolId: "opencode" }),
+			agentFixture({ id: "agent-b", toolId: "stub" }),
+		]);
+		const opencodeTool = {
+			id: "opencode",
+			name: "OpenCode",
+			command: "opencode",
+			family: "opencode" as const,
+		};
+		const opencodeProvider = provider({ id: "opencode" });
+		vi.spyOn(registry, "resolveAgentToolForAgent").mockImplementation(
+			(agent) =>
+				agent.toolId === "opencode"
+					? ({ ...opencodeTool, provider: opencodeProvider } as never)
+					: registry.resolveAgentTool("stub"),
+		);
+		vi.spyOn(registry, "getProvider").mockImplementation((tool) =>
+			tool.id === "opencode" ? opencodeProvider : provider(),
+		);
+		vi.spyOn(openCodeBackendManager, "ensure").mockRejectedValue(
+			new Error("backend unavailable"),
+		);
+
+		const report = await restoreAgentRuntimes({
+			projectManager,
+			tmux: tmux(st),
+			toolRegistry: registry,
+		});
+
+		expect(report.blocked.map((item) => item.agentId)).toContain("oc-a");
+		expect(report.resumed.map((item) => item.agentId)).toContain("agent-b");
+		expect(st.created).toEqual(["agent-space-f1-agent-b"]);
+		expect(execAsyncMock).toHaveBeenCalledTimes(1);
 	});
 
 	it("blocks an agent whose persisted session id no longer exists", async () => {

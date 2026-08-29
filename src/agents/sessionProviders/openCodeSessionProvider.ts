@@ -81,10 +81,12 @@ export class OpenCodeSessionProvider
 	private readonly sseAttention = new Map<string, ProviderAttentionSignal>();
 
 	constructor(options: OpenCodeSessionProviderOptions = {}) {
-		const dbPath = options.dbPath ?? resolveOpenCodeDbPath();
+		const controlled = Boolean(options.serverUrl);
+		const dbPath =
+			options.dbPath ?? (controlled ? undefined : resolveOpenCodeDbPath());
 		this.sqlite = new SqliteReadOnlyDb(
 			dbPath,
-			openCodeCliFallback(),
+			controlled ? undefined : openCodeCliFallback(),
 			options.sqliteOverride,
 		);
 		this.serverUrl = options.serverUrl;
@@ -130,6 +132,19 @@ export class OpenCodeSessionProvider
 	}
 
 	private async scanSessionsAsync(): Promise<SessionInfo[]> {
+		if (this.httpClient) {
+			try {
+				const sessions = await this.httpClient.listSessions();
+				return sessions.map((session) => ({
+					sessionId: session.id,
+					prompt: session.title ?? "",
+					created: epochMsToIso(session.timeCreated),
+					projectPath: session.directory,
+				}));
+			} catch {
+				return [];
+			}
+		}
 		const rows = await this.sqlite.queryAsync(
 			"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
 		);
@@ -155,6 +170,16 @@ export class OpenCodeSessionProvider
 
 	private async readNameAsync(sessionId: string): Promise<string | null> {
 		if (!isSafeSessionId(sessionId)) return null;
+		if (this.httpClient) {
+			try {
+				const session = (await this.httpClient.listSessions()).find(
+					(candidate) => candidate.id === sessionId,
+				);
+				if (session?.title?.trim()) return session.title.trim();
+			} catch {
+				return null;
+			}
+		}
 		const title = await this.readTitleAsync(sessionId);
 		if (title) return title;
 		return this.readUserPromptAsync(sessionId);
@@ -214,9 +239,10 @@ export class OpenCodeSessionProvider
 		}
 		return (
 			(
-				await this.sqlite.queryAsync("SELECT id FROM session WHERE id = ?", [
-					sessionId,
-				])
+				await this.sqlite.queryAsyncDirect(
+					"SELECT id FROM session WHERE id = ?",
+					[sessionId],
+				)
 			).length > 0
 		);
 	}
@@ -234,7 +260,7 @@ export class OpenCodeSessionProvider
 	 * here is persisted immediately and never inferred later.
 	 */
 	async acquireConversation(
-		context: SessionCorrelationContext,
+		_context: SessionCorrelationContext,
 	): Promise<ProviderConversationReceipt | undefined> {
 		if (!this.httpClient) return undefined;
 		try {
@@ -272,8 +298,15 @@ export class OpenCodeSessionProvider
 	private startSseEventStream(sessionId: string): void {
 		if (this.eventUnsubscribers.has(sessionId)) return;
 		if (!this.httpClient) return;
-		const unsubscribe = this.httpClient.onSessionEvents(sessionId, (event) =>
-			this.handleSseEvent(sessionId, event),
+		let unsubscribe = () => {};
+		unsubscribe = this.httpClient.onSessionEvents(
+			sessionId,
+			(event) => this.handleSseEvent(sessionId, event),
+			() => {
+				if (this.eventUnsubscribers.get(sessionId) === unsubscribe) {
+					this.eventUnsubscribers.delete(sessionId);
+				}
+			},
 		);
 		this.eventUnsubscribers.set(sessionId, unsubscribe);
 	}
@@ -299,7 +332,7 @@ export class OpenCodeSessionProvider
 		// SSE-derived signal takes precedence over SQLite.
 		const sseSignal = this.sseAttention.get(sessionId);
 		if (sseSignal) return sseSignal;
-		const rows = this.sqlite.querySync(GATE_SQL, [
+		const rows = this.sqlite.querySyncDirect(GATE_SQL, [
 			sessionId,
 			sessionId,
 			sessionId,
@@ -315,7 +348,7 @@ export class OpenCodeSessionProvider
 		// SSE-derived signal takes precedence over SQLite.
 		const sseSignal = this.sseAttention.get(sessionId);
 		if (sseSignal) return sseSignal;
-		const rows = await this.sqlite.queryAsync(GATE_SQL, [
+		const rows = await this.sqlite.queryAsyncDirect(GATE_SQL, [
 			sessionId,
 			sessionId,
 			sessionId,

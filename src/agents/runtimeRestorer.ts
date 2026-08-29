@@ -5,13 +5,13 @@ import type {
 import type { Agent, CodingTool, Feature } from "../types";
 import { execAsync } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
+import { openCodeBackendManager } from "./codingToolRegistry";
 import {
 	RuntimeOwnershipGuard,
 	runtimeOwnershipKey,
 	withRuntimeSpawnLock,
 } from "./runtimeOwnership";
 import type { TmuxIntegration } from "./tmux";
-import { openCodeBackendManager } from "./codingToolRegistry";
 
 /**
  * Post-restart runtime restoration for agent sessions.
@@ -168,7 +168,19 @@ async function restoreAgentRuntimeUnlocked(
 	// For OpenCode controlled backend, ensure the backend is running so
 	// buildStrictResumeLaunchCommand can construct the correct attach command.
 	if (tool.id === "opencode") {
-		await openCodeBackendManager.ensure(cwd);
+		try {
+			await openCodeBackendManager.ensure(cwd);
+		} catch (error) {
+			console.warn(
+				`[RuntimeRestorer] OpenCode backend ensure failed for ${cwd}: ${error}`,
+			);
+			return persistBlocked(
+				ctx,
+				agent,
+				"OpenCode backend could not be started; agent runtime not recreated",
+				outcome,
+			);
+		}
 	}
 
 	const resumeCommand = deps.toolRegistry.buildStrictResumeLaunchCommand(
