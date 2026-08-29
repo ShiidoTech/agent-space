@@ -106,6 +106,14 @@ export interface CodingAgentProvider {
 		sessionId: string,
 	): Promise<ProviderAttentionSignal | undefined>;
 	readonly sessionAdapter?: ProviderSessionAdapter;
+	/**
+	 * Optional hook to get a provider instance scoped to a specific worktree
+	 * for controlled backends (e.g., OpenCode). If provided, this is used by
+	 * SessionBinder.acquireConversation instead of the default sessionAdapter.
+	 */
+	readonly getControlledProviderForCwd?: (
+		cwd: string,
+	) => Promise<CodingAgentProvider | undefined>;
 }
 
 export const NO_ATTENTION_CAPABILITIES: ProviderCapabilities["attention"] = {

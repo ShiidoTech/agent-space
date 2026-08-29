@@ -184,32 +184,30 @@ const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
 	},
 	opencode: {
 		// PR5: controlled backend — `opencode attach` connects to the running
-		// server and opens the exact session.
+		// server and opens the exact session. Fail-closed: no serverUrl = no launch.
 		launchArgs: (sessionId, cwd) => {
-			const serverUrl = (
-				openCodeSessionAdapter as
-					| { serverUrl?: string }
-					| undefined
-			)?.serverUrl;
-			if (serverUrl && sessionId) {
+			if (!cwd || !sessionId) return [];
+			const handle = openCodeBackendManager.get(cwd);
+			const serverUrl = handle?.baseUrl;
+			if (serverUrl) {
 				const args = ["attach", serverUrl, "--session", sessionId];
-				if (cwd) args.push("--dir", cwd);
+				args.push("--dir", cwd);
 				return args;
 			}
-			return sessionId ? ["--session", sessionId] : [];
+			// Fail-closed: controlled path only. No standalone fallback.
+			return [];
 		},
 		resumeArgs: (sessionId, cwd) => {
-			const serverUrl = (
-				openCodeSessionAdapter as
-					| { serverUrl?: string }
-					| undefined
-			)?.serverUrl;
-			if (serverUrl && sessionId) {
+			if (!cwd || !sessionId) return [];
+			const handle = openCodeBackendManager.get(cwd);
+			const serverUrl = handle?.baseUrl;
+			if (serverUrl) {
 				const args = ["attach", serverUrl, "--session", sessionId];
-				if (cwd) args.push("--dir", cwd);
+				args.push("--dir", cwd);
 				return args;
 			}
-			return sessionId ? ["--session", sessionId] : ["--continue"];
+			// Fail-closed: controlled path only. No standalone fallback.
+			return [];
 		},
 	},
 };
@@ -611,6 +609,32 @@ export class CodingToolRegistry {
 		agent: Agent,
 	): import("./providers/types").ProviderSessionAdapter | undefined {
 		return this.resolveAgentToolForAgent(agent).provider?.sessionAdapter;
+	}
+
+	/**
+	 * Get a provider instance scoped to a specific worktree for controlled
+	 * backends (e.g., OpenCode). Ensures the backend is running and returns
+	 * a provider with the correct serverUrl. For providers without controlled
+	 * backends, returns the default provider.
+	 */
+	async getControlledProviderForCwd(
+		toolId: string,
+		cwd: string,
+	): Promise<CodingAgentProvider | undefined> {
+		const tool = this.resolveAgentTool(toolId);
+		const provider = this.getProvider(tool);
+		// Only OpenCode has a controlled backend currently.
+		if (toolId === "opencode" && provider.sessionAdapter?.acquireConversation) {
+			const handle = await openCodeBackendManager.ensure(cwd);
+			return {
+				...provider,
+				sessionAdapter: new OpenCodeSessionProvider({
+					serverUrl: handle.baseUrl,
+					serverPassword: "",
+				}),
+			};
+		}
+		return provider;
 	}
 
 	/**

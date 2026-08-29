@@ -13,6 +13,12 @@ interface PendingHealthCheck {
 	timer: ReturnType<typeof setTimeout>;
 }
 
+interface EnsurePromise {
+	promise: Promise<OpenCodeBackendHandle>;
+	resolve: (handle: OpenCodeBackendHandle) => void;
+	reject: (error: Error) => void;
+}
+
 /**
  * Per-worktree OpenCode backend manager.
  *
@@ -28,11 +34,15 @@ interface PendingHealthCheck {
 export class OpenCodeBackendManager {
 	private backends = new Map<string, OpenCodeBackendHandle>();
 	private pendingHealthChecks = new Map<string, PendingHealthCheck>();
+	/** In-flight ensure() promises, keyed by worktreePath, for coalescence. */
+	private ensurePromises = new Map<string, EnsurePromise>();
 
 	/**
 	 * Ensure a backend is running for the given worktree. If one already exists,
 	 * return it immediately. Otherwise, start a new `opencode serve` process and
 	 * wait for it to be ready.
+	 *
+	 * Concurrent calls for the same worktree are coalesced into a single spawn.
 	 *
 	 * @param worktreePath - The worktree directory this backend serves.
 	 * @param openCodeBinary - Path to the `opencode` binary. Defaults to `"opencode"`.
@@ -55,13 +65,42 @@ export class OpenCodeBackendManager {
 			this.backends.delete(worktreePath);
 		}
 
-		const handle = await this.startBackend(
-			worktreePath,
-			openCodeBinary,
-			healthCheckTimeoutMs,
-		);
-		this.backends.set(worktreePath, handle);
-		return handle;
+		// Coalesce concurrent ensure() calls for the same worktree.
+		const inFlight = this.ensurePromises.get(worktreePath);
+		if (inFlight) {
+			return inFlight.promise;
+		}
+
+		let resolvePromise: (handle: OpenCodeBackendHandle) => void = () => {};
+		let rejectPromise: (error: Error) => void = () => {};
+		const promise = new Promise<OpenCodeBackendHandle>((resolve, reject) => {
+			resolvePromise = resolve;
+			rejectPromise = reject;
+		});
+		// Both are assigned in the executor before the promise is returned.
+		this.ensurePromises.set(worktreePath, {
+			promise,
+			resolve: resolvePromise,
+			reject: rejectPromise,
+		});
+
+		try {
+			const handle = await this.startBackend(
+				worktreePath,
+				openCodeBinary,
+				healthCheckTimeoutMs,
+			);
+			this.backends.set(worktreePath, handle);
+			this.ensurePromises.get(worktreePath)?.resolve(handle);
+			return handle;
+		} catch (error) {
+			this.ensurePromises
+				.get(worktreePath)
+				?.reject(error instanceof Error ? error : new Error(String(error)));
+			throw error;
+		} finally {
+			this.ensurePromises.delete(worktreePath);
+		}
 	}
 
 	/**
@@ -85,6 +124,10 @@ export class OpenCodeBackendManager {
 			pending.resolve(false);
 		}
 		this.pendingHealthChecks.clear();
+		for (const pending of this.ensurePromises.values()) {
+			pending.reject(new Error("Backend manager disposed"));
+		}
+		this.ensurePromises.clear();
 	}
 
 	private async startBackend(
@@ -93,13 +136,19 @@ export class OpenCodeBackendManager {
 		healthCheckTimeoutMs: number,
 	): Promise<OpenCodeBackendHandle> {
 		return new Promise<OpenCodeBackendHandle>((resolve, reject) => {
+			// Use explicit empty password for controlled loopback backend.
+			// The server prints a warning if no password is set, but loopback is
+			// intentionally unauthenticated. We do NOT inherit OPENCODE_SERVER_PASSWORD.
 			const child: ChildProcess = spawn(
 				openCodeBinary,
 				["serve", "--port", "0", "--hostname", "127.0.0.1"],
 				{
 					cwd: worktreePath,
 					stdio: ["ignore", "pipe", "pipe"],
-					env: { ...process.env },
+					env: {
+						...process.env,
+						OPENCODE_SERVER_PASSWORD: "",
+					},
 				},
 			);
 
@@ -215,9 +264,13 @@ export class OpenCodeBackendManager {
 		return false;
 	}
 
+	/**
+	 * Health check against the OpenCode server.
+	 * Uses `/global/health` which is the official health endpoint.
+	 */
 	private async isHealthy(baseUrl: string): Promise<boolean> {
 		try {
-			const response = await fetch(`${baseUrl}/api/session`, {
+			const response = await fetch(`${baseUrl}/global/health`, {
 				signal: AbortSignal.timeout(3_000),
 			});
 			return response.ok;

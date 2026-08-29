@@ -6,6 +6,8 @@
  * - `GET /session` — list all sessions
  * - `GET /api/session` — list all sessions (paginated, `data` wrapper)
  * - `POST /api/session` — create a new session (`data` wrapper)
+ * - `GET /event` — Server-Sent Events stream for all sessions (filter by sessionId in payload)
+ * - `GET /global/health` — health check endpoint
  *
  * This client is intentionally minimal: it only covers the endpoints
  * needed for controlled session creation and attention signal consumption.
@@ -61,10 +63,8 @@ export class OpenCodeHttpClient {
 	/**
 	 * Consume SSE events from the OpenCode server, filtered by session id.
 	 *
-	 * The event stream is read line-by-line. Each line is expected to be
-	 * a JSON object with at least a `type` field. The caller provides a
-	 * listener that receives parsed events; the stream is closed when the
-	 * returned abort function is called.
+	 * The event stream is `GET /event` (global bus). Each event has a `sessionId`
+	 * field that we filter on.
 	 *
 	 * @param sessionId - The session to filter events for.
 	 * @param listener - Called for each event that matches the session.
@@ -85,14 +85,13 @@ export class OpenCodeHttpClient {
 		signal: AbortSignal,
 	): Promise<void> {
 		try {
-			const url = new URL("/session/events", this.baseUrl);
-			url.searchParams.set("sessionId", sessionId);
+			const url = new URL("/event", this.baseUrl);
 			const headers: Record<string, string> = {
 				Accept: "text/event-stream",
 				"Cache-Control": "no-cache",
 			};
 			if (this.password) {
-				headers.Authorization = `Bearer ${this.password}`;
+				headers.Authorization = `Basic ${btoa(`opencode:${this.password}`)}`;
 			}
 			const response = await fetch(url.toString(), {
 				headers,
@@ -117,7 +116,10 @@ export class OpenCodeHttpClient {
 						const jsonStr = trimmed.slice(6);
 						try {
 							const parsed = JSON.parse(jsonStr) as OpenCodeServerEvent;
-							listener(parsed);
+							// Filter by sessionId from the event payload
+							if (parsed.sessionId === sessionId) {
+								listener(parsed);
+							}
 						} catch {
 							// Ignore malformed event data.
 						}
@@ -137,7 +139,7 @@ export class OpenCodeHttpClient {
 			"Content-Type": "application/json",
 		};
 		if (this.password) {
-			headers.Authorization = `Bearer ${this.password}`;
+			headers.Authorization = `Basic ${btoa(`opencode:${this.password}`)}`;
 		}
 		return fetch(`${this.baseUrl}${path}`, {
 			method: "POST",
@@ -149,7 +151,7 @@ export class OpenCodeHttpClient {
 	private async get(path: string): Promise<Response> {
 		const headers: Record<string, string> = {};
 		if (this.password) {
-			headers.Authorization = `Bearer ${this.password}`;
+			headers.Authorization = `Basic ${btoa(`opencode:${this.password}`)}`;
 		}
 		return fetch(`${this.baseUrl}${path}`, { headers });
 	}

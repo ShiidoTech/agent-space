@@ -100,21 +100,16 @@ export class OpenCodeSessionProvider
 		scanSessions: () => Promise<SessionInfo[]>;
 		readName: (sessionId: string) => Promise<string | null>;
 		hasSession: (sessionId: string) => Promise<boolean>;
-		correlateOwnedSession: (
-			context: SessionCorrelationContext,
-		) => Promise<string | undefined>;
+		// NOTE: NO correlateOwnedSession — fail-closed on controlled path.
+		// The only valid ownership proof is the receipt from acquireConversation().
 	} = {
 		scanSessions: async (): Promise<SessionInfo[]> => this.scanSessionsAsync(),
 		readName: async (sessionId: string): Promise<string | null> =>
 			this.readNameAsync(sessionId),
 		hasSession: async (sessionId: string): Promise<boolean> =>
 			this.hasSessionAsync(sessionId),
-		correlateOwnedSession: async (
-			context: SessionCorrelationContext,
-		): Promise<string | undefined> => {
-			if (!this.httpClient) return undefined;
-			return this.correlateOwnedSessionAsync(context);
-		},
+		// No correlateOwnedSession — provider_assigned ownership comes only
+		// from the exact receipt returned by acquireConversation().
 	};
 
 	scanSessions(): SessionInfo[] {
@@ -293,27 +288,6 @@ export class OpenCodeSessionProvider
 	}
 
 	/**
-	 * Correlate a session via the HTTP server: look for a session in the
-	 * server whose `directory` matches the worktree. This is the async path
-	 * used by the periodic reconcile pass.
-	 */
-	private async correlateOwnedSessionAsync(
-		context: SessionCorrelationContext,
-	): Promise<string | undefined> {
-		if (!this.httpClient) return undefined;
-		try {
-			const sessions = await this.httpClient.listSessions();
-			const match = sessions.find(
-				(s) =>
-					s.directory === context.cwd && !context.knownSessionIds.has(s.id),
-			);
-			return match?.id;
-		} catch {
-			return undefined;
-		}
-	}
-
-	/**
 	 * Read provider-native activity evidence without scraping terminal text.
 	 *
 	 * OpenCode persists each message as JSON in SQLite. An assistant message is
@@ -381,6 +355,12 @@ export class OpenCodeSessionProvider
  * The exact event shapes depend on the OpenCode server version. The mapping
  * is intentionally conservative: only clearly identified events produce a
  * signal, everything else is silently ignored.
+ *
+ * Expected event types (from OpenCode server `GET /event`):
+ * - `session.status` with status: "working" | "idle" | "waiting" | "error"
+ * - `permission.asked` / `permission.replied`
+ * - `message.start` / `message.complete` / `message.error`
+ * - `turn.start` / `turn.complete`
  */
 function mapSseEventToAttentionSignal(
 	event: OpenCodeServerEvent,
@@ -388,10 +368,54 @@ function mapSseEventToAttentionSignal(
 	const eventType = event.type;
 	const observedAt = event.timestamp;
 
+	if (eventType === "session.status" && event.data?.status === "working") {
+		return {
+			status: "working",
+			evidence: `opencode.sse.${eventType}.working`,
+			observedAt,
+		};
+	}
 	if (
-		eventType === "session.status" ||
-		eventType === "session.working" ||
+		eventType === "session.status" &&
+		(event.data?.status === "idle" || event.data?.status === "completed")
+	) {
+		return {
+			status: "idle",
+			evidence: `opencode.sse.${eventType}.idle`,
+			observedAt,
+		};
+	}
+	if (eventType === "session.status" && event.data?.status === "waiting") {
+		return {
+			status: "waiting_for_user",
+			evidence: `opencode.sse.${eventType}.waiting`,
+			observedAt,
+		};
+	}
+	if (eventType === "session.status" && event.data?.status === "error") {
+		return {
+			status: "failed",
+			evidence: `opencode.sse.${eventType}.error`,
+			observedAt,
+		};
+	}
+	if (eventType === "permission.asked" || eventType === "question.asked") {
+		return {
+			status: "waiting_for_user",
+			evidence: `opencode.sse.${eventType}`,
+			observedAt,
+		};
+	}
+	if (eventType === "permission.replied") {
+		return {
+			status: "working",
+			evidence: `opencode.sse.${eventType}`,
+			observedAt,
+		};
+	}
+	if (
 		eventType === "message.start" ||
+		eventType === "turn.start" ||
 		eventType === "assistant.start"
 	) {
 		return {
@@ -401,11 +425,9 @@ function mapSseEventToAttentionSignal(
 		};
 	}
 	if (
-		eventType === "session.idle" ||
-		eventType === "session.completed" ||
 		eventType === "message.complete" ||
-		eventType === "assistant.complete" ||
-		eventType === "turn.complete"
+		eventType === "turn.complete" ||
+		eventType === "assistant.complete"
 	) {
 		return {
 			status: "idle",
@@ -414,20 +436,9 @@ function mapSseEventToAttentionSignal(
 		};
 	}
 	if (
-		eventType === "permission.asked" ||
-		eventType === "session.waiting" ||
-		eventType === "question.asked"
-	) {
-		return {
-			status: "waiting_for_user",
-			evidence: `opencode.sse.${eventType}`,
-			observedAt,
-		};
-	}
-	if (
-		eventType === "session.error" ||
 		eventType === "message.error" ||
-		eventType === "assistant.error"
+		eventType === "assistant.error" ||
+		eventType === "session.error"
 	) {
 		return {
 			status: "failed",

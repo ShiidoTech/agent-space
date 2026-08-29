@@ -279,8 +279,9 @@ export class SessionBinder {
 		cwd: string,
 		resume: boolean,
 	): Promise<ProviderConversationReceipt | undefined> {
-		const adapter = this.adapterFor(agent);
-		if (!adapter) return undefined;
+		const defaultAdapter = this.adapterFor(agent);
+		if (!defaultAdapter) return undefined;
+
 		const context: SessionCorrelationContext = {
 			agentId: agent.id,
 			featureId,
@@ -290,14 +291,23 @@ export class SessionBinder {
 				agent.tmuxSession ?? this.tmux.sessionName(featureId, agent.id),
 			launchedAtMs: Date.now(),
 		};
-		if (resume && agent.sessionId && adapter.resumeConversation) {
-			if (!(await adapter.resumeConversation(agent.sessionId))) {
+
+		if (resume && agent.sessionId && defaultAdapter.resumeConversation) {
+			if (!(await defaultAdapter.resumeConversation(agent.sessionId))) {
 				throw new Error(
 					"Codex app-server could not resume the persisted thread",
 				);
 			}
 			return { sessionId: agent.sessionId, proof: "persisted provider thread" };
 		}
+
+		// For controlled backends (e.g., OpenCode), get a provider scoped to this
+		// worktree with the backend's serverUrl.
+		const toolId = agent.toolId ?? "opencode";
+		const controlledProvider =
+			await this.toolRegistry.getControlledProviderForCwd(toolId, cwd);
+		const adapter = controlledProvider?.sessionAdapter ?? defaultAdapter;
+
 		if (resume || !adapter.acquireConversation) return undefined;
 		const receipt = await adapter.acquireConversation(context);
 		if (!receipt?.sessionId) {
