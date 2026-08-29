@@ -743,6 +743,10 @@ export class CodingToolRegistry {
 				attentionProvider = {
 					...provider,
 					sessionAdapter: scopedProvider,
+					getAttentionSignal: (sessionId) =>
+						scopedProvider.readAttention(sessionId) ?? undefined,
+					getAttentionSignalAsync: async (sessionId) =>
+						(await scopedProvider.readAttentionAsync(sessionId)) ?? undefined,
 				};
 			}
 		}
@@ -774,6 +778,10 @@ export class CodingToolRegistry {
 				attentionProvider = {
 					...provider,
 					sessionAdapter: scopedProvider,
+					getAttentionSignal: (sessionId) =>
+						scopedProvider.readAttention(sessionId) ?? undefined,
+					getAttentionSignalAsync: async (sessionId) =>
+						(await scopedProvider.readAttentionAsync(sessionId)) ?? undefined,
 				};
 			}
 		}

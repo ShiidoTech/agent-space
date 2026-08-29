@@ -163,18 +163,14 @@ async function restoreAgentRuntimeUnlocked(
 		return persistBlocked(ctx, agent, reason, outcome);
 	}
 
+	const cwd = agent.worktreePath ?? feature.worktreePath;
+
 	// For OpenCode controlled backend, ensure the backend is running so
 	// buildStrictResumeLaunchCommand can construct the correct attach command.
 	if (tool.id === "opencode") {
 		await openCodeBackendManager.ensure(cwd);
 	}
 
-	const cwd = agent.worktreePath ?? feature.worktreePath;
-	// For OpenCode controlled backend, ensure the backend is running so
-	// buildStrictResumeLaunchCommand can construct the correct attach command.
-	if (tool.id === "opencode") {
-		await openCodeBackendManager.ensure(cwd);
-	}
 	const resumeCommand = deps.toolRegistry.buildStrictResumeLaunchCommand(
 		tool,
 		agent.sessionId,
