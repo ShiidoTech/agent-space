@@ -3,6 +3,7 @@ import type { Disposable } from "vscode";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
 import {
+	type FeatureGitObservations,
 	type GitObservation,
 	known,
 	type ObservedCommit,
@@ -170,6 +171,16 @@ export class FeatureStateCoordinator implements Disposable {
 	private githubObservations = new Map<string, GitHubObservation>();
 	private githubFallbacks = new Map<string, GitHubObservation>();
 	private githubObservationGenerations = new Map<string, number>();
+	/**
+	 * Feature IDs whose worktree directory was detected as absent from the
+	 * filesystem during `reconcilePresence`. Tracked so the shallow lane can
+	 * override `git.worktree.present = false` without a Git subprocess, and
+	 * so a reappearing directory is handled cleanly: the ID is removed from
+	 * this set and the worktree observation is set to `unknown` (to be
+	 * revalidated by the next deep observation) — never `present: true` on
+	 * the sole basis of `fs.existsSync`.
+	 */
+	private filesystemMissingWorktrees = new Set<string>();
 
 	constructor(
 		projectManager?: ProjectManager,
@@ -655,8 +666,12 @@ export class FeatureStateCoordinator implements Disposable {
 				this.featureDeepGenerations.delete(snapshot.feature.id);
 				this.featureRuntimeGenerations.delete(snapshot.feature.id);
 				this.featureDeepObservedAt.delete(snapshot.feature.id);
+				this.filesystemMissingWorktrees.delete(snapshot.feature.id);
 				this.emit(undefined);
 			}
+			const orphanIds = new Set(
+				ctx.featureManager.getOrphanedFeatures().map((f) => f.id),
+			);
 			for (const feature of features) {
 				const agents = readRuntime<Agent[]>(() =>
 					ctx.agentManager.getAgentsReadModel(feature.id),
@@ -681,7 +696,11 @@ export class FeatureStateCoordinator implements Disposable {
 					),
 				});
 				const gen = this.beginRuntimeObservation(feature.id);
-				this.commitRuntime(gen, ctx.project.id, feature, runtime);
+				const gitOverride = this.resolveOrphanGitOverride(
+					feature,
+					orphanIds.has(feature.id),
+				);
+				this.commitRuntime(gen, ctx.project.id, feature, runtime, gitOverride);
 			}
 		}
 	}
@@ -982,11 +1001,13 @@ export class FeatureStateCoordinator implements Disposable {
 		projectId: string,
 		feature: Feature,
 		runtime: FeatureRuntimeObservation,
+		gitOverride?: FeatureGitObservations,
 	): boolean {
 		if (this.disposed) return false;
 		if (this.featureRuntimeGenerations.get(feature.id) !== gen) return false;
 		const previous = this.snapshots.get(feature.id);
-		const git = previous?.git ?? unavailableGit(feature.worktreePath);
+		const git =
+			gitOverride ?? previous?.git ?? unavailableGit(feature.worktreePath);
 		const github = previous?.github ?? unavailableGithub(feature.worktreePath);
 		const source: FeatureSnapshotSource = previous?.source ?? {
 			status: "known",
@@ -1024,6 +1045,67 @@ export class FeatureStateCoordinator implements Disposable {
 		this.snapshots.set(feature.id, snapshot);
 		this.emit(snapshot, "runtime");
 		return true;
+	}
+
+	/**
+	 * Build a git override for the shallow lane when a feature's worktree
+	 * directory state has changed since the last reconcilePresence:
+	 *
+	 * - **newly absent**: the path disappeared → track in
+	 *   `filesystemMissingWorktrees`, override `worktree.present = false`.
+	 * - **reappeared**: the path is back → remove from tracking, set
+	 *   `worktree` to `unknown` so the next deep observation revalidates.
+	 *   Never `present: true` on the sole basis of `fs.existsSync`.
+	 * - **still absent**: keep the `present = false` override.
+	 * - **never absent**: no override (use previous git observations as-is).
+	 *
+	 * A `present: false` set by a real deep Git observation is never cleared
+	 * by this method — the override only applies via `commitRuntime` which
+	 * reads it before `previous?.git`, so a subsequent deep `commitDeep`
+	 * will overwrite it with the authoritative value.
+	 */
+	private resolveOrphanGitOverride(
+		feature: Feature,
+		currentlyOrphaned: boolean,
+	): FeatureGitObservations | undefined {
+		const wasMissing = this.filesystemMissingWorktrees.has(feature.id);
+		const previous = this.snapshots.get(feature.id)?.git;
+
+		if (currentlyOrphaned && !wasMissing) {
+			// Path just disappeared — track and override.
+			this.filesystemMissingWorktrees.add(feature.id);
+			return this.buildOrphanedGitOverride(feature, previous);
+		}
+		if (!currentlyOrphaned && wasMissing) {
+			// Path reappeared — stop tracking, reset worktree to unknown.
+			this.filesystemMissingWorktrees.delete(feature.id);
+			return {
+				...(previous ?? unavailableGit(feature.worktreePath)),
+				worktree: unknown("worktree_missing", undefined, {
+					path: path.resolve(feature.worktreePath),
+				}),
+			};
+		}
+		if (currentlyOrphaned && wasMissing) {
+			// Still missing — keep the override.
+			return this.buildOrphanedGitOverride(feature, previous);
+		}
+		// Not orphaned, no override needed.
+		return undefined;
+	}
+
+	private buildOrphanedGitOverride(
+		feature: Feature,
+		previous: FeatureGitObservations | undefined,
+	): FeatureGitObservations {
+		const base = previous ?? unavailableGit(feature.worktreePath);
+		return {
+			...base,
+			worktree: known({
+				path: path.resolve(feature.worktreePath),
+				present: false,
+			}),
+		};
 	}
 
 	private acceptWorktreeInventory(

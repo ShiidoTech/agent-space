@@ -163,6 +163,56 @@ function presentProblemState(problem: AttentionProblem): string {
 	return PROBLEM_STATE_LABELS[problem.code] ?? "Needs attention";
 }
 
+/**
+ * Shared label/tone/detail extraction for a single attention problem.
+ * Used by both `presentSummary()` (deep) and `presentImmediateFeatureSummary()`
+ * (shallow) so every Feature surface speaks the same language.
+ */
+export function presentAttentionProblem(problem: AttentionProblem): {
+	label: string;
+	tone: FeatureCockpitTone;
+	detail?: string;
+} {
+	return {
+		label: presentProblemState(problem),
+		tone: problem.severity === "error" ? "error" : "warning",
+		detail: `${problem.summary} — ${problem.detail}`,
+	};
+}
+
+/**
+ * Attention problem codes whose meaning is stable even without a deep Git/GitHub
+ * observation. The shallow lane (reconcilePresence) intentionally leaves most
+ * `*_unknown` fields in their default state — showing "Evidence unavailable"
+ * for those would replace the honest "Syncing evidence" with noise.
+ */
+const SHALLOW_SAFE_CODES: ReadonlySet<string> = new Set([
+	"agent_failed",
+	"agent_waiting_for_user",
+	"worktree_missing",
+]);
+
+/**
+ * Lightweight summary for the shallow lane: picks the highest-priority
+ * attention problem that is meaningful without deep evidence, then delegates
+ * to the shared `presentAttentionProblem()` helper. Returns `undefined` when
+ * no shallow-safe problem is present, so the caller can fall back to
+ * "Syncing evidence".
+ */
+export function presentImmediateFeatureSummary(
+	snapshot: FeatureSnapshot,
+): { label: string; tone: FeatureCockpitTone; detail?: string } | undefined {
+	const candidate = snapshot.attention
+		.filter(
+			(item) =>
+				SHALLOW_SAFE_CODES.has(item.code) &&
+				(item.severity === "error" || item.severity === "warning"),
+		)
+		.sort((left, right) => alertPriority(left) - alertPriority(right))[0];
+	if (!candidate) return undefined;
+	return presentAttentionProblem(candidate);
+}
+
 export function presentFeatureCockpit(
 	snapshot: FeatureSnapshot,
 	referenceHealth?: ProjectReferenceBranchHealth,
@@ -197,11 +247,7 @@ function presentSummary(
 ): FeatureCockpitPresentation["summary"] {
 	const primaryAlert = alerts[0];
 	if (primaryAlert) {
-		return {
-			label: presentProblemState(primaryAlert),
-			tone: primaryAlert.severity === "error" ? "error" : "warning",
-			detail: `${primaryAlert.summary} — ${primaryAlert.detail}`,
-		};
+		return presentAttentionProblem(primaryAlert);
 	}
 	if (
 		snapshot.git.workingTree.status === "known" &&
@@ -724,6 +770,7 @@ function hasEssentialUnknownEvidence(snapshot: FeatureSnapshot): boolean {
  * "open_agent". Order: error > agent waiting > other warnings > informational.
  */
 function alertPriority(problem: AttentionProblem): number {
+	if (problem.code === "worktree_missing") return -1;
 	if (problem.severity === "error") return 0;
 	if (problem.code === "agent_waiting_for_user") return 1;
 	if (problem.severity === "warning") return 2;

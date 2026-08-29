@@ -82,6 +82,12 @@
 				"icon": "$(trash)"
 			},
 			{
+				"command": "agentSpace.cleanupOrphanedFeatures",
+				"title": "Clean Up Orphaned Features",
+				"category": "Agent Space",
+				"icon": "$(clear-all)"
+			},
+			{
 				"command": "agentSpace.createPR",
 				"title": "Create Pull Request",
 				"category": "Agent Space",

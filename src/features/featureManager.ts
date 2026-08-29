@@ -616,6 +616,16 @@ export class FeatureManager {
 		return [...this.features];
 	}
 
+	/**
+	 * Features whose persisted metadata still exists but whose worktree
+	 * directory has disappeared from disk. Cheap filesystem check only — no
+	 * Git subprocess. Used by the FeatureStateCoordinator shallow lane and
+	 * the cleanup command.
+	 */
+	getOrphanedFeatures(): Feature[] {
+		return this.features.filter((f) => !fs.existsSync(f.worktreePath));
+	}
+
 	getFeature(id: string): Feature | undefined {
 		const feature = this.features.find((f) => f.id === id);
 		if (feature) this.reconcileFeatureBranches(feature);
@@ -1372,9 +1382,11 @@ export class FeatureManager {
 					);
 				}
 			} catch {
-				// Worktree may already be gone — but if it is still on disk,
-				// the removal actually failed. Do NOT drop the feature record:
-				// it would silently orphan the worktree (invisible residue).
+				// Idempotent: if the directory is already gone from disk, git
+				// worktree remove failure is expected — fall through to
+				// forgetFinishedFeature(). If it is still on disk, the removal
+				// actually failed: do NOT drop the feature record (invisible
+				// residue).
 				if (fs.existsSync(feature.worktreePath)) {
 					return {
 						deleted: false,

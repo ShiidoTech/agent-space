@@ -55,6 +55,7 @@ function buildFixture() {
 				branch: "main",
 			}),
 			listFeaturesCached: vi.fn(() => [feature()]),
+			getOrphanedFeatures: vi.fn(() => []),
 		},
 		agentManager: {
 			getAgentsReadModel: vi.fn(() => agents),

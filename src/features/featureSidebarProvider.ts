@@ -25,7 +25,10 @@ import type {
 } from "../projects/projectManager";
 import type { ProjectReferenceBranchHealth } from "../projects/referenceBranchHealth";
 import type { Agent, Feature, Service } from "../types";
-import { presentFeatureCockpit } from "./featureCockpitPresentation";
+import {
+	presentFeatureCockpit,
+	presentImmediateFeatureSummary,
+} from "./featureCockpitPresentation";
 import type { FeatureSnapshot } from "./featureSnapshot";
 import type { FeatureStateCoordinator } from "./featureStateCoordinator";
 
@@ -38,24 +41,13 @@ export function presentSidebarFeatureSummary(
 	if (hasDeepEvidence) {
 		return presentFeatureCockpit(snapshot, referenceHealth).summary;
 	}
-
-	const runtimeAlert = snapshot.attention.find(
-		(problem) =>
-			problem.code === "agent_failed" ||
-			problem.code === "agent_waiting_for_user",
+	return (
+		presentImmediateFeatureSummary(snapshot) ?? {
+			label: "Syncing evidence",
+			tone: "muted",
+			detail: "Git and GitHub evidence is observed when the Feature is opened.",
+		}
 	);
-	if (runtimeAlert) {
-		return {
-			label: runtimeAlert.summary,
-			tone: runtimeAlert.severity === "error" ? "error" : "warning",
-			detail: runtimeAlert.detail,
-		};
-	}
-	return {
-		label: "Syncing evidence",
-		tone: "muted",
-		detail: "Git and GitHub evidence is observed when the Feature is opened.",
-	};
 }
 
 export class FeatureSidebarProvider implements vscode.WebviewViewProvider {

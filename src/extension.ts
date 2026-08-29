@@ -50,9 +50,11 @@ import {
 	updateBaseBranch,
 } from "./projects/projectGitOps";
 import { discoverProjectKnowledge } from "./projects/projectKnowledge";
+import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
 import { GlobalStore } from "./storage/globalStore";
+import type { Feature } from "./types";
 import { execAsync, execAsyncSilent } from "./utils/platform";
 import { ContextOnlyIsolation } from "./workspace/agentWorkspaceIsolation";
 
@@ -183,10 +185,29 @@ export async function activate(
 	// evidence and provider attention are fetched after activation/on focus.
 	// Do not await this: activation must not hold the Extension Host hostage to
 	// an active provider observation.
-	setTimeout(
-		() => void featureStateCoordinator.reconcilePresence(),
-		0,
-	).unref?.();
+	let orphanNotificationShown = false;
+	setTimeout(() => {
+		void featureStateCoordinator.reconcilePresence().then(() => {
+			if (orphanNotificationShown) return;
+			const orphans = projectManager
+				.getAllContexts()
+				.flatMap((ctx) => ctx.featureManager.getOrphanedFeatures());
+			if (orphans.length === 0) return;
+			orphanNotificationShown = true;
+			void vscode.window
+				.showWarningMessage(
+					`${orphans.length} orphaned feature(s) detected (worktree removed).`,
+					"Clean Up",
+				)
+				.then((action) => {
+					if (action === "Clean Up") {
+						void vscode.commands.executeCommand(
+							"agentSpace.cleanupOrphanedFeatures",
+						);
+					}
+				});
+		});
+	}, 0).unref?.();
 
 	const defaultToolId = toolRegistry.getDefaultToolId();
 	const availableTools = toolRegistry.getAvailableTools();
@@ -1513,6 +1534,46 @@ export async function activate(
 						copyToClipboard: (text) => vscode.env.clipboard.writeText(text),
 					},
 				);
+			},
+		),
+	);
+
+	// Command: Clean Up Orphaned Features
+	context.subscriptions.push(
+		vscode.commands.registerCommand(
+			"agentSpace.cleanupOrphanedFeatures",
+			async () => {
+				const allOrphans: Array<{
+					ctx: ProjectContext;
+					feature: Feature;
+				}> = [];
+				for (const ctx of projectManager.getAllContexts()) {
+					for (const orphan of ctx.featureManager.getOrphanedFeatures()) {
+						allOrphans.push({ ctx, feature: orphan });
+					}
+				}
+				if (allOrphans.length === 0) {
+					void vscode.window.showInformationMessage(
+						"No orphaned features detected.",
+					);
+					return;
+				}
+				const names = allOrphans.map((o) => o.feature.name).join(", ");
+				const action = await vscode.window.showWarningMessage(
+					`${allOrphans.length} orphaned feature(s) detected (${names}). Remove metadata?`,
+					{ modal: true },
+					"Clean Up",
+				);
+				if (action !== "Clean Up") return;
+				const touchedProjects = new Set<string>();
+				for (const { ctx, feature } of allOrphans) {
+					ctx.featureManager.forgetFinishedFeature(feature.id);
+					touchedProjects.add(ctx.project.id);
+				}
+				for (const projectId of touchedProjects) {
+					projectManager.notifyChange({ projectId });
+					await featureStateCoordinator.reconcilePresence(projectId);
+				}
 			},
 		),
 	);
