@@ -20,7 +20,7 @@ available. Binding health is never promoted to the primary state.
 `presentAgentState` applies this order to the provider-neutral state:
 
 1. lifecycle `errored`, `done`, then `stopped`;
-2. attention `waiting_for_user`, `failed`, `working`, then `idle`;
+2. attention `waiting_for_user`, `failed`, then pending review, then `working`/`idle`;
 3. lifecycle `starting`;
 4. running plus attention `unsupported` becomes `Running`;
 5. running plus attention `unknown` becomes `Unknown`.
@@ -38,10 +38,10 @@ second card status.
 
 | Provider | Lifecycle | Session binding | Naming | Working | Waiting user | Idle | Failed |
 |---|---|---|---|---|---|---|---|
-| Claude | supported | supported | supported | supported | supported | supported | supported |
+| Claude | supported | preassigned exact id | supported | supported | supported | supported | supported |
 | Codex | supported | app-server receipt | app-server/session | unsupported | unsupported | unsupported | unsupported |
-| OpenCode | supported | best-effort | best-effort | supported | supported | supported | supported |
-| Hermes | supported | supported | unsupported | unsupported | unsupported | unsupported | unsupported |
+| OpenCode | supported | controlled backend/session | provider title | supported via SSE/store | supported via SSE/store | supported via SSE/store | supported via SSE/store |
+| Hermes | supported | exact provider session | supported | unsupported | unsupported | unsupported | supported |
 | Copilot | supported | unsupported | unsupported | unsupported | unsupported | unsupported | unsupported |
 
 Lifecycle remains useful for every provider because it is established by Agent

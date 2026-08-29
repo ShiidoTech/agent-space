@@ -2,6 +2,10 @@ import * as vscode from "vscode";
 import type { AgentFocusService } from "../agents/agentFocusService";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
 import {
+	formatFleetRollup,
+	projectSnapshotFleetRollup,
+} from "../agents/fleetRollup";
+import {
 	type AgentCardPresentation,
 	presentAgentCard,
 } from "../agents/observation/presentAgentCard";
@@ -251,6 +255,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				statusLabel?: string;
 				statusTone?: string;
 				statusDetail?: string;
+				fleetLabel: string;
 				isBase: boolean;
 				agents: SidebarAgent[];
 				services: SidebarService[];
@@ -260,6 +265,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			interface SidebarProject {
 				id: string;
 				name: string;
+				fleetLabel: string;
 				features: SidebarFeature[];
 			}
 
@@ -271,12 +277,16 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					const agents = this.snapshotAgents(snapshot);
 					const services = this.snapshotServices(snapshot);
 					const summary = this.presentSidebarSummary(snapshot);
+					const fleet = projectSnapshotFleetRollup([snapshot], (agent) =>
+						ctx.agentManager.observe(agent),
+					);
 					return {
 						id: snapshot.feature.id,
 						branch: snapshot.feature.branch,
 						statusLabel: summary?.label,
 						statusTone: summary?.tone,
 						statusDetail: summary?.detail,
+						fleetLabel: formatFleetRollup(fleet),
 						isBase: snapshot.feature.id.startsWith("base:"),
 						agentsKnown: snapshot.runtime.agents.status === "known",
 						servicesKnown: snapshot.runtime.services.status === "known",
@@ -298,7 +308,16 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					};
 				});
 
-				return { id: ctx.project.id, name: ctx.project.name, features };
+				const projectRollup = projectSnapshotFleetRollup(
+					snapshots,
+					(agent, _snapshot) => ctx.agentManager.observe(agent),
+				);
+				return {
+					id: ctx.project.id,
+					name: ctx.project.name,
+					fleetLabel: formatFleetRollup(projectRollup),
+					features,
+				};
 			});
 
 			this._view.webview.postMessage({
@@ -508,6 +527,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		const snapshots = this.featureStateCoordinator.getProjectSnapshots(
 			project.id,
 		);
+		const fleet = projectSnapshotFleetRollup(snapshots, (agent) =>
+			ctx.agentManager.observe(agent),
+		);
 		const baseSnapshot = snapshots.find((snapshot) =>
 			snapshot.feature.id.startsWith("base:"),
 		);
@@ -522,6 +544,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="project-header" onclick="toggleProject('${project.id}')">
 				<span class="project-toggle" id="project-toggle-${project.id}">${ICON_CHEVRON_DOWN}</span>
 				<button class="project-name project-nav-btn" title="Open ${this.escapeHtml(project.name)}" onclick="openProject(event, '${project.id}')">${this.escapeHtml(project.name)}</button>
+				<span class="fleet-rollup-label" data-fleet-project="${project.id}">${this.escapeHtml(formatFleetRollup(fleet))}</span>
 				<button class="project-open-btn" onclick="openProject(event, '${project.id}')" title="Open project" aria-label="Open project">${ICON_CHEVRON_RIGHT}</button>
 			</div>
 			<div class="project-body" id="project-body-${project.id}">
@@ -585,6 +608,24 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			services.filter((s) => s.status === "running").length;
 
 		const summary = this.presentSidebarSummary(snapshot);
+		const fleet = projectSnapshotFleetRollup(
+			[snapshot],
+			(agent) =>
+				this.projectManager
+					.findContextByFeatureId(feature.id)
+					?.agentManager.observe(agent) ?? {
+					identity: { agentName: agent.name },
+					lifecycle: { state: agent.status, source: "agentspace" },
+					attention: {
+						state:
+							agent.attentionStatus === "done"
+								? "unknown"
+								: (agent.attentionStatus ?? "unknown"),
+					},
+					session: { state: agent.sessionBinding?.state ?? "pending" },
+					review: { pending: Boolean(agent.pendingReviewId) },
+				},
+		);
 		const bodyHtml = this.renderSnapshotCardBody(snapshot, agents, services);
 		const count = this.snapshotRuntimeKnown(snapshot)
 			? totalCount > 0
@@ -601,6 +642,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					${checkoutBranch ? `<span class="feature-branch-line feature-checkout-line" title="Branch currently checked out in the worktree"><span class="feature-branch-label">checkout</span> ${this.escapeHtml(checkoutBranch)}</span>` : ""}
 				</span>
 				${summary ? `<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>` : ""}
+				<span class="fleet-rollup-label" data-fleet-feature="${feature.id}">${this.escapeHtml(formatFleetRollup(fleet))}</span>
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
 				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Finish Feature">${ICON_DELETE}</button>
 			</div>

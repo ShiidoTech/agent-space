@@ -59,6 +59,11 @@ export function probeAgents(
 				const attentionSupported = provider
 					? Object.values(provider.capabilities.attention).some(Boolean)
 					: false;
+				const attentionCapabilities = provider
+					? Object.entries(provider.capabilities.attention)
+							.filter(([, supported]) => supported)
+							.map(([name]) => name)
+					: [];
 
 				let sessionResolved: boolean | null = null;
 				if (adapter && agent.sessionId) {
@@ -68,6 +73,7 @@ export function probeAgents(
 				}
 
 				let attentionEvidence: string | undefined;
+				let attentionObservedAt: string | undefined;
 				let attentionState = attentionSupported ? "unknown" : "unsupported";
 				if (agent.sessionId && sessionResolved === true) {
 					const signal = toolRegistry.getStructuredAttentionSignal(
@@ -75,6 +81,7 @@ export function probeAgents(
 						agent.sessionId,
 					);
 					attentionEvidence = signal?.evidence;
+					attentionObservedAt = signal?.observedAt;
 					if (signal) attentionState = signal.status;
 				}
 
@@ -94,6 +101,11 @@ export function probeAgents(
 					attentionState,
 					attentionSupported,
 					attentionEvidence,
+					attentionObservedAt,
+					attentionCapabilities,
+					providerOwnership: provider?.conversationIdentity.ownership,
+					sessionNamingSupported: provider?.capabilities.sessionNaming,
+					tmuxSession: agent.tmuxSession,
 					hermesProfile: agent.hermesProfile,
 				});
 			}

@@ -123,6 +123,10 @@ function focusAgent(featureId, agentId) {
 	send("focusAgent", { featureId, agentId });
 }
 
+function focusFleetItem(featureId, agentId) {
+	send("focusAgent", { featureId, agentId });
+}
+
 // biome-ignore lint/correctness/noUnusedVariables: called from HTML onclick
 function focusService(featureId, serviceId) {
 	send("focusService", { featureId, serviceId });
@@ -481,6 +485,12 @@ window.addEventListener("message", (event) => {
 					message.diagnosticsContentKey,
 				);
 			}
+			break;
+		}
+		case "fleetUpdate": {
+			const rollup = document.getElementById(`fleet-rollup-${message.target}`);
+			if (rollup && typeof message.html === "string") rollup.innerHTML = message.html;
+			for (const agent of message.agents || []) updateAttention(agent);
 			break;
 		}
 	}
