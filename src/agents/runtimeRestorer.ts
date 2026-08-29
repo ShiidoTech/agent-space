@@ -11,6 +11,7 @@ import {
 	withRuntimeSpawnLock,
 } from "./runtimeOwnership";
 import type { TmuxIntegration } from "./tmux";
+import { openCodeBackendManager } from "./codingToolRegistry";
 
 /**
  * Post-restart runtime restoration for agent sessions.
@@ -162,9 +163,17 @@ async function restoreAgentRuntimeUnlocked(
 		return persistBlocked(ctx, agent, reason, outcome);
 	}
 
+	// For OpenCode controlled backend, ensure the backend is running so
+	// buildStrictResumeLaunchCommand can construct the correct attach command.
+	if (tool.id === "opencode") {
+		await openCodeBackendManager.ensure(cwd);
+	}
+
+	const cwd = agent.worktreePath ?? feature.worktreePath;
 	const resumeCommand = deps.toolRegistry.buildStrictResumeLaunchCommand(
 		tool,
 		agent.sessionId,
+		cwd,
 	);
 	if (!resumeCommand) {
 		const reason =
@@ -172,6 +181,7 @@ async function restoreAgentRuntimeUnlocked(
 		return persistBlocked(ctx, agent, reason, outcome);
 	}
 
+	// Hermes ownership guard: prevent duplicate live runtimes for the same session.
 	const ownership =
 		tool.family === "hermes"
 			? await new RuntimeOwnershipGuard(
@@ -188,7 +198,6 @@ async function restoreAgentRuntimeUnlocked(
 		return persistBlocked(ctx, agent, ownership.reason as string, outcome);
 	}
 
-	const cwd = agent.worktreePath ?? feature.worktreePath;
 	try {
 		await execAsync(deps.tmux.createCommand(sessionName, resumeCommand), {
 			cwd,

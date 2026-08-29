@@ -99,8 +99,8 @@ export interface CodingAgentProvider {
 	 * CLI family or from the number/order of files found after launch.
 	 */
 	readonly conversationIdentity: ProviderConversationIdentity;
-	readonly launchArgs?: (sessionId?: string | null) => string[];
-	readonly resumeArgs?: (sessionId?: string | null) => string[];
+	readonly launchArgs?: (sessionId?: string | null, cwd?: string) => string[];
+	readonly resumeArgs?: (sessionId?: string | null, cwd?: string) => string[];
 	getAttentionSignal?(sessionId: string): ProviderAttentionSignal | undefined;
 	getAttentionSignalAsync?(
 		sessionId: string,

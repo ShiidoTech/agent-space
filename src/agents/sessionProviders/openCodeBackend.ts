@@ -1,0 +1,232 @@
+import { type ChildProcess, spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+
+export interface OpenCodeBackendHandle {
+	readonly baseUrl: string;
+	readonly pid: number;
+	readonly port: number;
+	kill(): void;
+}
+
+interface PendingHealthCheck {
+	resolve: (ok: boolean) => void;
+	timer: ReturnType<typeof setTimeout>;
+}
+
+/**
+ * Per-worktree OpenCode backend manager.
+ *
+ * One `opencode serve` process per worktree, shared by all agents in the same
+ * worktree. The backend is started lazily on the first `ensure()` call and
+ * reused for subsequent agents. The process is killed when the extension
+ * disposes or when the backend is explicitly shut down.
+ *
+ * Architecture invariant: Agent Space never runs more than one
+ * `opencode serve` per worktree. The port is randomly allocated by the OS
+ * (via `--port 0`) so two worktrees never collide.
+ */
+export class OpenCodeBackendManager {
+	private backends = new Map<string, OpenCodeBackendHandle>();
+	private pendingHealthChecks = new Map<string, PendingHealthCheck>();
+
+	/**
+	 * Ensure a backend is running for the given worktree. If one already exists,
+	 * return it immediately. Otherwise, start a new `opencode serve` process and
+	 * wait for it to be ready.
+	 *
+	 * @param worktreePath - The worktree directory this backend serves.
+	 * @param openCodeBinary - Path to the `opencode` binary. Defaults to `"opencode"`.
+	 * @param healthCheckTimeoutMs - How long to wait for the health check. Defaults to 10s.
+	 * @returns A handle to the running backend.
+	 * @throws If the backend fails to start or the health check times out.
+	 */
+	async ensure(
+		worktreePath: string,
+		openCodeBinary = "opencode",
+		healthCheckTimeoutMs = 10_000,
+	): Promise<OpenCodeBackendHandle> {
+		const existing = this.backends.get(worktreePath);
+		if (existing) {
+			if (await this.isHealthy(existing.baseUrl)) {
+				return existing;
+			}
+			// Stale backend — kill and restart.
+			existing.kill();
+			this.backends.delete(worktreePath);
+		}
+
+		const handle = await this.startBackend(
+			worktreePath,
+			openCodeBinary,
+			healthCheckTimeoutMs,
+		);
+		this.backends.set(worktreePath, handle);
+		return handle;
+	}
+
+	/**
+	 * Get a backend handle for the given worktree, if one exists and is healthy.
+	 * Does NOT start a new backend.
+	 */
+	get(worktreePath: string): OpenCodeBackendHandle | undefined {
+		return this.backends.get(worktreePath);
+	}
+
+	/**
+	 * Kill all managed backends and clear the map.
+	 */
+	dispose(): void {
+		for (const handle of this.backends.values()) {
+			handle.kill();
+		}
+		this.backends.clear();
+		for (const pending of this.pendingHealthChecks.values()) {
+			clearTimeout(pending.timer);
+			pending.resolve(false);
+		}
+		this.pendingHealthChecks.clear();
+	}
+
+	private async startBackend(
+		worktreePath: string,
+		openCodeBinary: string,
+		healthCheckTimeoutMs: number,
+	): Promise<OpenCodeBackendHandle> {
+		return new Promise<OpenCodeBackendHandle>((resolve, reject) => {
+			const child: ChildProcess = spawn(
+				openCodeBinary,
+				["serve", "--port", "0", "--hostname", "127.0.0.1"],
+				{
+					cwd: worktreePath,
+					stdio: ["ignore", "pipe", "pipe"],
+					env: { ...process.env },
+				},
+			);
+
+			let resolved = false;
+			let baseUrl: string | undefined;
+			let port = 0;
+
+			const cleanup = () => {
+				child.removeAllListeners();
+				stdoutLineReader.close();
+				stderrLineReader.close();
+			};
+
+			if (!child.stdout || !child.stderr) {
+				cleanup();
+				reject(
+					new Error(
+						`OpenCode backend failed to start in ${worktreePath}: stdout/stderr not available`,
+					),
+				);
+				return;
+			}
+
+			const stdoutLineReader = createInterface({ input: child.stdout });
+			const stderrLineReader = createInterface({ input: child.stderr });
+
+			// Parse the listen address from stdout.
+			// OpenCode prints: "opencode server listening on http://127.0.0.1:<port>"
+			stdoutLineReader.on("line", (line) => {
+				const match = line.match(
+					/opencode server listening on (https?:\/\/[^\s]+)/,
+				);
+				if (match?.[1] && !resolved) {
+					baseUrl = match[1];
+					const url = new URL(baseUrl);
+					port = Number.parseInt(url.port, 10);
+					resolved = true;
+					cleanup();
+					const handle: OpenCodeBackendHandle = {
+						baseUrl,
+						pid: child.pid ?? 0,
+						port,
+						kill: () => {
+							try {
+								child.kill("SIGTERM");
+							} catch {
+								// best-effort
+							}
+						},
+					};
+					// Wait for the health check to pass before resolving.
+					this.waitForHealth(baseUrl, healthCheckTimeoutMs)
+						.then((ok) => {
+							if (ok) {
+								resolve(handle);
+							} else {
+								handle.kill();
+								reject(
+									new Error(
+										`OpenCode backend health check failed for ${worktreePath}`,
+									),
+								);
+							}
+						})
+						.catch((err) => {
+							handle.kill();
+							reject(err);
+						});
+				}
+			});
+
+			stderrLineReader.on("line", (line) => {
+				// Log stderr for diagnostics but don't fail on it.
+				if (line.includes("OPENCODE_SERVER_PASSWORD")) {
+					// The server prints a warning if no password is set — this is expected.
+				}
+			});
+
+			child.once("error", (error) => {
+				if (!resolved) {
+					cleanup();
+					reject(
+						new Error(
+							`OpenCode backend failed to start in ${worktreePath}: ${error.message}`,
+						),
+					);
+				}
+			});
+
+			child.once("exit", (code) => {
+				if (!resolved) {
+					cleanup();
+					reject(
+						new Error(
+							`OpenCode backend exited with code ${code} in ${worktreePath}`,
+						),
+					);
+				}
+			});
+		});
+	}
+
+	private async waitForHealth(
+		baseUrl: string,
+		timeoutMs: number,
+	): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		const pollInterval = 200;
+		while (Date.now() < deadline) {
+			if (await this.isHealthy(baseUrl)) return true;
+			await sleep(pollInterval);
+		}
+		return false;
+	}
+
+	private async isHealthy(baseUrl: string): Promise<boolean> {
+		try {
+			const response = await fetch(`${baseUrl}/api/session`, {
+				signal: AbortSignal.timeout(3_000),
+			});
+			return response.ok;
+		} catch {
+			return false;
+		}
+	}
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}

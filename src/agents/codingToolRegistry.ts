@@ -20,11 +20,14 @@ import {
 } from "./sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
 import { HermesSessionProvider } from "./sessionProviders/hermesSessionProvider";
+import { OpenCodeBackendManager } from "./sessionProviders/openCodeBackend";
 import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
 
 const claudeSessionAdapter = new ClaudeSessionProvider();
 const codexSessionAdapter = new CodexSessionProvider();
 const openCodeSessionAdapter = new OpenCodeSessionProvider();
+/** Shared backend manager — one `opencode serve` per worktree. */
+export const openCodeBackendManager = new OpenCodeBackendManager();
 
 /**
  * Per-home cache for Hermes session adapters. Each Hermes home directory
@@ -178,6 +181,36 @@ const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
 		// a discovery hint.
 		launchArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 		resumeArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
+	},
+	opencode: {
+		// PR5: controlled backend — `opencode attach` connects to the running
+		// server and opens the exact session.
+		launchArgs: (sessionId, cwd) => {
+			const serverUrl = (
+				openCodeSessionAdapter as
+					| { serverUrl?: string }
+					| undefined
+			)?.serverUrl;
+			if (serverUrl && sessionId) {
+				const args = ["attach", serverUrl, "--session", sessionId];
+				if (cwd) args.push("--dir", cwd);
+				return args;
+			}
+			return sessionId ? ["--session", sessionId] : [];
+		},
+		resumeArgs: (sessionId, cwd) => {
+			const serverUrl = (
+				openCodeSessionAdapter as
+					| { serverUrl?: string }
+					| undefined
+			)?.serverUrl;
+			if (serverUrl && sessionId) {
+				const args = ["attach", serverUrl, "--session", sessionId];
+				if (cwd) args.push("--dir", cwd);
+				return args;
+			}
+			return sessionId ? ["--session", sessionId] : ["--continue"];
+		},
 	},
 };
 
@@ -777,13 +810,17 @@ export class CodingToolRegistry {
 	 * the exact same session, launched through the exact same executable and
 	 * profile.
 	 */
-	buildLaunchCommand(tool: CodingTool, sessionId?: string | null): string {
+	buildLaunchCommand(
+		tool: CodingTool,
+		sessionId?: string | null,
+		cwd?: string,
+	): string {
 		const parts = [tool.command];
 		if (tool.args && tool.args.length > 0) {
 			parts.push(...tool.args);
 		}
 		const provider = this.getProvider(tool);
-		if (provider.launchArgs) parts.push(...provider.launchArgs(sessionId));
+		if (provider.launchArgs) parts.push(...provider.launchArgs(sessionId, cwd));
 		return `${envPrefix(tool)}${parts.join(" ")}`;
 	}
 
@@ -835,6 +872,7 @@ export class CodingToolRegistry {
 	buildStrictResumeLaunchCommand(
 		tool: CodingTool,
 		sessionId?: string | null,
+		cwd?: string,
 	): string | undefined {
 		if (!sessionId) return undefined;
 		if (tool.resumeCommand) {
@@ -844,7 +882,7 @@ export class CodingToolRegistry {
 		}
 		const provider = this.getProvider(tool);
 		if (!provider.capabilities.resume) return undefined;
-		const args = provider.resumeArgs?.(sessionId);
+		const args = provider.resumeArgs?.(sessionId, cwd);
 		if (!args || args.length === 0) return undefined;
 		return `${envPrefix(tool)}${tool.command} ${args.join(" ")}`;
 	}
