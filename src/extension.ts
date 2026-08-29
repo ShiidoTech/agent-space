@@ -23,6 +23,7 @@ import {
 	shouldCleanupSession,
 } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
+import { cleanupOrphanedFeatures } from "./features/cleanupOrphanedFeatures";
 import { createFeatureChangeFlusher } from "./features/featureChangeRouting";
 import { verifySessionsStopped } from "./features/featureFinish";
 import { runFeatureFinish } from "./features/featureFinishCommand";
@@ -1544,67 +1545,26 @@ export async function activate(
 		vscode.commands.registerCommand(
 			"agentSpace.cleanupOrphanedFeatures",
 			async () => {
-				const allOrphans: Array<{
-					ctx: ProjectContext;
-					feature: Feature;
-				}> = [];
-				for (const ctx of projectManager.getAllContexts()) {
-					for (const orphan of ctx.featureManager.getOrphanedFeatures()) {
-						allOrphans.push({ ctx, feature: orphan });
-					}
-				}
-				if (allOrphans.length === 0) {
-					void vscode.window.showInformationMessage(
-						"No orphaned features detected.",
-					);
-					return;
-				}
-				const names = allOrphans.map((o) => o.feature.name).join(", ");
-				const action = await vscode.window.showWarningMessage(
-					`${allOrphans.length} orphaned feature(s) detected (${names}). Remove metadata?`,
-					{ modal: true },
-					"Clean Up",
-				);
-				if (action !== "Clean Up") return;
-				// Collect tracked tmux sessions for all orphans before killing.
-				const trackedSessions = new Set<string>();
-				for (const { ctx, feature } of allOrphans) {
-					for (const agent of ctx.agentManager.getAgents(feature.id)) {
-						const session =
-							agent.tmuxSession ?? tmux.sessionName(feature.id, agent.id);
-						trackedSessions.add(session);
-						trackedSessions.add(tmux.legacySessionName(feature.id, agent.id));
-					}
-					for (const service of ctx.serviceManager.getServices(feature.id)) {
-						trackedSessions.add(service.tmuxSession);
-					}
-				}
-				// Kill terminals for all orphans.
-				for (const { feature } of allOrphans) {
-					terminalController.killFeatureTerminals(feature.id);
-				}
-				// Verify sessions actually stopped before removing metadata.
-				if (trackedSessions.size > 0) {
-					const verification = verifySessionsStopped(
-						trackedSessions,
-						projectManager.observeTmuxSessions(),
-					);
-					if (verification.status === "blocked") {
-						void vscode.window.showErrorMessage(
-							`Cleanup aborted: ${verification.reason}. Metadata preserved.`,
+				const outcome = await cleanupOrphanedFeatures({
+					projectManager,
+					terminalController,
+					tmux,
+					sessionNameSyncer,
+				});
+				switch (outcome.status) {
+					case "nothing_to_do":
+						void vscode.window.showInformationMessage(
+							"No orphaned features detected.",
 						);
-						return;
-					}
-				}
-				const touchedProjects = new Set<string>();
-				for (const { ctx, feature } of allOrphans) {
-					sessionNameSyncer.clearFeature(feature.id);
-					ctx.featureManager.forgetFinishedFeature(feature.id);
-					touchedProjects.add(ctx.project.id);
-				}
-				for (const projectId of touchedProjects) {
-					projectManager.notifyChange({ projectId });
-					await featureStateCoordinator.reconcilePresence(projectId);
+						break;
+					case "blocked":
+						void vscode.window.showErrorMessage(
+							`Cleanup aborted: ${outcome.reason}. Metadata preserved.`,
+						);
+						break;
+					case "cleaned":
+						await featureStateCoordinator.reconcilePresence();
+						break;
 				}
 			},
 		),

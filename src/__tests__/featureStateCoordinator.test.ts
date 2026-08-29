@@ -3084,5 +3084,152 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}
 		});
+
+		it("does NOT preserve shallow present:false when deep returns transient unknown", async () => {
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "coordinator-deep-transient-"),
+			);
+			const worktreePath = path.join(tmpDir, "feature-workspace");
+			fs.mkdirSync(worktreePath);
+
+			const feature: Feature = {
+				id: "transient",
+				name: "transient",
+				branch: "feat/transient",
+				worktreePath,
+				status: "active",
+				color: "blue",
+				isolation: "shared",
+				createdAt: "2026-08-10T00:00:00.000Z",
+				createdFromSha: "1".repeat(40),
+			};
+
+			// Deep inspector returns worktree as unknown (transient error),
+			// which means preferKnownGit will inherit the previous shallow
+			// present:false — but deepConfirmedMissing must NOT be set from
+			// the merged result.
+			const transientGit: FeatureGitObservations = {
+				...git(feature),
+				worktree: unknown("git_command_failed", "network hiccup", {
+					path: worktreePath,
+				}),
+			};
+
+			const inspectTransient = vi.fn(async () => transientGit);
+
+			const features: Feature[] = [feature];
+			const context = {
+				project: { id: "p1", name: "Project", repoPath: "/repo" },
+				store: {
+					loadFeatures: vi.fn(() => features),
+					saveFeatures: vi.fn(),
+					saveAgents: vi.fn(),
+					saveServices: vi.fn(),
+				},
+				featureManager: {
+					getBaseFeature: () => baseFeature(),
+					getBaseBranchName: () => "main",
+					getFeatures: vi.fn(() => features),
+					listFeaturesCached: vi.fn(() => features),
+					getOrphanedFeatures: vi.fn(() =>
+						features.filter(
+							(f) =>
+								!fs.existsSync(f.worktreePath) &&
+								f.provisioning?.state !== "provisioning",
+						),
+					),
+					getWorktreeBase: () => "/repo/.worktrees",
+				},
+				featureGitInspector: {
+					inspect: inspectTransient,
+					isCommitAncestor: vi.fn(async (a: string, d: string) =>
+						known({
+							ancestor: { ref: a, sha: a },
+							descendant: { ref: d, sha: d },
+							isAncestor: true,
+						}),
+					),
+					countCommitsAfter: vi.fn(async (a: string, d: string) =>
+						known({ ancestorSha: a, descendantSha: d, count: 1 }),
+					),
+					observeProject: vi.fn(async () => ({
+						repository: known({ root: "/repo" }),
+						worktrees: known([]),
+					})),
+				},
+				gitClient: {
+					read: vi.fn(async () => ({
+						argv: [],
+						cwd: "/repo",
+						exitCode: 0,
+						signal: null,
+						stdout: "main\n",
+						stderr: "",
+					})),
+				},
+				config: { baseBranch: "main" },
+				agentManager: {
+					getAgents: vi.fn(() => []),
+					getAgentsReadModel: vi.fn(() => []),
+				},
+				serviceManager: { getServices: vi.fn(() => []) },
+			} as unknown as ProjectContext;
+			const manager = {
+				getAllContexts: vi.fn(() => [context]),
+				getContext: vi.fn((projectId: string) =>
+					projectId === context.project.id ? context : undefined,
+				),
+				listTmuxSessions: vi.fn(() => []),
+				observeTmuxSessions: vi.fn(() => ({
+					status: "known" as const,
+					sessions: [] as string[],
+				})),
+				agentTmuxSessionName: vi.fn(
+					(fId: string, aId: string, persisted?: string) =>
+						persisted ?? `agent-space-${fId}-${aId}`,
+				),
+				findContextByFeatureId: vi.fn(() => context),
+				resolveFeature: vi.fn((featureId: string) => {
+					const found = features.find((f) => f.id === featureId);
+					return found ? { ctx: context, feature: found } : undefined;
+				}),
+			} as unknown as ProjectManager;
+
+			try {
+				const coordinator = new FeatureStateCoordinator(manager);
+
+				// Step 1: delete worktree → shallow missing → present=false
+				fs.rmSync(worktreePath, { recursive: true, force: true });
+				await coordinator.reconcilePresence();
+				let snapshot = coordinator.getSnapshot("transient");
+				expect(snapshot?.git.worktree.status).toBe("known");
+				if (snapshot?.git.worktree.status === "known") {
+					expect(snapshot.git.worktree.value.present).toBe(false);
+				}
+
+				// Step 2: deep reconcile with transient unknown — preferKnownGit
+				// inherits the shallow present:false, but raw observed.worktree
+				// is unknown, so deepConfirmedMissing must NOT be set.
+				await coordinator.reconcile();
+				snapshot = coordinator.getSnapshot("transient");
+				// After preferKnownGit, worktree is still known(false) from shallow.
+				expect(snapshot?.git.worktree.status).toBe("known");
+				if (snapshot?.git.worktree.status === "known") {
+					expect(snapshot.git.worktree.value.present).toBe(false);
+				}
+
+				// Step 3: path reappears — since the raw deep was NOT
+				// present:false, the override must NOT preserve it.
+				fs.mkdirSync(worktreePath);
+				await coordinator.reconcilePresence();
+				snapshot = coordinator.getSnapshot("transient");
+				// Must reset to unknown, not keep the inherited false.
+				expect(snapshot?.git.worktree.status).toBe("unknown");
+
+				coordinator.dispose();
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
 	});
 });
