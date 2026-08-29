@@ -676,6 +676,21 @@ describe("restoreAgentRuntimes", () => {
 			return opencodeProvider;
 		}
 
+		function fakeHandle(
+			instanceId: string,
+			port: number,
+			resumeConversation: ReturnType<typeof vi.fn> = vi.fn(async () => true),
+		) {
+			return {
+				instanceId,
+				baseUrl: `http://127.0.0.1:${port}`,
+				pid: 1,
+				port,
+				kill: vi.fn(),
+				sessionProvider: { resumeConversation },
+			};
+		}
+
 		it("reconnects a live OpenCode pane to a freshly-ensured backend instead of trusting tmux-alive", async () => {
 			const { ctx, registry, st, projectManager } = setup([feature()]);
 			ctx.store.saveAgents("f1", [
@@ -683,13 +698,10 @@ describe("restoreAgentRuntimes", () => {
 			]);
 			st.alive.add("agent-space-f1-oc-a");
 			mockOpenCodeTool(registry);
-			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue({
-				instanceId: "backend-1",
-				baseUrl: "http://127.0.0.1:9001",
-				pid: 1,
-				port: 9001,
-				kill: vi.fn(),
-			} as never);
+			const resumeConversation = vi.fn(async () => true);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-1", 9001, resumeConversation) as never,
+			);
 
 			const report = await restoreAgentRuntimes({
 				projectManager,
@@ -699,6 +711,9 @@ describe("restoreAgentRuntimes", () => {
 
 			expect(report.reattached.map((o) => o.agentId)).toEqual(["oc-a"]);
 			expect(openCodeBackendManager.ensure).toHaveBeenCalledWith(WORKTREE);
+			// The scoped provider's SSE subscription must be re-established on
+			// the exact same session id before the pane is declared reconnected.
+			expect(resumeConversation).toHaveBeenCalledWith("ses_resume");
 			expect(st.respawned).toHaveLength(1);
 			expect(st.respawned[0]?.sessionName).toBe("agent-space-f1-oc-a");
 			expect(st.respawned[0]?.command).toContain(
@@ -706,6 +721,33 @@ describe("restoreAgentRuntimes", () => {
 			);
 			const stored = ctx.store.loadAgents("f1")[0];
 			expect(stored.restore?.state).toBe("reattached");
+		});
+
+		it("blocks and never respawns when the session no longer exists on the new backend", async () => {
+			const { ctx, registry, st, projectManager } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({ id: "oc-a", toolId: "opencode" }),
+			]);
+			st.alive.add("agent-space-f1-oc-a");
+			mockOpenCodeTool(registry);
+			const resumeConversation = vi.fn(async () => false);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-1", 9005, resumeConversation) as never,
+			);
+
+			const report = await restoreAgentRuntimes({
+				projectManager,
+				tmux: tmux(st),
+				toolRegistry: registry,
+			});
+
+			expect(resumeConversation).toHaveBeenCalledWith("ses_resume");
+			expect(report.blocked.map((o) => o.agentId)).toEqual(["oc-a"]);
+			expect(report.reattached).toHaveLength(0);
+			expect(st.respawned).toHaveLength(0);
+			expect(st.created).toHaveLength(0);
+			const stored = ctx.store.loadAgents("f1")[0];
+			expect(stored.restore?.state).toBe("blocked");
 		});
 
 		it("blocks (never fresh-launches) an OpenCode agent whose session id cannot be proven", async () => {
@@ -760,13 +802,9 @@ describe("restoreAgentRuntimes", () => {
 			]);
 			st.alive.add("agent-space-f1-oc-a");
 			mockOpenCodeTool(registry);
-			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue({
-				instanceId: "backend-stable",
-				baseUrl: "http://127.0.0.1:9002",
-				pid: 1,
-				port: 9002,
-				kill: vi.fn(),
-			} as never);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-stable", 9002) as never,
+			);
 
 			const deps = { projectManager, tmux: tmux(st), toolRegistry: registry };
 			const first = await restoreAgentRuntimes(deps);
@@ -788,13 +826,9 @@ describe("restoreAgentRuntimes", () => {
 			st.alive.add("agent-space-f1-oc-a");
 			st.alive.add("agent-space-f1-oc-b");
 			mockOpenCodeTool(registry);
-			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue({
-				instanceId: "backend-shared",
-				baseUrl: "http://127.0.0.1:9003",
-				pid: 1,
-				port: 9003,
-				kill: vi.fn(),
-			} as never);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-shared", 9003) as never,
+			);
 
 			const report = await restoreAgentRuntimes({
 				projectManager,
@@ -820,13 +854,9 @@ describe("restoreAgentRuntimes", () => {
 			st.alive.add("agent-space-f1-oc-a");
 			st.respawnFails = true;
 			mockOpenCodeTool(registry);
-			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue({
-				instanceId: "backend-2",
-				baseUrl: "http://127.0.0.1:9004",
-				pid: 1,
-				port: 9004,
-				kill: vi.fn(),
-			} as never);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-2", 9004) as never,
+			);
 
 			const report = await restoreAgentRuntimes({
 				projectManager,

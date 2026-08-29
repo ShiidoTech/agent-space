@@ -81,6 +81,33 @@ export async function reconnectOpenCodeAgent(
 		return { kind: "skipped" };
 	}
 
+	// The scoped provider is what actually owns the SSE subscription that
+	// feeds real-time attention for this session. `ensure()` only proves the
+	// server process is up — it says nothing about whether this exact session
+	// still exists on it. `resumeConversation` is the provider-native receipt
+	// for that, and as a side effect (re)opens the SSE stream so attention
+	// tracking survives the backend swap. The generic `sessionIsProven` check
+	// above reads SQLite directly and knows nothing about this specific
+	// backend/provider instance, so it cannot substitute for this call.
+	let sessionResumed: boolean;
+	try {
+		sessionResumed = await handle.sessionProvider.resumeConversation(
+			agent.sessionId,
+		);
+	} catch (error) {
+		return {
+			kind: "blocked",
+			reason: `Could not resume the session on the new OpenCode backend: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+	if (!sessionResumed) {
+		return {
+			kind: "blocked",
+			reason:
+				"The persisted session does not exist on the current OpenCode backend; refusing an unattributable reconnect",
+		};
+	}
+
 	const resumeCommand = deps.toolRegistry.buildStrictResumeLaunchCommand(
 		tool,
 		agent.sessionId,

@@ -177,6 +177,21 @@ function setup(agents: Agent[]) {
 	return { projectManager, ctx, registry, st };
 }
 
+function fakeHandle(
+	instanceId: string,
+	port: number,
+	resumeConversation: ReturnType<typeof vi.fn> = vi.fn(async () => true),
+) {
+	return {
+		instanceId,
+		baseUrl: `http://127.0.0.1:${port}`,
+		pid: 1,
+		port,
+		kill: vi.fn(),
+		sessionProvider: { resumeConversation },
+	};
+}
+
 describe("OpenCodeRuntimeReconciler", () => {
 	it("reconnects every surviving OpenCode pane for the worktree after a mid-session crash", async () => {
 		const { projectManager, ctx, registry, st } = setup([
@@ -185,13 +200,9 @@ describe("OpenCodeRuntimeReconciler", () => {
 		]);
 		st.alive.add("agent-space-f1-oc-a");
 		st.alive.add("agent-space-f1-oc-b");
-		vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue({
-			instanceId: "backend-after-crash",
-			baseUrl: "http://127.0.0.1:9101",
-			pid: 1,
-			port: 9101,
-			kill: vi.fn(),
-		} as never);
+		vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+			fakeHandle("backend-after-crash", 9101) as never,
+		);
 
 		const reconciler = new OpenCodeRuntimeReconciler({
 			projectManager,
@@ -214,18 +225,58 @@ describe("OpenCodeRuntimeReconciler", () => {
 		);
 	});
 
+	it("resumes the session on the new scoped provider so the SSE attention stream is restored", async () => {
+		const { projectManager, registry, st } = setup([
+			agentFixture({ id: "oc-a" }),
+		]);
+		st.alive.add("agent-space-f1-oc-a");
+		const resumeConversation = vi.fn(async () => true);
+		vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+			fakeHandle("backend-fresh", 9105, resumeConversation) as never,
+		);
+
+		const reconciler = new OpenCodeRuntimeReconciler({
+			projectManager,
+			tmux: tmux(st),
+			toolRegistry: registry,
+		});
+		await reconciler.reconcileWorktree(WORKTREE);
+
+		expect(resumeConversation).toHaveBeenCalledWith("ses_resume");
+		expect(st.respawned).toHaveLength(1);
+	});
+
+	it("blocks and does not respawn when the session does not exist on the replacement backend", async () => {
+		const { projectManager, ctx, registry, st } = setup([
+			agentFixture({ id: "oc-a" }),
+		]);
+		st.alive.add("agent-space-f1-oc-a");
+		const resumeConversation = vi.fn(async () => false);
+		vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+			fakeHandle("backend-fresh", 9106, resumeConversation) as never,
+		);
+
+		const reconciler = new OpenCodeRuntimeReconciler({
+			projectManager,
+			tmux: tmux(st),
+			toolRegistry: registry,
+		});
+		await reconciler.reconcileWorktree(WORKTREE);
+
+		expect(resumeConversation).toHaveBeenCalledWith("ses_resume");
+		expect(st.respawned).toHaveLength(0);
+		const stored = ctx.store.loadAgents("f1")[0];
+		expect(stored.restore?.state).toBe("blocked");
+	});
+
 	it("ignores agents whose tmux pane is already gone", async () => {
 		const { projectManager, registry, st } = setup([
 			agentFixture({ id: "oc-a" }),
 		]);
 		// Not marked alive: this agent's pane didn't survive.
-		vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue({
-			instanceId: "backend-1",
-			baseUrl: "http://127.0.0.1:9102",
-			pid: 1,
-			port: 9102,
-			kill: vi.fn(),
-		} as never);
+		vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+			fakeHandle("backend-1", 9102) as never,
+		);
 
 		const reconciler = new OpenCodeRuntimeReconciler({
 			projectManager,
@@ -244,13 +295,7 @@ describe("OpenCodeRuntimeReconciler", () => {
 		st.alive.add("agent-space-f1-oc-a");
 		const ensureSpy = vi
 			.spyOn(openCodeBackendManager, "ensure")
-			.mockResolvedValue({
-				instanceId: "backend-1",
-				baseUrl: "http://127.0.0.1:9103",
-				pid: 1,
-				port: 9103,
-				kill: vi.fn(),
-			} as never);
+			.mockResolvedValue(fakeHandle("backend-1", 9103) as never);
 
 		const reconciler = new OpenCodeRuntimeReconciler({
 			projectManager,
@@ -294,13 +339,9 @@ describe("OpenCodeRuntimeReconciler", () => {
 			agentFixture({ id: "oc-a" }),
 		]);
 		st.alive.add("agent-space-f1-oc-a");
-		vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue({
-			instanceId: "backend-live",
-			baseUrl: "http://127.0.0.1:9104",
-			pid: 1,
-			port: 9104,
-			kill: vi.fn(),
-		} as never);
+		vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+			fakeHandle("backend-live", 9104) as never,
+		);
 		let capturedListener: ((worktreePath: string) => void) | undefined;
 		const onBackendLostSpy = vi
 			.spyOn(openCodeBackendManager, "onBackendLost")

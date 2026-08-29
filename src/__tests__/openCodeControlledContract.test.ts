@@ -607,6 +607,97 @@ describe("OpenCode controlled path — contract tests", () => {
 	});
 });
 
+describe("OpenCodeSessionProvider.resumeConversation — SSE restoration after a backend swap", () => {
+	let manager: OpenCodeBackendManager;
+
+	afterEach(async () => {
+		await manager.dispose();
+	});
+
+	it("proves the session exists on the new backend and re-opens its SSE subscription", async () => {
+		const child = fakeChild("http://127.0.0.1:4500");
+		manager = new OpenCodeBackendManager({
+			spawn: vi.fn(
+				() => child,
+			) as unknown as OpenCodeBackendManagerOptions["spawn"],
+		});
+
+		const sseData =
+			'data: {"type":"session.status","properties":{"sessionID":"sess-live","status":{"type":"busy"}}}\n\n';
+		let sseRead = false;
+		fetchMock.mockImplementation(async (url: string) => {
+			if (url.includes("/global/health")) return { ok: true };
+			if (url.includes("/event")) {
+				return {
+					ok: true,
+					body: {
+						getReader: () => ({
+							read: async () => {
+								if (!sseRead) {
+									sseRead = true;
+									return {
+										done: false,
+										value: new TextEncoder().encode(sseData),
+									};
+								}
+								return { done: true, value: undefined };
+							},
+						}),
+					},
+				};
+			}
+			if (url.includes("/session")) {
+				return {
+					ok: true,
+					json: async () => [{ id: "sess-live", directory: "/ws" }],
+				};
+			}
+			return { ok: true, json: async () => ({}) };
+		});
+
+		// This is exactly what a backend swap does: ensure() hands back a fresh
+		// handle whose sessionProvider has never seen this session before.
+		const handle = await manager.ensure("/tmp/ws-resume-sse");
+		expect(handle.sessionProvider.readAttention("sess-live")).toBeNull();
+
+		const resumed =
+			await handle.sessionProvider.resumeConversation("sess-live");
+		expect(resumed).toBe(true);
+		expect(fetchMock).toHaveBeenCalledWith(
+			expect.stringContaining("/event"),
+			expect.anything(),
+		);
+
+		// The SSE stream feeding real-time attention is live again.
+		await new Promise((r) => setTimeout(r, 50));
+		expect(handle.sessionProvider.readAttention("sess-live")).not.toBeNull();
+	});
+
+	it("does not open an SSE subscription for a session absent from the new backend", async () => {
+		const child = fakeChild("http://127.0.0.1:4501");
+		manager = new OpenCodeBackendManager({
+			spawn: vi.fn(
+				() => child,
+			) as unknown as OpenCodeBackendManagerOptions["spawn"],
+		});
+		fetchMock.mockImplementation(async (url: string) => {
+			if (url.includes("/global/health")) return { ok: true };
+			if (url.includes("/session")) return { ok: true, json: async () => [] };
+			return { ok: true, json: async () => ({}) };
+		});
+
+		const handle = await manager.ensure("/tmp/ws-resume-sse-missing");
+		const resumed =
+			await handle.sessionProvider.resumeConversation("sess-gone");
+
+		expect(resumed).toBe(false);
+		expect(fetchMock).not.toHaveBeenCalledWith(
+			expect.stringContaining("/event"),
+			expect.anything(),
+		);
+	});
+});
+
 // --- SSE envelope mapping tests ---
 
 describe("OpenCode SSE envelope mapping (mapSseEventToAttentionSignal)", () => {
