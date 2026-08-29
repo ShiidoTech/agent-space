@@ -5,6 +5,11 @@ import type {
 import type { Agent, CodingTool, Feature } from "../types";
 import { execAsync } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
+import {
+	RuntimeOwnershipGuard,
+	runtimeOwnershipKey,
+	withRuntimeSpawnLock,
+} from "./runtimeOwnership";
 import type { TmuxIntegration } from "./tmux";
 
 /**
@@ -94,6 +99,17 @@ async function restoreAgentRuntime(
 	agent: Agent,
 	deps: RuntimeRestoreDeps,
 ): Promise<RuntimeRestoreOutcome | undefined> {
+	return withRuntimeSpawnLock(runtimeOwnershipKey(agent), () =>
+		restoreAgentRuntimeUnlocked(ctx, feature, agent, deps),
+	);
+}
+
+async function restoreAgentRuntimeUnlocked(
+	ctx: ProjectContext,
+	feature: Feature,
+	agent: Agent,
+	deps: RuntimeRestoreDeps,
+): Promise<RuntimeRestoreOutcome | undefined> {
 	const base = {
 		projectId: ctx.project.id,
 		featureId: feature.id,
@@ -154,6 +170,22 @@ async function restoreAgentRuntime(
 		const reason =
 			"Provider could not build a resume command for the persisted session; the agent runtime was not recreated";
 		return persistBlocked(ctx, agent, reason, outcome);
+	}
+
+	const ownership =
+		tool.family === "hermes"
+			? await new RuntimeOwnershipGuard(
+					deps.projectManager,
+					deps.tmux,
+					deps.toolRegistry,
+				).checkResume(
+					agent.sessionId,
+					agent.id,
+					agent.hermesProfile ?? "default",
+				)
+			: { allowed: true, owners: [] };
+	if (!ownership.allowed) {
+		return persistBlocked(ctx, agent, ownership.reason as string, outcome);
 	}
 
 	const cwd = agent.worktreePath ?? feature.worktreePath;

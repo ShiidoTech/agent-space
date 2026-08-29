@@ -12,6 +12,12 @@ import {
 	ensureHermesProjectSkillsTrusted,
 	ensureHermesProjectSkillsTrustedAsync,
 } from "./hermesSkillTrust";
+import {
+	RuntimeOwnershipGuard,
+	runtimeOwnershipKey,
+	withRuntimeSpawnLock,
+	withRuntimeSpawnLockSync,
+} from "./runtimeOwnership";
 import type { SessionBinder } from "./sessionBinder";
 import type { TmuxIntegration } from "./tmux";
 
@@ -129,6 +135,34 @@ export class TerminalController implements vscode.Disposable {
 		resume = false,
 		attachExisting = false,
 	): vscode.Terminal | undefined {
+		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
+		if (tool.family !== "hermes") {
+			return this.createTerminalUnlocked(
+				feature,
+				agent,
+				agentIndex,
+				resume,
+				attachExisting,
+			);
+		}
+		return withRuntimeSpawnLockSync(runtimeOwnershipKey(agent), () =>
+			this.createTerminalUnlocked(
+				feature,
+				agent,
+				agentIndex,
+				resume,
+				attachExisting,
+			),
+		);
+	}
+
+	private createTerminalUnlocked(
+		feature: Feature,
+		agent: Agent,
+		agentIndex: number,
+		resume = false,
+		attachExisting = false,
+	): vscode.Terminal | undefined {
 		const name = `[${feature.name}] ${agent.name}`;
 		const color = AGENT_COLORS[agentIndex % AGENT_COLORS.length];
 		const cwd = agent.worktreePath ?? feature.worktreePath;
@@ -153,6 +187,23 @@ export class TerminalController implements vscode.Disposable {
 			const shouldResume = resume && agent.hasStarted === true;
 			let baseCommand: string;
 			if (shouldResume) {
+				if (tool.family === "hermes") {
+					const ownership = new RuntimeOwnershipGuard(
+						this.projectManager,
+						this.tmux,
+						this.toolRegistry,
+					).checkResumeSync(
+						agent.sessionId as string,
+						agent.id,
+						agent.hermesProfile ?? "default",
+					);
+					if (!ownership.allowed) {
+						const message = ownership.reason as string;
+						this.recordAgentFailure(feature.id, agent.id, message);
+						void vscode.window.showErrorMessage(message);
+						return undefined;
+					}
+				}
 				// A silent fresh launch here would drop the agent into a brand-new
 				// empty conversation while the user believes they are resuming one
 				// — the same failure mode runtimeRestorer's strict resume exists to
@@ -359,6 +410,35 @@ export class TerminalController implements vscode.Disposable {
 		agent: Agent,
 		agentIndex: number,
 		resume = false,
+		attachExisting = false,
+	): Promise<vscode.Terminal | undefined> {
+		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
+		if (tool.family !== "hermes") {
+			return this.createTerminalAsyncUnlocked(
+				feature,
+				agent,
+				agentIndex,
+				resume,
+				attachExisting,
+			);
+		}
+		return withRuntimeSpawnLock(runtimeOwnershipKey(agent), () =>
+			this.createTerminalAsyncUnlocked(
+				feature,
+				agent,
+				agentIndex,
+				resume,
+				attachExisting,
+			),
+		);
+	}
+
+	private async createTerminalAsyncUnlocked(
+		feature: Feature,
+		agent: Agent,
+		agentIndex: number,
+		resume = false,
+		attachExisting = false,
 	): Promise<vscode.Terminal | undefined> {
 		const name = `[${feature.name}] ${agent.name}`;
 		const color = AGENT_COLORS[agentIndex % AGENT_COLORS.length];
@@ -367,10 +447,9 @@ export class TerminalController implements vscode.Disposable {
 		const sessionName =
 			agent.tmuxSession ?? this.tmux.sessionName(feature.id, agent.id);
 		const legacySessionName = this.tmux.legacySessionName(feature.id, agent.id);
-		let sessionReady = await this.tmux.adoptSessionAsync(
-			sessionName,
-			legacySessionName,
-		);
+		let sessionReady = attachExisting
+			? await this.tmux.isSessionAliveAsync(sessionName)
+			: await this.tmux.adoptSessionAsync(sessionName, legacySessionName);
 
 		let justLaunched = false;
 		if (!sessionReady) {
@@ -395,6 +474,23 @@ export class TerminalController implements vscode.Disposable {
 			}
 			let baseCommand: string;
 			if (shouldResume) {
+				if (tool.family === "hermes") {
+					const ownership = await new RuntimeOwnershipGuard(
+						this.projectManager,
+						this.tmux,
+						this.toolRegistry,
+					).checkResume(
+						agent.sessionId as string,
+						agent.id,
+						agent.hermesProfile ?? "default",
+					);
+					if (!ownership.allowed) {
+						const message = ownership.reason as string;
+						this.recordAgentFailure(feature.id, agent.id, message);
+						void vscode.window.showErrorMessage(message);
+						return undefined;
+					}
+				}
 				// Same fail-closed guarantee as the sync path: never silently drop
 				// the user into a fresh empty conversation when a genuine resume
 				// cannot be proven.

@@ -5,6 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodingToolRegistry } from "../agents/codingToolRegistry";
 import type { CodingAgentProvider } from "../agents/providers/types";
 import {
+	RuntimeOwnershipGuard,
+	runtimeOwnershipKey,
+	withRuntimeSpawnLock,
+	withRuntimeSpawnLockSync,
+} from "../agents/runtimeOwnership";
+import {
 	type RuntimeRestoreReport,
 	restoreAgentRuntimes,
 } from "../agents/runtimeRestorer";
@@ -25,7 +31,7 @@ vi.mock("vscode", () => ({
 							id: "stub",
 							name: "Stub",
 							command: "stub",
-							family: "opencode",
+							family: "hermes",
 						},
 					];
 				}
@@ -234,6 +240,81 @@ async function runRestore({
 }
 
 describe("restoreAgentRuntimes", () => {
+	it("namespaces ownership locks by Hermes profile", () => {
+		const a = agentFixture({ hermesProfile: "profile-a" });
+		const b = agentFixture({ hermesProfile: "profile-b" });
+		const bSame = agentFixture({ hermesProfile: "profile-a" });
+		expect(runtimeOwnershipKey(a)).not.toBe(runtimeOwnershipKey(b));
+		expect(runtimeOwnershipKey(a)).toBe(runtimeOwnershipKey(bSame));
+	});
+	it("filters the live owner guard by Hermes profile, not only session id", async () => {
+		const { projectManager, ctx, registry, st } = setup([feature()]);
+		const sessionId = "shared-hermes-session";
+		ctx.store.saveAgents("f1", [
+			agentFixture({ id: "a", sessionId, hermesProfile: "profile-a" }),
+			agentFixture({ id: "b", sessionId, hermesProfile: "profile-b" }),
+		]);
+		st.alive.add("agent-space-f1-a");
+		vi.spyOn(registry, "resolveAgentToolForAgent").mockImplementation(() => ({
+			id: "hermes",
+			name: "Hermes",
+			command: "hermes",
+			family: "hermes",
+			provider: provider(),
+		}));
+		const guard = new RuntimeOwnershipGuard(projectManager, tmux(st), registry);
+
+		expect((await guard.checkResume(sessionId, "b", "profile-b")).allowed).toBe(
+			true,
+		);
+		expect((await guard.checkResume(sessionId, "b", "profile-a")).allowed).toBe(
+			false,
+		);
+	});
+
+	it("serializes three waiters on one ownership lock", async () => {
+		const order: number[] = [];
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const first = withRuntimeSpawnLock("profile:session", async () => {
+			order.push(1);
+			await gate;
+			return 1;
+		});
+		const second = withRuntimeSpawnLock("profile:session", async () => {
+			order.push(2);
+			return 2;
+		});
+		const third = withRuntimeSpawnLock("profile:session", async () => {
+			order.push(3);
+			return 3;
+		});
+		await Promise.resolve();
+		expect(order).toEqual([1]);
+		release();
+		expect(await Promise.all([first, second, third])).toEqual([1, 2, 3]);
+		expect(order).toEqual([1, 2, 3]);
+	});
+	it("rejects a sync terminal reservation while restore owns the session lock", async () => {
+		const key = "profile-a:session-x";
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const restore = withRuntimeSpawnLock(key, async () => {
+			await gate;
+			return "restore";
+		});
+		await Promise.resolve();
+		const syncSpawn = withRuntimeSpawnLockSync(key, () => "terminal");
+		expect(syncSpawn).toBeUndefined();
+		release();
+		expect(await restore).toBe("restore");
+		expect(withRuntimeSpawnLockSync(key, () => "terminal")).toBe("terminal");
+	});
+
 	it("does nothing when tmux is unavailable", async () => {
 		const { projectManager, ctx, registry, st } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
@@ -446,6 +527,46 @@ describe("restoreAgentRuntimes", () => {
 		expect(execAsyncMock).toHaveBeenCalledTimes(1);
 	});
 
+	it("refuses to resume a session owned by another live runtime", async () => {
+		const { ctx, registry, st, projectManager } = setup([feature()]);
+		ctx.store.saveAgents("f1", [
+			agentFixture({ id: "a-live", tmuxSession: "agent-space-f1-a-live" }),
+			agentFixture({
+				id: "b-recover",
+				tmuxSession: "agent-space-f1-b-recover",
+			}),
+		]);
+		st.alive.add("agent-space-f1-a-live");
+		vi.spyOn(registry, "getProvider").mockReturnValue(provider());
+
+		const report = await restoreAgentRuntimes({
+			projectManager,
+			tmux: tmux(st),
+			toolRegistry: registry,
+		});
+
+		expect(report.reattached).toHaveLength(1);
+		expect(report.blocked).toHaveLength(1);
+		expect(report.blocked[0]?.reason).toContain("already owned");
+		expect(st.created).toHaveLength(0);
+	});
+
+	it("coalesces concurrent restorations into one spawn", async () => {
+		const { ctx, registry, st, projectManager } = setup([feature()]);
+		ctx.store.saveAgents("f1", [agentFixture()]);
+		vi.spyOn(registry, "getProvider").mockReturnValue(provider());
+
+		const deps = { projectManager, tmux: tmux(st), toolRegistry: registry };
+		const [first, second] = await Promise.all([
+			restoreAgentRuntimes(deps),
+			restoreAgentRuntimes(deps),
+		]);
+
+		expect(first.resumed).toHaveLength(1);
+		expect(second.reattached).toHaveLength(1);
+		expect(st.created).toEqual(["agent-space-f1-a1"]);
+		expect(execAsyncMock).toHaveBeenCalledTimes(1);
+	});
 	it("blocks when the recreated tmux session does not stay alive", async () => {
 		const { ctx, registry, st, projectManager } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture()]);
