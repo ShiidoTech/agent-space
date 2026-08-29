@@ -6,7 +6,7 @@
  * - `GET /session` — list all sessions
  * - `GET /api/session` — list all sessions (paginated, `data` wrapper)
  * - `POST /api/session` — create a new session (`data` wrapper)
- * - `GET /event` — Server-Sent Events stream for all sessions (filter by sessionId in payload)
+ * - `GET /event` — Server-Sent Events stream for all sessions (filter by sessionId in payload.properties.sessionID)
  * - `GET /global/health` — health check endpoint
  *
  * This client is intentionally minimal: it only covers the endpoints
@@ -22,16 +22,15 @@ export class OpenCodeHttpClient {
 	 * Create a new session via the OpenCode server.
 	 * Returns the exact session id from the provider control plane.
 	 *
-	 * @param directory - The worktree directory for the session.
+	 * The documented body is `{ parentID?, title? }`; the session is created
+	 * in the server's working directory (which is the worktree cwd since we
+	 * launch `opencode serve` from there). We do NOT send `directory`.
+	 *
 	 * @returns The created session's id and proof string.
 	 * @throws If the HTTP request fails or the response is malformed.
 	 */
-	async createSession(
-		directory: string,
-	): Promise<{ sessionId: string; proof: string }> {
-		const response = await this.post("/session", {
-			directory,
-		});
+	async createSession(): Promise<{ sessionId: string; proof: string }> {
+		const response = await this.post("/session", {});
 		const data = await response.json();
 		const sessionId = extractSessionId(data);
 		if (!sessionId) {
@@ -63,8 +62,8 @@ export class OpenCodeHttpClient {
 	/**
 	 * Consume SSE events from the OpenCode server, filtered by session id.
 	 *
-	 * The event stream is `GET /event` (global bus). Each event has a `sessionId`
-	 * field that we filter on.
+	 * The event stream is `GET /event` (global bus). Each event envelope is:
+	 * `{ type: string, properties: { sessionID: string, ... } }`
 	 *
 	 * @param sessionId - The session to filter events for.
 	 * @param listener - Called for each event that matches the session.
@@ -116,8 +115,8 @@ export class OpenCodeHttpClient {
 						const jsonStr = trimmed.slice(6);
 						try {
 							const parsed = JSON.parse(jsonStr) as OpenCodeServerEvent;
-							// Filter by sessionId from the event payload
-							if (parsed.sessionId === sessionId) {
+							// Filter by sessionID from the event payload.properties
+							if (parsed.properties?.sessionID === sessionId) {
 								listener(parsed);
 							}
 						} catch {
@@ -157,10 +156,25 @@ export class OpenCodeHttpClient {
 	}
 }
 
+/**
+ * Real OpenCode server SSE event envelope.
+ *
+ * Format: `{ type: string, properties: { sessionID: string, ... } }`
+ *
+ * Known event types (from OpenCode server):
+ * - `session.status` with `properties.status.type = "busy" | "idle" | "retry"`
+ * - `session.idle` (separate event, indicates idle)
+ * - `permission.asked` (waiting for user)
+ * - `permission.replied` (user replied, back to working)
+ * - `session.error` (failed)
+ */
 export interface OpenCodeServerEvent {
 	readonly type: string;
-	readonly sessionId?: string;
-	readonly data?: Record<string, unknown>;
+	readonly properties?: {
+		readonly sessionID?: string;
+		readonly status?: { readonly type?: "busy" | "idle" | "retry" };
+		readonly [key: string]: unknown;
+	};
 	readonly timestamp?: string;
 }
 

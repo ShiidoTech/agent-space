@@ -238,9 +238,7 @@ export class OpenCodeSessionProvider
 	): Promise<ProviderConversationReceipt | undefined> {
 		if (!this.httpClient) return undefined;
 		try {
-			const { sessionId, proof } = await this.httpClient.createSession(
-				context.cwd,
-			);
+			const { sessionId, proof } = await this.httpClient.createSession();
 			if (!sessionId) return undefined;
 			// Start consuming SSE events for this session.
 			this.startSseEventStream(sessionId);
@@ -356,56 +354,55 @@ export class OpenCodeSessionProvider
  * is intentionally conservative: only clearly identified events produce a
  * signal, everything else is silently ignored.
  *
- * Expected event types (from OpenCode server `GET /event`):
- * - `session.status` with status: "working" | "idle" | "waiting" | "error"
- * - `permission.asked` / `permission.replied`
- * - `message.start` / `message.complete` / `message.error`
- * - `turn.start` / `turn.complete`
+ * Real OpenCode server SSE envelope (from `GET /event`):
+ * - `{ type: "session.status", properties: { sessionID, status: { type: "busy" | "idle" | "retry" } } }`
+ * - `{ type: "session.idle", properties: { sessionID } }`
+ * - `{ type: "permission.asked", properties: { sessionID } }`
+ * - `{ type: "permission.replied", properties: { sessionID } }`
+ * - `{ type: "session.error", properties: { sessionID } }`
  */
 function mapSseEventToAttentionSignal(
 	event: OpenCodeServerEvent,
 ): ProviderAttentionSignal | undefined {
 	const eventType = event.type;
 	const observedAt = event.timestamp;
+	const props = event.properties ?? {};
 
-	if (eventType === "session.status" && event.data?.status === "working") {
-		return {
-			status: "working",
-			evidence: `opencode.sse.${eventType}.working`,
-			observedAt,
-		};
+	if (eventType === "session.status") {
+		const statusType = props.status?.type;
+		if (statusType === "busy" || statusType === "retry") {
+			return {
+				status: "working",
+				evidence: `opencode.sse.${eventType}.${statusType}`,
+				observedAt,
+			};
+		}
+		if (statusType === "idle") {
+			return {
+				status: "idle",
+				evidence: `opencode.sse.${eventType}.idle`,
+				observedAt,
+			};
+		}
+		return undefined;
 	}
-	if (
-		eventType === "session.status" &&
-		(event.data?.status === "idle" || event.data?.status === "completed")
-	) {
+
+	if (eventType === "session.idle") {
 		return {
 			status: "idle",
-			evidence: `opencode.sse.${eventType}.idle`,
+			evidence: `opencode.sse.${eventType}`,
 			observedAt,
 		};
 	}
-	if (eventType === "session.status" && event.data?.status === "waiting") {
-		return {
-			status: "waiting_for_user",
-			evidence: `opencode.sse.${eventType}.waiting`,
-			observedAt,
-		};
-	}
-	if (eventType === "session.status" && event.data?.status === "error") {
-		return {
-			status: "failed",
-			evidence: `opencode.sse.${eventType}.error`,
-			observedAt,
-		};
-	}
-	if (eventType === "permission.asked" || eventType === "question.asked") {
+
+	if (eventType === "permission.asked") {
 		return {
 			status: "waiting_for_user",
 			evidence: `opencode.sse.${eventType}`,
 			observedAt,
 		};
 	}
+
 	if (eventType === "permission.replied") {
 		return {
 			status: "working",
@@ -413,39 +410,15 @@ function mapSseEventToAttentionSignal(
 			observedAt,
 		};
 	}
-	if (
-		eventType === "message.start" ||
-		eventType === "turn.start" ||
-		eventType === "assistant.start"
-	) {
-		return {
-			status: "working",
-			evidence: `opencode.sse.${eventType}`,
-			observedAt,
-		};
-	}
-	if (
-		eventType === "message.complete" ||
-		eventType === "turn.complete" ||
-		eventType === "assistant.complete"
-	) {
-		return {
-			status: "idle",
-			evidence: `opencode.sse.${eventType}`,
-			observedAt,
-		};
-	}
-	if (
-		eventType === "message.error" ||
-		eventType === "assistant.error" ||
-		eventType === "session.error"
-	) {
+
+	if (eventType === "session.error") {
 		return {
 			status: "failed",
 			evidence: `opencode.sse.${eventType}`,
 			observedAt,
 		};
 	}
+
 	return undefined;
 }
 

@@ -1,11 +1,15 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import type { OpenCodeSessionProviderOptions } from "./openCodeSessionProvider";
+import { OpenCodeSessionProvider } from "./openCodeSessionProvider";
 
 export interface OpenCodeBackendHandle {
 	readonly baseUrl: string;
 	readonly pid: number;
 	readonly port: number;
 	kill(): void;
+	/** The scoped session provider for this backend/worktree. */
+	readonly sessionProvider: OpenCodeSessionProvider;
 }
 
 interface PendingHealthCheck {
@@ -47,13 +51,15 @@ export class OpenCodeBackendManager {
 	 * @param worktreePath - The worktree directory this backend serves.
 	 * @param openCodeBinary - Path to the `opencode` binary. Defaults to `"opencode"`.
 	 * @param healthCheckTimeoutMs - How long to wait for the health check. Defaults to 10s.
-	 * @returns A handle to the running backend.
+	 * @param providerOptions - Options to pass to the scoped session provider.
+	 * @returns A handle to the running backend (including the scoped provider).
 	 * @throws If the backend fails to start or the health check times out.
 	 */
 	async ensure(
 		worktreePath: string,
 		openCodeBinary = "opencode",
 		healthCheckTimeoutMs = 10_000,
+		providerOptions: OpenCodeSessionProviderOptions = {},
 	): Promise<OpenCodeBackendHandle> {
 		const existing = this.backends.get(worktreePath);
 		if (existing) {
@@ -89,6 +95,7 @@ export class OpenCodeBackendManager {
 				worktreePath,
 				openCodeBinary,
 				healthCheckTimeoutMs,
+				providerOptions,
 			);
 			this.backends.set(worktreePath, handle);
 			this.ensurePromises.get(worktreePath)?.resolve(handle);
@@ -112,11 +119,21 @@ export class OpenCodeBackendManager {
 	}
 
 	/**
+	 * Get the scoped session provider for a worktree, if the backend exists.
+	 */
+	getSessionProvider(
+		worktreePath: string,
+	): OpenCodeSessionProvider | undefined {
+		return this.backends.get(worktreePath)?.sessionProvider;
+	}
+
+	/**
 	 * Kill all managed backends and clear the map.
 	 */
 	dispose(): void {
 		for (const handle of this.backends.values()) {
 			handle.kill();
+			handle.sessionProvider.dispose();
 		}
 		this.backends.clear();
 		for (const pending of this.pendingHealthChecks.values()) {
@@ -134,6 +151,7 @@ export class OpenCodeBackendManager {
 		worktreePath: string,
 		openCodeBinary: string,
 		healthCheckTimeoutMs: number,
+		providerOptions: OpenCodeSessionProviderOptions,
 	): Promise<OpenCodeBackendHandle> {
 		return new Promise<OpenCodeBackendHandle>((resolve, reject) => {
 			// Use explicit empty password for controlled loopback backend.
@@ -187,16 +205,24 @@ export class OpenCodeBackendManager {
 					port = Number.parseInt(url.port, 10);
 					resolved = true;
 					cleanup();
+					// Create the scoped session provider for this backend.
+					const sessionProvider = new OpenCodeSessionProvider({
+						...providerOptions,
+						serverUrl: baseUrl,
+						serverPassword: "",
+					});
 					const handle: OpenCodeBackendHandle = {
 						baseUrl,
 						pid: child.pid ?? 0,
 						port,
+						sessionProvider,
 						kill: () => {
 							try {
 								child.kill("SIGTERM");
 							} catch {
 								// best-effort
 							}
+							sessionProvider.dispose();
 						},
 					};
 					// Wait for the health check to pass before resolving.

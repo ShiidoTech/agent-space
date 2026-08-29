@@ -292,21 +292,22 @@ export class SessionBinder {
 			launchedAtMs: Date.now(),
 		};
 
-		if (resume && agent.sessionId && defaultAdapter.resumeConversation) {
-			if (!(await defaultAdapter.resumeConversation(agent.sessionId))) {
-				throw new Error(
-					"Codex app-server could not resume the persisted thread",
-				);
-			}
-			return { sessionId: agent.sessionId, proof: "persisted provider thread" };
-		}
-
 		// For controlled backends (e.g., OpenCode), get a provider scoped to this
-		// worktree with the backend's serverUrl.
+		// worktree with the backend's serverUrl. This MUST happen first so that
+		// both resume and fresh acquire use the same backend-scoped adapter.
 		const toolId = agent.toolId ?? "opencode";
 		const controlledProvider =
 			await this.toolRegistry.getControlledProviderForCwd(toolId, cwd);
 		const adapter = controlledProvider?.sessionAdapter ?? defaultAdapter;
+
+		if (resume && agent.sessionId && adapter.resumeConversation) {
+			if (!(await adapter.resumeConversation(agent.sessionId))) {
+				throw new Error(
+					"Controlled backend could not resume the persisted session",
+				);
+			}
+			return { sessionId: agent.sessionId, proof: "controlled backend resume" };
+		}
 
 		if (resume || !adapter.acquireConversation) return undefined;
 		const receipt = await adapter.acquireConversation(context);

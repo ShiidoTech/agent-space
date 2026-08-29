@@ -625,13 +625,24 @@ export class CodingToolRegistry {
 		const provider = this.getProvider(tool);
 		// Only OpenCode has a controlled backend currently.
 		if (toolId === "opencode" && provider.sessionAdapter?.acquireConversation) {
-			const handle = await openCodeBackendManager.ensure(cwd);
+			const handle = await openCodeBackendManager.ensure(
+				cwd,
+				"opencode",
+				10_000,
+				{
+					serverPassword: "",
+				},
+			);
+			// Use the scoped provider from the backend manager (cached per worktree).
+			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
+			if (!scopedProvider) {
+				throw new Error(
+					`OpenCode backend started but no scoped provider for ${cwd}`,
+				);
+			}
 			return {
 				...provider,
-				sessionAdapter: new OpenCodeSessionProvider({
-					serverUrl: handle.baseUrl,
-					serverPassword: "",
-				}),
+				sessionAdapter: scopedProvider,
 			};
 		}
 		return provider;
@@ -717,17 +728,33 @@ export class CodingToolRegistry {
 		Promise<ProviderAttentionSignal | undefined>
 	>();
 
-	getStructuredAttentionSignal(tool: CodingTool, sessionId: string) {
+	getStructuredAttentionSignal(
+		tool: CodingTool,
+		sessionId: string,
+		cwd?: string,
+	) {
 		const provider = this.getProvider(tool);
-		const signal = this.readAttentionSignalCached(provider, sessionId);
+		// For OpenCode, use the scoped provider from the backend manager
+		// which has the SSE event cache for the controlled backend.
+		let attentionProvider = provider;
+		if (tool.id === "opencode" && cwd) {
+			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
+			if (scopedProvider) {
+				attentionProvider = {
+					...provider,
+					sessionAdapter: scopedProvider,
+				};
+			}
+		}
+		const signal = this.readAttentionSignalCached(attentionProvider, sessionId);
 		if (!signal) return undefined;
 		const statusCapability = {
 			working: "attention.working",
 			waiting_for_user: "attention.waitingForUser",
 			idle: "attention.idle",
 			failed: "attention.failed",
-		}[signal.status] as keyof typeof provider.capabilities.attention;
-		return provider.capabilities.attention[statusCapability]
+		}[signal.status] as keyof typeof attentionProvider.capabilities.attention;
+		return attentionProvider.capabilities.attention[statusCapability]
 			? signal
 			: undefined;
 	}
@@ -735,17 +762,30 @@ export class CodingToolRegistry {
 	async getStructuredAttentionSignalAsync(
 		tool: CodingTool,
 		sessionId: string,
+		cwd?: string,
 	): Promise<ProviderAttentionSignal | undefined> {
 		const provider = this.getProvider(tool);
-		const key = `${provider.id}:${sessionId}`;
+		// For OpenCode, use the scoped provider from the backend manager
+		// which has the SSE event cache for the controlled backend.
+		let attentionProvider = provider;
+		if (tool.id === "opencode" && cwd) {
+			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
+			if (scopedProvider) {
+				attentionProvider = {
+					...provider,
+					sessionAdapter: scopedProvider,
+				};
+			}
+		}
+		const key = `${attentionProvider.id}:${sessionId}`;
 		const cached = this.attentionCache.get(key);
 		if (cached && cached.expiresAt > Date.now())
-			return this.capableAttention(provider, cached.signal);
+			return this.capableAttention(attentionProvider, cached.signal);
 		let pending = this.attentionInFlight.get(key);
 		if (!pending) {
 			pending = (async () => {
-				const signal = provider.getAttentionSignalAsync
-					? await provider.getAttentionSignalAsync(sessionId)
+				const signal = attentionProvider.getAttentionSignalAsync
+					? await attentionProvider.getAttentionSignalAsync(sessionId)
 					: undefined;
 				this.attentionCache.set(key, {
 					signal,
@@ -755,7 +795,7 @@ export class CodingToolRegistry {
 			})().finally(() => this.attentionInFlight.delete(key));
 			this.attentionInFlight.set(key, pending);
 		}
-		return this.capableAttention(provider, await pending);
+		return this.capableAttention(attentionProvider, await pending);
 	}
 
 	private capableAttention(
