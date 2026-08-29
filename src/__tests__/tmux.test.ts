@@ -284,6 +284,35 @@ describe("TmuxIntegration", () => {
 		});
 	});
 
+	describe("respawnSessionCommandAsync", () => {
+		it("respawns the pane in place with -k and a start directory", async () => {
+			mockExecAsync.mockResolvedValue({ stdout: "", stderr: "" });
+			await tmux.respawnSessionCommandAsync(
+				"my-session",
+				"opencode attach http://127.0.0.1:4096 --session ses_1",
+				"/tmp/worktree",
+			);
+			expect(mockExecAsync).toHaveBeenCalledWith(
+				'tmux respawn-pane -k -c "/tmp/worktree" -t "my-session" "opencode attach http://127.0.0.1:4096 --session ses_1"',
+			);
+		});
+
+		it("omits -c when no cwd is given", async () => {
+			mockExecAsync.mockResolvedValue({ stdout: "", stderr: "" });
+			await tmux.respawnSessionCommandAsync("my-session", "opencode attach x");
+			expect(mockExecAsync).toHaveBeenCalledWith(
+				'tmux respawn-pane -k -t "my-session" "opencode attach x"',
+			);
+		});
+
+		it("propagates failure so callers can fall back to kill+recreate", async () => {
+			mockExecAsync.mockRejectedValue(new Error("no such pane"));
+			await expect(
+				tmux.respawnSessionCommandAsync("gone", "cmd"),
+			).rejects.toThrow("no such pane");
+		});
+	});
+
 	describe("listSessions", () => {
 		it("returns tmux session names", () => {
 			mockExec.mockReturnValue("agent-space-f1-a1\nagent-space-svc-f1-s1\n");

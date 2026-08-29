@@ -11,6 +11,7 @@ import {
 	CodingToolRegistry,
 	openCodeBackendManager,
 } from "./agents/codingToolRegistry";
+import { OpenCodeRuntimeReconciler } from "./agents/openCodeRuntimeReconciler";
 import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
@@ -159,6 +160,21 @@ export async function activate(
 		toolRegistry,
 	);
 	const featureStateCoordinator = new FeatureStateCoordinator(projectManager);
+
+	// Mid-session recovery for OpenCode: if `opencode serve` dies while VS
+	// Code stays open, reconnect every surviving OpenCode tmux pane for that
+	// worktree to the freshly-ensured replacement backend. Complements
+	// `restoreAgentRuntimes` below, which only runs once at activation.
+	const openCodeRuntimeReconciler = new OpenCodeRuntimeReconciler({
+		projectManager,
+		tmux,
+		toolRegistry,
+	});
+	openCodeRuntimeReconciler.start();
+	context.subscriptions.push({
+		dispose: () => openCodeRuntimeReconciler.dispose(),
+	});
+
 	const gitViewHandoffAction = getGitViewHandoffAction(
 		globalStore.getPreference(PENDING_GIT_VIEW_HANDOFF_PREF),
 		vscode.workspace.workspaceFolders,

@@ -389,6 +389,116 @@ describe("OpenCode controlled path — contract tests", () => {
 		});
 	});
 
+	describe("OpenCodeBackendManager post-startup supervision", () => {
+		let manager: OpenCodeBackendManager;
+
+		beforeEach(() => {
+			manager = new OpenCodeBackendManager();
+		});
+
+		afterEach(async () => {
+			await manager.dispose();
+		});
+
+		it("removes the backend, disposes its provider, and notifies listeners on an unexpected exit", async () => {
+			const child = fakeChild("http://127.0.0.1:4400");
+			const spawnMock = vi.fn(() => child);
+			manager = new OpenCodeBackendManager({
+				spawn: spawnMock as unknown as OpenCodeBackendManagerOptions["spawn"],
+			});
+			fetchMock.mockResolvedValue({ ok: true });
+			const disposeSpy = vi.spyOn(OpenCodeSessionProvider.prototype, "dispose");
+
+			const handle = await manager.ensure("/tmp/ws-crash");
+			expect(manager.get("/tmp/ws-crash")).toBe(handle);
+
+			const lost = vi.fn();
+			manager.onBackendLost(lost);
+
+			child.emit("exit", 1);
+			// The exit listener runs synchronously off the "exit" event.
+			await Promise.resolve();
+
+			expect(manager.get("/tmp/ws-crash")).toBeUndefined();
+			expect(manager.getSessionProvider("/tmp/ws-crash")).toBeUndefined();
+			expect(disposeSpy).toHaveBeenCalled();
+			expect(lost).toHaveBeenCalledWith("/tmp/ws-crash");
+		});
+
+		it("lets the next ensure() spawn a genuinely new backend after a crash", async () => {
+			const firstChild = fakeChild("http://127.0.0.1:4401");
+			const secondChild = fakeChild("http://127.0.0.1:4402");
+			const spawnMock = vi
+				.fn()
+				.mockReturnValueOnce(firstChild)
+				.mockReturnValueOnce(secondChild);
+			manager = new OpenCodeBackendManager({
+				spawn: spawnMock as unknown as OpenCodeBackendManagerOptions["spawn"],
+			});
+			fetchMock.mockResolvedValue({ ok: true });
+
+			const first = await manager.ensure("/tmp/ws-restart");
+			firstChild.emit("exit", 1);
+			await Promise.resolve();
+			expect(manager.get("/tmp/ws-restart")).toBeUndefined();
+
+			const second = await manager.ensure("/tmp/ws-restart");
+			expect(second).not.toBe(first);
+			expect(second.instanceId).not.toBe(first.instanceId);
+			expect(spawnMock).toHaveBeenCalledTimes(2);
+		});
+
+		it("does not fire onBackendLost for a deliberate shutdown()/dispose()", async () => {
+			const child = fakeChild("http://127.0.0.1:4403");
+			const spawnMock = vi.fn(() => child);
+			manager = new OpenCodeBackendManager({
+				spawn: spawnMock as unknown as OpenCodeBackendManagerOptions["spawn"],
+			});
+			fetchMock.mockResolvedValue({ ok: true });
+
+			await manager.ensure("/tmp/ws-deliberate");
+			const lost = vi.fn();
+			manager.onBackendLost(lost);
+
+			manager.shutdown("/tmp/ws-deliberate");
+			// shutdown() kills synchronously and removes the map entry before the
+			// child's "exit" event can ever be observed as unexpected.
+			child.emit("exit", 0);
+			await Promise.resolve();
+
+			expect(lost).not.toHaveBeenCalled();
+		});
+
+		it("never lets an old process's exit delete a newer handle for the same worktree", async () => {
+			const oldChild = fakeChild("http://127.0.0.1:4404");
+			const newChild = fakeChild("http://127.0.0.1:4405");
+			const spawnMock = vi
+				.fn()
+				.mockReturnValueOnce(oldChild)
+				.mockReturnValueOnce(newChild);
+			manager = new OpenCodeBackendManager({
+				spawn: spawnMock as unknown as OpenCodeBackendManagerOptions["spawn"],
+			});
+			fetchMock.mockResolvedValue({ ok: true });
+
+			const oldHandle = await manager.ensure("/tmp/ws-race");
+			// Simulate the old backend being superseded (e.g. detected stale by a
+			// concurrent ensure()) without its exit having fired yet.
+			manager.shutdown("/tmp/ws-race");
+			const newHandle = await manager.ensure("/tmp/ws-race");
+			expect(newHandle).not.toBe(oldHandle);
+
+			const lost = vi.fn();
+			manager.onBackendLost(lost);
+			// The old child's exit arrives late — it must not touch the new handle.
+			oldChild.emit("exit", 1);
+			await Promise.resolve();
+
+			expect(manager.get("/tmp/ws-race")).toBe(newHandle);
+			expect(lost).not.toHaveBeenCalled();
+		});
+	});
+
 	// --- Controlled flow end-to-end with fakes ---
 
 	describe("Controlled flow: ensure -> POST /session -> receipt -> attach", () => {

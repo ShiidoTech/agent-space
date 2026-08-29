@@ -6,11 +6,13 @@ import type { Agent, CodingTool, Feature } from "../types";
 import { execAsync } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import { openCodeBackendManager } from "./codingToolRegistry";
+import { reconnectOpenCodeAgent } from "./openCodeReattach";
 import {
 	RuntimeOwnershipGuard,
 	runtimeOwnershipKey,
 	withRuntimeSpawnLock,
 } from "./runtimeOwnership";
+import { sessionIsProven } from "./sessionProven";
 import type { TmuxIntegration } from "./tmux";
 
 /**
@@ -134,9 +136,42 @@ async function restoreAgentRuntimeUnlocked(
 		agent.tmuxSession ?? deps.tmux.sessionName(feature.id, agent.id);
 	const legacySessionName = deps.tmux.legacySessionName(feature.id, agent.id);
 
+	const tool = deps.toolRegistry.resolveAgentToolForAgent(agent);
+
 	if (await deps.tmux.adoptSessionAsync(sessionName, legacySessionName)) {
 		// Case A: the runtime survived (VS Code reload with a live tmux), or a
-		// previous restore pass already recreated it. Do not spawn anything.
+		// previous restore pass already recreated it.
+		//
+		// For every other provider, tmux-alive genuinely implies a working
+		// runtime and nothing else is needed. OpenCode is different: the tmux
+		// pane only ever runs `opencode attach <backend-url> ...`, and the
+		// `opencode serve` backend it points at is a child of the Extension
+		// Host, not of tmux — it does not survive a reload, and can also die
+		// independently while VS Code stays open. A live pane therefore does
+		// NOT imply a live session here, so an agent is only ever considered
+		// `reattached` once its attach client is proven wired to the
+		// worktree's current, healthy backend.
+		if (tool.id === "opencode") {
+			const cwd = agent.worktreePath ?? feature.worktreePath;
+			const result = await reconnectOpenCodeAgent(
+				agent,
+				tool,
+				cwd,
+				sessionName,
+				deps,
+			);
+			if (result.kind === "blocked") {
+				return persistBlocked(ctx, agent, result.reason, outcome);
+			}
+			// "reconnected" (freshly respawned onto the current backend) and
+			// "skipped" (already pointed at it) both mean the agent is reattached.
+			ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, feature.id, {
+				state: "reattached",
+				at: new Date().toISOString(),
+			});
+			return outcome("reattached");
+		}
+
 		ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, feature.id, {
 			state: "reattached",
 			at: new Date().toISOString(),
@@ -146,7 +181,6 @@ async function restoreAgentRuntimeUnlocked(
 
 	// Case B: the runtime is gone. Only a genuinely provable resume may rebuild
 	// it — a silent fresh launch is never acceptable on this path.
-	const tool = deps.toolRegistry.resolveAgentToolForAgent(agent);
 	if (!supportsResume(deps, tool)) {
 		const reason =
 			"Provider has no resume capability; the agent runtime was not recreated";
@@ -248,31 +282,6 @@ async function restoreAgentRuntimeUnlocked(
 function supportsResume(deps: RuntimeRestoreDeps, tool: CodingTool): boolean {
 	if (tool.resumeCommand) return true;
 	return deps.toolRegistry.getProvider(tool).capabilities.resume === true;
-}
-
-/**
- * Prove the persisted session id still exists before resuming it. A provider
- * with a session store is checked fresh (`hasSession`); a provider without one
- * can only fall back on a previously persisted `bound` verdict — never on an
- * ordering or naming heuristic.
- */
-async function sessionIsProven(
-	deps: RuntimeRestoreDeps,
-	tool: CodingTool,
-	agent: Agent,
-): Promise<boolean> {
-	const adapter = deps.toolRegistry.getProvider(tool).sessionAdapter;
-	if (adapter?.async?.hasSession) {
-		try {
-			return (
-				(await adapter.async.hasSession(agent.sessionId as string)) === true
-			);
-		} catch {
-			return false;
-		}
-	}
-	if (adapter?.hasSession) return false;
-	return agent.sessionBinding?.state === "bound";
 }
 
 function persistBlocked(

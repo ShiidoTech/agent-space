@@ -301,6 +301,28 @@ export class TmuxIntegration {
 		return `tmux new-session -d -s "${sessionName}" "${innerCommand}"`;
 	}
 
+	/**
+	 * Replace the running command in an existing session's pane in place,
+	 * keeping the same tmux session (and therefore the same VS Code terminal
+	 * attached to it) rather than killing and recreating it. Used to reconnect
+	 * a live `opencode attach` pane to a replacement backend without dropping
+	 * the terminal the user has open.
+	 *
+	 * Throws if the session does not exist or `respawn-pane` fails — callers
+	 * that want a kill/recreate fallback must catch and do so explicitly;
+	 * this primitive never falls back on its own.
+	 */
+	async respawnSessionCommandAsync(
+		sessionName: string,
+		innerCommand: string,
+		cwd?: string,
+	): Promise<void> {
+		const cwdFlag = cwd ? `-c "${cwd}" ` : "";
+		await execAsync(
+			`tmux respawn-pane -k ${cwdFlag}-t "${sessionName}" "${innerCommand}"`,
+		);
+	}
+
 	createShellCommand(sessionName: string): string {
 		return `tmux new-session -d -s "${sessionName}"`;
 	}
