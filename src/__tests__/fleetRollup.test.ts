@@ -79,4 +79,48 @@ describe("fleet rollup", () => {
 			rollup.items.map(({ featureId, agentId }) => ({ featureId, agentId })),
 		).toEqual(agents.map(({ featureId, id }) => ({ featureId, agentId: id })));
 	});
+
+	it("does not promote non-running lifecycle states or duplicate degraded state", () => {
+		const cases = [
+			["idle", "idle", "unknown"],
+			["starting", "working", "unknown"],
+			["stopped", "working", "unknown"],
+			["done", "working", "unknown"],
+		] as const;
+		for (const [id, attention, expected] of cases) {
+			const current = agent(id, attention, { status: "running" });
+			const result = projectFleetRollup([
+				{
+					agent: current,
+					observation: {
+						...observation(current, attention),
+						lifecycle: {
+							state: id === "starting" ? "starting" : id,
+							source: "agentspace",
+						},
+					},
+				},
+			]);
+			expect(result.items[0]?.bucket, id).toBe(expected);
+		}
+		const stopped = agent("stopped-ambiguous", "working", {
+			status: "stopped",
+			sessionBinding: {
+				state: "ambiguous",
+				checkedAt: "now",
+				attempts: 1,
+				detail: "two candidates",
+			},
+		});
+		const result = projectFleetRollup([
+			{
+				agent: stopped,
+				observation: {
+					...observation(stopped, "working"),
+					lifecycle: { state: "stopped", source: "agentspace" },
+				},
+			},
+		]);
+		expect(result).toMatchObject({ failed: 0, unknown: 1 });
+	});
 });

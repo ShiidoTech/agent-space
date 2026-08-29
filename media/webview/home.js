@@ -389,8 +389,17 @@ function updateAttention(agent) {
  */
 function patchKeyedFragment(el, html, key) {
 	if (key !== undefined && el.dataset.key === key) return;
+	const focusedFleetItem = typeof el.contains === "function" && el.contains(document.activeElement)
+		? document.activeElement?.getAttribute("data-fleet-item")
+		: null;
 	el.innerHTML = html;
 	if (key !== undefined) el.dataset.key = key;
+	if (focusedFleetItem) {
+		const replacement = el.querySelector(
+			`[data-fleet-item="${focusedFleetItem}"]`,
+		);
+		if (replacement instanceof HTMLElement) replacement.focus();
+	}
 }
 
 window.addEventListener("message", (event) => {
@@ -489,8 +498,24 @@ window.addEventListener("message", (event) => {
 		}
 		case "fleetUpdate": {
 			const rollup = document.getElementById(`fleet-rollup-${message.target}`);
-			if (rollup && typeof message.html === "string") rollup.innerHTML = message.html;
+			if (rollup && typeof message.html === "string")
+				patchKeyedFragment(rollup, message.html, message.htmlKey);
 			for (const agent of message.agents || []) updateAttention(agent);
+			for (const feature of message.features || []) {
+				const badge = document.querySelector(
+					`[data-project-status-badge="${feature.id}"]`,
+				);
+				if (badge && feature.statusLabel) {
+					badge.textContent = feature.statusLabel;
+					badge.className = `project-status-badge status-${feature.statusTone}`;
+					badge.title = feature.statusDetail || feature.statusLabel;
+				}
+				const counts = document.querySelector(
+					`[data-project-feature-counts="${feature.id}"]`,
+				);
+				if (counts)
+					counts.textContent = `${feature.activeAgents} agent${feature.activeAgents === 1 ? "" : "s"}${feature.runningServices ? ` · ${feature.runningServices} script${feature.runningServices === 1 ? "" : "s"}` : ""}`;
+			}
 			break;
 		}
 	}

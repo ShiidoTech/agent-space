@@ -369,7 +369,9 @@ export class HomePanel {
 		structural?: boolean;
 	}): void {
 		if (scope?.structural === false && scope.featureId) {
-			if (HomePanel.patchLiveFeature(scope.featureId)) return;
+			HomePanel.patchLiveFeature(scope.featureId);
+			// A Feature panel and the singleton Project/Portfolio panel can be
+			// open at the same time; both projections must receive the same tick.
 			HomePanel.refreshInstance();
 			return;
 		}
@@ -945,6 +947,35 @@ export class HomePanel {
 					}))
 				: [],
 		);
+		const featureUpdates = snapshots.map((snapshot) => {
+			const agents =
+				snapshot.runtime.agents.status === "known"
+					? snapshot.runtime.agents.value
+					: [];
+			const services =
+				snapshot.runtime.services.status === "known"
+					? snapshot.runtime.services.value
+					: [];
+			const summary = snapshot.feature.id.startsWith("base:")
+				? undefined
+				: presentFeatureCockpit(
+						snapshot,
+						this.featureStateCoordinator.getProjectReferenceHealth(
+							snapshot.projectId,
+						),
+					).summary;
+			return {
+				id: snapshot.feature.id,
+				statusLabel: summary?.label,
+				statusTone: summary?.tone,
+				statusDetail: summary?.detail,
+				activeAgents: agents.filter(({ agent }) => agent.status !== "done")
+					.length,
+				runningServices: services.filter(
+					({ service }) => service.status === "running",
+				).length,
+			};
+		});
 		this.panel.webview.postMessage({
 			type: "fleetUpdate",
 			target: this.currentFeatureId
@@ -954,8 +985,10 @@ export class HomePanel {
 					: "portfolio",
 			label: formatFleetRollup(rollup),
 			html: this.renderFleetRollup(rollup),
+			htmlKey: this.contentKey(this.renderFleetRollup(rollup)),
 			rollup,
 			agents: agentUpdates,
+			features: featureUpdates,
 		});
 	}
 
@@ -1868,7 +1901,7 @@ export class HomePanel {
 									),
 								).summary;
 						const statusBadge = summary
-							? `<span class="project-status-badge status-${summary.tone}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>`
+							? `<span class="project-status-badge status-${summary.tone}" data-project-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>`
 							: '<span class="project-base-label">base</span>';
 						const agentCount = agents.filter((a) => a.status !== "done").length;
 						const serviceCount = services.filter(
@@ -1896,7 +1929,7 @@ export class HomePanel {
 								<span class="project-feature-branch">${this.escapeHtml(feature.branch)}</span>
 								${statusBadge}
 								${this.renderReusedBranchChip(feature)}
-								<span class="project-feature-counts">${counts}</span>
+								<span class="project-feature-counts" data-project-feature-counts="${feature.id}">${counts}</span>
 								<button class="project-feature-delete" onclick="event.stopPropagation(); deleteFeature('${feature.id}')" title="Finish Feature">&times;</button>
 							</div>
 							<div class="project-feature-card-body" id="pf-body-${feature.id}">
@@ -2486,7 +2519,7 @@ export class HomePanel {
 					(candidate) => candidate.bucket === bucket,
 				);
 				return item
-					? `<button class="fleet-rollup-item" onclick="event.stopPropagation(); focusFleetItem('${this.escapeHtml(item.featureId)}', '${this.escapeHtml(item.agentId)}')"><strong>${rollup[bucket]}</strong> ${labels[bucket]}</button>`
+					? `<button class="fleet-rollup-item" data-fleet-item="${this.escapeHtml(item.featureId)}:${this.escapeHtml(item.agentId)}" onclick="event.stopPropagation(); focusFleetItem('${this.escapeHtml(item.featureId)}', '${this.escapeHtml(item.agentId)}')"><strong>${rollup[bucket]}</strong> ${labels[bucket]}</button>`
 					: `<span class="fleet-rollup-item"><strong>${rollup[bucket]}</strong> ${labels[bucket]}</span>`;
 			})
 			.join(" · ");

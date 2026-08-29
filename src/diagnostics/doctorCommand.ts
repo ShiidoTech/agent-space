@@ -79,6 +79,7 @@ export function probeAgents(
 					const signal = toolRegistry.getStructuredAttentionSignal(
 						resolution.tool,
 						agent.sessionId,
+						agent.worktreePath,
 					);
 					attentionEvidence = signal?.evidence;
 					attentionObservedAt = signal?.observedAt;

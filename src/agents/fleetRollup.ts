@@ -1,7 +1,6 @@
 import type { FeatureSnapshot } from "../features/featureSnapshot";
 import type { AgentRuntimeEvidence } from "../features/runtimeObservation";
 import type { Agent } from "../types";
-import { presentAgentCard } from "./observation/presentAgentCard";
 import type { AgentObservation } from "./observation/types";
 
 export type FleetRollupBucket =
@@ -46,7 +45,6 @@ export function projectFleetRollup(
 	const items: FleetRollupItem[] = [];
 	for (const input of inputs) {
 		const { agent, observation } = input;
-		const presented = presentAgentCard(observation).primaryState;
 		const bindingDegraded =
 			agent.sessionBinding?.state === "ambiguous" ||
 			agent.sessionBinding?.state === "unverified";
@@ -55,17 +53,32 @@ export function projectFleetRollup(
 			input.runtime.tmuxAlive.value === false &&
 			agent.status === "running";
 		let bucket: FleetRollupBucket;
-		if (presented.label === "Needs you") bucket = "needsYou";
-		else if (
-			presented.label === "Failed" ||
-			presented.label === "Error" ||
-			bindingDegraded ||
-			runtimeLost
-		)
+		if (
+			observation.lifecycle.state === "running" &&
+			observation.attention.state === "waiting_for_user"
+		) {
+			bucket = "needsYou";
+		} else if (
+			observation.lifecycle.state === "errored" ||
+			(observation.lifecycle.state === "running" &&
+				(observation.attention.state === "failed" ||
+					bindingDegraded ||
+					runtimeLost))
+		) {
 			bucket = "failed";
-		else if (presented.label === "Ready for review") bucket = "readyForReview";
-		else if (presented.label === "Working") bucket = "working";
-		else bucket = "unknown";
+		} else if (
+			observation.lifecycle.state === "running" &&
+			observation.review.pending
+		) {
+			bucket = "readyForReview";
+		} else if (
+			observation.lifecycle.state === "running" &&
+			observation.attention.state === "working"
+		) {
+			bucket = "working";
+		} else {
+			bucket = "unknown";
+		}
 		counts[bucket] += 1;
 		items.push({ bucket, featureId: agent.featureId, agentId: agent.id });
 	}
