@@ -23,6 +23,14 @@ export interface OpenCodeBackendHandle {
 	kill(): void;
 	/** The scoped session provider for this backend/worktree. */
 	readonly sessionProvider: OpenCodeSessionProvider;
+	/**
+	 * Unique per-spawn identifier, distinct from every other handle this
+	 * manager has ever produced (including an earlier handle for the same
+	 * worktree). Lets a reconciler tell "this runtime is already reconnected
+	 * to the current backend" apart from "the backend was replaced since I
+	 * last reconnected" without relying on `baseUrl`/port reuse being unique.
+	 */
+	readonly instanceId: string;
 }
 
 interface PendingHealthCheck {
@@ -60,6 +68,15 @@ export class OpenCodeBackendManager {
 	private readonly generations = new Map<string, number>();
 	/** Child-process cancellation hooks for backends not ready yet. */
 	private readonly pendingStarts = new Map<string, () => void>();
+	/**
+	 * Listeners notified when a worktree's backend exits unexpectedly (i.e.
+	 * not via `kill()`/`shutdown()`/`dispose()`). Consumers (e.g. a runtime
+	 * reconciler) use this to know a worktree's `opencode attach` clients are
+	 * now pointed at a dead server and need to be reconnected once a
+	 * replacement backend is ensured. Tmux/runtime logic intentionally does
+	 * not live in this class — it only reports the fact.
+	 */
+	private readonly lostListeners = new Set<(worktreePath: string) => void>();
 
 	constructor(options: OpenCodeBackendManagerOptions = {}) {
 		this.spawnProcess = options.spawn ?? defaultSpawn;
@@ -143,14 +160,21 @@ export class OpenCodeBackendManager {
 					return;
 				}
 				this.backends.set(worktreePath, handle);
+				// Clear the in-flight entry in the same tick as resolving it — a
+				// `.finally()` on this chain would run a microtask later, leaving
+				// a window where a fresh `ensure()` call (e.g. right after this
+				// `await` returns, as a crash-recovery caller does) would coalesce
+				// onto this already-resolved entry instead of starting anew.
+				if (this.ensurePromises.get(worktreePath) === entry) {
+					this.ensurePromises.delete(worktreePath);
+				}
 				entry.resolve(handle);
 			})
 			.catch((error) => {
-				entry.reject(error instanceof Error ? error : new Error(String(error)));
-			})
-			.finally(() => {
-				if (this.ensurePromises.get(worktreePath) === entry)
+				if (this.ensurePromises.get(worktreePath) === entry) {
 					this.ensurePromises.delete(worktreePath);
+				}
+				entry.reject(error instanceof Error ? error : new Error(String(error)));
 			});
 		return promise;
 	}
@@ -161,6 +185,29 @@ export class OpenCodeBackendManager {
 	 */
 	get(worktreePath: string): OpenCodeBackendHandle | undefined {
 		return this.backends.get(worktreePath);
+	}
+
+	/**
+	 * Subscribe to unexpected backend exits. Fired once per worktree per
+	 * unexpected exit — never for a deliberate `kill()`/`shutdown()`/`dispose()`,
+	 * and never when the exiting child has already been superseded by a newer
+	 * backend for the same worktree. Returns an unsubscribe function.
+	 */
+	onBackendLost(listener: (worktreePath: string) => void): () => void {
+		this.lostListeners.add(listener);
+		return () => this.lostListeners.delete(listener);
+	}
+
+	private emitLost(worktreePath: string): void {
+		for (const listener of this.lostListeners) {
+			try {
+				listener(worktreePath);
+			} catch (error) {
+				console.warn(
+					`[OpenCodeBackendManager] onBackendLost listener threw: ${error}`,
+				);
+			}
+		}
 	}
 
 	/**
@@ -221,6 +268,7 @@ export class OpenCodeBackendManager {
 			pending.reject(new Error("Backend manager disposed"));
 		}
 		this.ensurePromises.clear();
+		this.lostListeners.clear();
 	}
 
 	private async startBackend(
@@ -250,15 +298,25 @@ export class OpenCodeBackendManager {
 			let settled = false;
 			let baseUrl: string | undefined;
 			let port = 0;
+			let providerDisposed = false;
+			const disposeProviderOnce = (sessionProvider: { dispose(): void }) => {
+				if (providerDisposed) return;
+				providerDisposed = true;
+				sessionProvider.dispose();
+			};
 
+			// Only the startup-phase listeners (used to reject on an early
+			// crash/error) are removed here — never `removeAllListeners()`,
+			// which would also strip the persistent post-startup `exit`
+			// listener registered below once the handle exists.
 			const cleanup = () => {
-				child.removeAllListeners();
+				child.removeListener("error", onStartupError);
+				child.removeListener("exit", onStartupExit);
 				stdoutLineReader.close();
 				stderrLineReader.close();
 			};
 
 			if (!child.stdout || !child.stderr) {
-				cleanup();
 				reject(
 					new Error(
 						`OpenCode backend failed to start in ${worktreePath}: stdout/stderr not available`,
@@ -310,15 +368,29 @@ export class OpenCodeBackendManager {
 						pid: child.pid ?? 0,
 						port,
 						sessionProvider,
+						instanceId: `${worktreePath}#${child.pid ?? 0}#${Date.now()}#${Math.random().toString(36).slice(2)}`,
 						kill: () => {
 							try {
 								child.kill("SIGTERM");
 							} catch {
 								// best-effort
 							}
-							sessionProvider.dispose();
+							disposeProviderOnce(sessionProvider);
 						},
 					};
+					// Persistent post-startup supervision. Fires on any exit that
+					// was not caused by our own `kill()` (which always removes/
+					// replaces the map entry synchronously before the child
+					// actually exits) and that has not already been superseded by
+					// a newer handle for the same worktree — see the identity
+					// check below, which also protects against the old-process /
+					// new-process race.
+					child.on("exit", () => {
+						if (this.backends.get(worktreePath) !== handle) return;
+						this.backends.delete(worktreePath);
+						disposeProviderOnce(sessionProvider);
+						this.emitLost(worktreePath);
+					});
 					// Wait for the health check to pass before resolving.
 					this.waitForHealth(baseUrl, healthCheckTimeoutMs)
 						.then((ok) => {
@@ -352,7 +424,7 @@ export class OpenCodeBackendManager {
 				}
 			});
 
-			child.once("error", (error) => {
+			const onStartupError = (error: Error) => {
 				if (!resolved && !settled) {
 					settled = true;
 					this.pendingStarts.delete(worktreePath);
@@ -363,9 +435,9 @@ export class OpenCodeBackendManager {
 						),
 					);
 				}
-			});
+			};
 
-			child.once("exit", (code) => {
+			const onStartupExit = (code: number | null) => {
 				if (!resolved && !settled) {
 					settled = true;
 					this.pendingStarts.delete(worktreePath);
@@ -376,7 +448,10 @@ export class OpenCodeBackendManager {
 						),
 					);
 				}
-			});
+			};
+
+			child.once("error", onStartupError);
+			child.once("exit", onStartupExit);
 		});
 	}
 

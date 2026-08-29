@@ -6,6 +6,7 @@ import {
 	CodingToolRegistry,
 	openCodeBackendManager,
 } from "../agents/codingToolRegistry";
+import { resetOpenCodeReattachStateForTests } from "../agents/openCodeReattach";
 import type { CodingAgentProvider } from "../agents/providers/types";
 import {
 	RuntimeOwnershipGuard,
@@ -71,6 +72,7 @@ afterEach(() => {
 	execMock.mockClear();
 	execAsyncMock.mockClear();
 	vi.restoreAllMocks();
+	resetOpenCodeReattachStateForTests();
 });
 
 const WORKTREE = "/tmp/agent-space-restorer/feat-x";
@@ -111,10 +113,21 @@ interface TmuxState {
 	alive: Set<string>;
 	created: string[];
 	configured: string[];
+	respawned: Array<{ sessionName: string; command: string; cwd?: string }>;
+	killed: string[];
+	respawnFails: boolean;
 }
 
 function tmuxState(): TmuxState {
-	return { available: true, alive: new Set(), created: [], configured: [] };
+	return {
+		available: true,
+		alive: new Set(),
+		created: [],
+		configured: [],
+		respawned: [],
+		killed: [],
+		respawnFails: false,
+	};
 }
 
 function tmux(st: TmuxState, spawnMakesAlive = true): TmuxIntegration {
@@ -148,6 +161,19 @@ function tmux(st: TmuxState, spawnMakesAlive = true): TmuxIntegration {
 		},
 		isSessionAliveAsync: async (sessionName: string) =>
 			st.alive.has(sessionName),
+		respawnSessionCommandAsync: async (
+			sessionName: string,
+			command: string,
+			cwd?: string,
+		) => {
+			if (st.respawnFails) throw new Error("respawn-pane unavailable");
+			st.respawned.push({ sessionName, command, cwd });
+			if (spawnMakesAlive) st.alive.add(sessionName);
+		},
+		killSession: (sessionName: string) => {
+			st.killed.push(sessionName);
+			st.alive.delete(sessionName);
+		},
 	} as unknown as TmuxIntegration;
 }
 
@@ -627,6 +653,221 @@ describe("restoreAgentRuntimes", () => {
 		expect(report.blocked[0]?.reason).toContain("stay alive");
 		const stored = ctx.store.loadAgents("f1")[0];
 		expect(stored.restore?.state).toBe("blocked");
+	});
+
+	describe("OpenCode: tmux-alive does not imply a live backend", () => {
+		function mockOpenCodeTool(registry: CodingToolRegistry) {
+			const opencodeTool = {
+				id: "opencode",
+				name: "OpenCode",
+				command: "opencode",
+				family: "opencode" as const,
+			};
+			const opencodeProvider = provider({ id: "opencode" });
+			vi.spyOn(registry, "resolveAgentToolForAgent").mockImplementation(
+				(agent) =>
+					agent.toolId === "opencode"
+						? ({ ...opencodeTool, provider: opencodeProvider } as never)
+						: registry.resolveAgentTool("stub"),
+			);
+			vi.spyOn(registry, "getProvider").mockImplementation((tool) =>
+				tool.id === "opencode" ? opencodeProvider : provider(),
+			);
+			return opencodeProvider;
+		}
+
+		function fakeHandle(
+			instanceId: string,
+			port: number,
+			resumeConversation: ReturnType<typeof vi.fn> = vi.fn(async () => true),
+		) {
+			return {
+				instanceId,
+				baseUrl: `http://127.0.0.1:${port}`,
+				pid: 1,
+				port,
+				kill: vi.fn(),
+				sessionProvider: { resumeConversation },
+			};
+		}
+
+		it("reconnects a live OpenCode pane to a freshly-ensured backend instead of trusting tmux-alive", async () => {
+			const { ctx, registry, st, projectManager } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({ id: "oc-a", toolId: "opencode" }),
+			]);
+			st.alive.add("agent-space-f1-oc-a");
+			mockOpenCodeTool(registry);
+			const resumeConversation = vi.fn(async () => true);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-1", 9001, resumeConversation) as never,
+			);
+
+			const report = await restoreAgentRuntimes({
+				projectManager,
+				tmux: tmux(st),
+				toolRegistry: registry,
+			});
+
+			expect(report.reattached.map((o) => o.agentId)).toEqual(["oc-a"]);
+			expect(openCodeBackendManager.ensure).toHaveBeenCalledWith(WORKTREE);
+			// The scoped provider's SSE subscription must be re-established on
+			// the exact same session id before the pane is declared reconnected.
+			expect(resumeConversation).toHaveBeenCalledWith("ses_resume");
+			expect(st.respawned).toHaveLength(1);
+			expect(st.respawned[0]?.sessionName).toBe("agent-space-f1-oc-a");
+			expect(st.respawned[0]?.command).toContain(
+				"opencode --session ses_resume",
+			);
+			const stored = ctx.store.loadAgents("f1")[0];
+			expect(stored.restore?.state).toBe("reattached");
+		});
+
+		it("blocks and never respawns when the session no longer exists on the new backend", async () => {
+			const { ctx, registry, st, projectManager } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({ id: "oc-a", toolId: "opencode" }),
+			]);
+			st.alive.add("agent-space-f1-oc-a");
+			mockOpenCodeTool(registry);
+			const resumeConversation = vi.fn(async () => false);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-1", 9005, resumeConversation) as never,
+			);
+
+			const report = await restoreAgentRuntimes({
+				projectManager,
+				tmux: tmux(st),
+				toolRegistry: registry,
+			});
+
+			expect(resumeConversation).toHaveBeenCalledWith("ses_resume");
+			expect(report.blocked.map((o) => o.agentId)).toEqual(["oc-a"]);
+			expect(report.reattached).toHaveLength(0);
+			expect(st.respawned).toHaveLength(0);
+			expect(st.created).toHaveLength(0);
+			const stored = ctx.store.loadAgents("f1")[0];
+			expect(stored.restore?.state).toBe("blocked");
+		});
+
+		it("blocks (never fresh-launches) an OpenCode agent whose session id cannot be proven", async () => {
+			const { ctx, registry, st, projectManager } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({ id: "oc-a", toolId: "opencode" }),
+			]);
+			st.alive.add("agent-space-f1-oc-a");
+			const opencodeProvider = mockOpenCodeTool(registry);
+			(
+				opencodeProvider.sessionAdapter?.async?.hasSession as ReturnType<
+					typeof vi.fn
+				>
+			)?.mockResolvedValue(false);
+			const ensureSpy = vi.spyOn(openCodeBackendManager, "ensure");
+
+			const report = await restoreAgentRuntimes({
+				projectManager,
+				tmux: tmux(st),
+				toolRegistry: registry,
+			});
+
+			expect(report.blocked.map((o) => o.agentId)).toEqual(["oc-a"]);
+			expect(report.reattached).toHaveLength(0);
+			expect(ensureSpy).not.toHaveBeenCalled();
+			expect(st.respawned).toHaveLength(0);
+		});
+
+		it("blocks an OpenCode agent with no persisted session id instead of reattaching", async () => {
+			const { ctx, registry, st, projectManager } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({ id: "oc-a", toolId: "opencode", sessionId: null }),
+			]);
+			st.alive.add("agent-space-f1-oc-a");
+			mockOpenCodeTool(registry);
+
+			const report = await restoreAgentRuntimes({
+				projectManager,
+				tmux: tmux(st),
+				toolRegistry: registry,
+			});
+
+			expect(report.blocked.map((o) => o.agentId)).toEqual(["oc-a"]);
+			expect(report.blocked[0]?.reason).toContain("session id");
+			expect(st.respawned).toHaveLength(0);
+		});
+
+		it("does not respawn a pane already pointed at the current backend instance", async () => {
+			const { ctx, registry, st, projectManager } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({ id: "oc-a", toolId: "opencode" }),
+			]);
+			st.alive.add("agent-space-f1-oc-a");
+			mockOpenCodeTool(registry);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-stable", 9002) as never,
+			);
+
+			const deps = { projectManager, tmux: tmux(st), toolRegistry: registry };
+			const first = await restoreAgentRuntimes(deps);
+			const second = await restoreAgentRuntimes(deps);
+
+			expect(first.reattached).toHaveLength(1);
+			expect(second.reattached).toHaveLength(1);
+			// One respawn on the first pass; the second pass sees the same
+			// backend instance already reconnected and skips it.
+			expect(st.respawned).toHaveLength(1);
+		});
+
+		it("reconnects two agents sharing the same worktree to the single new backend", async () => {
+			const { ctx, registry, st, projectManager } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({ id: "oc-a", toolId: "opencode" }),
+				agentFixture({ id: "oc-b", toolId: "opencode" }),
+			]);
+			st.alive.add("agent-space-f1-oc-a");
+			st.alive.add("agent-space-f1-oc-b");
+			mockOpenCodeTool(registry);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-shared", 9003) as never,
+			);
+
+			const report = await restoreAgentRuntimes({
+				projectManager,
+				tmux: tmux(st),
+				toolRegistry: registry,
+			});
+
+			expect(report.reattached.map((o) => o.agentId).sort()).toEqual([
+				"oc-a",
+				"oc-b",
+			]);
+			expect(st.respawned.map((r) => r.sessionName).sort()).toEqual([
+				"agent-space-f1-oc-a",
+				"agent-space-f1-oc-b",
+			]);
+		});
+
+		it("falls back to kill+recreate when respawn-pane is unavailable", async () => {
+			const { ctx, registry, st, projectManager } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({ id: "oc-a", toolId: "opencode" }),
+			]);
+			st.alive.add("agent-space-f1-oc-a");
+			st.respawnFails = true;
+			mockOpenCodeTool(registry);
+			vi.spyOn(openCodeBackendManager, "ensure").mockResolvedValue(
+				fakeHandle("backend-2", 9004) as never,
+			);
+
+			const report = await restoreAgentRuntimes({
+				projectManager,
+				tmux: tmux(st),
+				toolRegistry: registry,
+			});
+
+			expect(report.reattached.map((o) => o.agentId)).toEqual(["oc-a"]);
+			expect(st.killed).toEqual(["agent-space-f1-oc-a"]);
+			expect(execAsyncMock).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	it("recovers agents on the base feature (repo root) as well", async () => {
