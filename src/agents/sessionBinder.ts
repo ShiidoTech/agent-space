@@ -6,6 +6,7 @@ import type {
 import type { Agent, AgentSessionBinding, Feature } from "../types";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import type { ProviderSessionAdapter } from "./providers/types";
+import { RuntimeOwnershipGuard } from "./runtimeOwnership";
 import type {
 	ProviderConversationReceipt,
 	SessionCorrelationContext,
@@ -546,6 +547,28 @@ export class SessionBinder {
 		}
 
 		const adapter = this.adapterFor(agent);
+		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
+		if (tool.family === "hermes" && agent.sessionId) {
+			const ownership = await new RuntimeOwnershipGuard(
+				this.projectManager as ProjectManager,
+				this.tmux,
+				this.toolRegistry,
+			).checkResume(
+				agent.sessionId,
+				agent.id,
+				agent.hermesProfile ?? "default",
+			);
+			if (!ownership.allowed) {
+				return {
+					kind: "settled",
+					binding: this.persist(ctx, featureId, agent, {
+						state: "ambiguous",
+						attempts: agent.sessionBinding?.attempts ?? 0,
+						detail: ownership.reason as string,
+					}),
+				};
+			}
+		}
 		if (!adapter) {
 			return {
 				kind: "settled",
@@ -644,6 +667,28 @@ export class SessionBinder {
 		}
 
 		const adapter = this.adapterFor(agent);
+		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
+		if (tool.family === "hermes" && agent.sessionId) {
+			const ownership = new RuntimeOwnershipGuard(
+				this.projectManager as ProjectManager,
+				this.tmux,
+				this.toolRegistry,
+			).checkResumeSync(
+				agent.sessionId,
+				agent.id,
+				agent.hermesProfile ?? "default",
+			);
+			if (!ownership.allowed) {
+				return {
+					kind: "settled",
+					binding: this.persist(ctx, featureId, agent, {
+						state: "ambiguous",
+						attempts: agent.sessionBinding?.attempts ?? 0,
+						detail: ownership.reason as string,
+					}),
+				};
+			}
+		}
 		if (!adapter) {
 			return {
 				kind: "settled",

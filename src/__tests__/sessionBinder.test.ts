@@ -83,13 +83,13 @@ function registry(sessionAdapter?: ProviderSessionAdapter): CodingToolRegistry {
 			id: toolId ?? "stub",
 			name: toolId ?? "stub",
 			command: toolId ?? "stub",
-			family: "generic" as const,
+			family: (toolId ?? "stub") === "hermes" ? "hermes" : "generic",
 		}),
 		resolveAgentToolForAgent: (agent: { toolId?: string }) => ({
 			id: agent.toolId ?? "stub",
 			name: agent.toolId ?? "stub",
 			command: agent.toolId ?? "stub",
-			family: "generic" as const,
+			family: agent.toolId === "hermes" ? "hermes" : "generic",
 		}),
 		getProvider: () => ({
 			id: "stub",
@@ -249,6 +249,35 @@ describe("SessionBinder", () => {
 		expect(ctx.store.loadAgents("f1")[0].sessionId).toBe("ses_late");
 	});
 
+	it("marks duplicate live owners as ambiguous instead of keeping either bound", async () => {
+		const { projectManager, ctx } = setup([feature()]);
+		const shared = "hermes-session-x";
+		ctx.store.saveAgents("f1", [
+			agentFixture({ id: "a", sessionId: shared, toolId: "hermes" }),
+			agentFixture({
+				id: "b",
+				sessionId: shared,
+				tmuxSession: "agent-space-f1-b",
+				toolId: "hermes",
+			}),
+		]);
+		const sessions = [
+			{
+				sessionId: shared,
+				prompt: "shared",
+				created: "2026-08-09T07:52:53.000Z",
+				projectPath: WORKTREE,
+			},
+		];
+		const binder = new SessionBinder(registry(adapter(sessions)), tmux());
+		binder.start(projectManager, 0);
+
+		await binder.reconcileAllAsync();
+
+		expect(
+			ctx.store.loadAgents("f1").map((agent) => agent.sessionBinding?.state),
+		).toEqual(["ambiguous", "ambiguous"]);
+	});
 	it("binds a preassigned session that resolves in the async provider store", async () => {
 		const { projectManager, ctx } = setup([feature()]);
 		ctx.store.saveAgents("f1", [agentFixture({ sessionId: "ses_claude" })]);
