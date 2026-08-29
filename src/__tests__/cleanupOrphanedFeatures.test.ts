@@ -57,7 +57,11 @@ describe("cleanupOrphanedFeatures", () => {
 			sessionNameSyncer: { clearFeature: clear },
 		} as unknown as CleanupOrphanedFeaturesDeps);
 
-		expect(outcome).toEqual({ status: "cleaned", count: 1 });
+		expect(outcome).toEqual({
+			status: "cleaned",
+			count: 1,
+			touchedProjectIds: ["p1"],
+		});
 		expect(forget).toHaveBeenCalledWith("f1");
 		expect(clear).toHaveBeenCalledWith("f1");
 	});
@@ -234,7 +238,11 @@ describe("cleanupOrphanedFeatures", () => {
 			sessionNameSyncer: { clearFeature: clear },
 		} as unknown as CleanupOrphanedFeaturesDeps);
 
-		expect(outcome).toEqual({ status: "cleaned", count: 1 });
+		expect(outcome).toEqual({
+			status: "cleaned",
+			count: 1,
+			touchedProjectIds: ["p1"],
+		});
 		expect(forget).toHaveBeenCalledWith("f1");
 		expect(clear).toHaveBeenCalledWith("f1");
 	});

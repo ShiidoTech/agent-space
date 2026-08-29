@@ -25,7 +25,6 @@ import {
 import { runBootstrapCommands } from "./features/bootstrapRunner";
 import { cleanupOrphanedFeatures } from "./features/cleanupOrphanedFeatures";
 import { createFeatureChangeFlusher } from "./features/featureChangeRouting";
-import { verifySessionsStopped } from "./features/featureFinish";
 import { runFeatureFinish } from "./features/featureFinishCommand";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
@@ -52,11 +51,9 @@ import {
 	updateBaseBranch,
 } from "./projects/projectGitOps";
 import { discoverProjectKnowledge } from "./projects/projectKnowledge";
-import type { ProjectContext } from "./projects/projectManager";
 import { ProjectManager } from "./projects/projectManager";
 import { ensureDefaultToolConfigured } from "./startup/defaultToolInitializer";
 import { GlobalStore } from "./storage/globalStore";
-import type { Feature } from "./types";
 import { execAsync, execAsyncSilent } from "./utils/platform";
 import { ContextOnlyIsolation } from "./workspace/agentWorkspaceIsolation";
 
@@ -1545,6 +1542,30 @@ export async function activate(
 		vscode.commands.registerCommand(
 			"agentSpace.cleanupOrphanedFeatures",
 			async () => {
+				// Pre-check orphans to show confirmation modal.
+				const orphans: Array<{
+					ctx: { project: { id: string } };
+					feature: { name: string };
+				}> = [];
+				for (const ctx of projectManager.getAllContexts()) {
+					for (const orphan of ctx.featureManager.getOrphanedFeatures()) {
+						orphans.push({ ctx, feature: orphan });
+					}
+				}
+				if (orphans.length === 0) {
+					void vscode.window.showInformationMessage(
+						"No orphaned features detected.",
+					);
+					return;
+				}
+				const names = orphans.map((o) => o.feature.name).join(", ");
+				const action = await vscode.window.showWarningMessage(
+					`${orphans.length} orphaned feature(s) detected (${names}). Remove metadata?`,
+					{ modal: true },
+					"Clean Up",
+				);
+				if (action !== "Clean Up") return;
+
 				const outcome = await cleanupOrphanedFeatures({
 					projectManager,
 					terminalController,
@@ -1552,18 +1573,16 @@ export async function activate(
 					sessionNameSyncer,
 				});
 				switch (outcome.status) {
-					case "nothing_to_do":
-						void vscode.window.showInformationMessage(
-							"No orphaned features detected.",
-						);
-						break;
 					case "blocked":
 						void vscode.window.showErrorMessage(
 							`Cleanup aborted: ${outcome.reason}. Metadata preserved.`,
 						);
 						break;
 					case "cleaned":
-						await featureStateCoordinator.reconcilePresence();
+						for (const projectId of outcome.touchedProjectIds) {
+							projectManager.notifyChange({ projectId });
+							await featureStateCoordinator.reconcilePresence(projectId);
+						}
 						break;
 				}
 			},

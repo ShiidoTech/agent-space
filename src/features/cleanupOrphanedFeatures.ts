@@ -20,7 +20,7 @@ export interface CleanupOrphanedFeaturesDeps {
 export type CleanupOrphanedFeaturesOutcome =
 	| { status: "nothing_to_do" }
 	| { status: "blocked"; reason: string }
-	| { status: "cleaned"; count: number };
+	| { status: "cleaned"; count: number; touchedProjectIds: string[] };
 
 /**
  * Orchestrate orphaned feature cleanup: kill tracked tmux sessions, verify
@@ -75,5 +75,8 @@ export async function cleanupOrphanedFeatures(
 		ctx.featureManager.forgetFinishedFeature(feature.id);
 	}
 
-	return { status: "cleaned", count: orphans.length };
+	const touchedProjectIds = [
+		...new Set(orphans.map(({ ctx }) => ctx.project.id)),
+	];
+	return { status: "cleaned", count: orphans.length, touchedProjectIds };
 }
