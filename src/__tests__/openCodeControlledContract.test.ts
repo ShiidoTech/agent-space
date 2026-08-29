@@ -369,19 +369,13 @@ describe("OpenCode controlled path — contract tests", () => {
 
 			const shutdownPromise = manager.ensure("/tmp/ws-pending-shutdown");
 			manager.shutdown("/tmp/ws-pending-shutdown");
-			children[0].stdout?.emit(
-				"data",
-				Buffer.from("opencode server listening on http://127.0.0.1:4314\n"),
-			);
+			expect(children[0].kill).toHaveBeenCalledWith("SIGTERM");
 			await expect(shutdownPromise).rejects.toThrow(/cancelled|shutdown/);
 			expect(manager.get("/tmp/ws-pending-shutdown")).toBeUndefined();
 
 			const disposePromise = manager.ensure("/tmp/ws-pending-dispose");
 			manager.dispose();
-			children[1].stdout?.emit(
-				"data",
-				Buffer.from("opencode server listening on http://127.0.0.1:4314\n"),
-			);
+			expect(children[1].kill).toHaveBeenCalledWith("SIGTERM");
 			await expect(disposePromise).rejects.toThrow(/cancelled|disposed/);
 			expect(manager.get("/tmp/ws-pending-dispose")).toBeUndefined();
 		});

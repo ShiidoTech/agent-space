@@ -58,6 +58,8 @@ export class OpenCodeBackendManager {
 	private ensurePromises = new Map<string, EnsurePromise>();
 	/** Invalidates startup completions after shutdown/dispose. */
 	private readonly generations = new Map<string, number>();
+	/** Child-process cancellation hooks for backends not ready yet. */
+	private readonly pendingStarts = new Map<string, () => void>();
 
 	constructor(options: OpenCodeBackendManagerOptions = {}) {
 		this.spawnProcess = options.spawn ?? defaultSpawn;
@@ -181,6 +183,7 @@ export class OpenCodeBackendManager {
 			handle.kill();
 			this.backends.delete(worktreePath);
 		}
+		this.pendingStarts.get(worktreePath)?.();
 		const pending = this.ensurePromises.get(worktreePath);
 		if (pending) {
 			pending.reject(new Error(`Backend shutdown for ${worktreePath}`));
@@ -195,12 +198,15 @@ export class OpenCodeBackendManager {
 		for (const worktreePath of new Set([
 			...this.backends.keys(),
 			...this.ensurePromises.keys(),
+			...this.pendingStarts.keys(),
 		])) {
 			this.generations.set(
 				worktreePath,
 				(this.generations.get(worktreePath) ?? 0) + 1,
 			);
 		}
+		for (const cancel of this.pendingStarts.values()) cancel();
+		this.pendingStarts.clear();
 		for (const handle of this.backends.values()) {
 			handle.kill();
 			handle.sessionProvider.dispose();
@@ -241,6 +247,7 @@ export class OpenCodeBackendManager {
 			);
 
 			let resolved = false;
+			let settled = false;
 			let baseUrl: string | undefined;
 			let port = 0;
 
@@ -262,6 +269,23 @@ export class OpenCodeBackendManager {
 
 			const stdoutLineReader = createInterface({ input: child.stdout });
 			const stderrLineReader = createInterface({ input: child.stderr });
+			const cancelStartup = () => {
+				if (settled) return;
+				settled = true;
+				if (this.pendingStarts.get(worktreePath) === cancelStartup) {
+					this.pendingStarts.delete(worktreePath);
+				}
+				try {
+					child.kill("SIGTERM");
+				} catch {
+					// best-effort
+				}
+				cleanup();
+				reject(
+					new Error(`OpenCode backend startup cancelled for ${worktreePath}`),
+				);
+			};
+			this.pendingStarts.set(worktreePath, cancelStartup);
 
 			// Parse the listen address from stdout.
 			// OpenCode prints: "opencode server listening on http://127.0.0.1:<port>"
@@ -298,6 +322,9 @@ export class OpenCodeBackendManager {
 					// Wait for the health check to pass before resolving.
 					this.waitForHealth(baseUrl, healthCheckTimeoutMs)
 						.then((ok) => {
+							if (settled) return;
+							settled = true;
+							this.pendingStarts.delete(worktreePath);
 							if (ok) {
 								resolve(handle);
 							} else {
@@ -310,6 +337,8 @@ export class OpenCodeBackendManager {
 							}
 						})
 						.catch((err) => {
+							settled = true;
+							this.pendingStarts.delete(worktreePath);
 							handle.kill();
 							reject(err);
 						});
@@ -324,7 +353,9 @@ export class OpenCodeBackendManager {
 			});
 
 			child.once("error", (error) => {
-				if (!resolved) {
+				if (!resolved && !settled) {
+					settled = true;
+					this.pendingStarts.delete(worktreePath);
 					cleanup();
 					reject(
 						new Error(
@@ -335,7 +366,9 @@ export class OpenCodeBackendManager {
 			});
 
 			child.once("exit", (code) => {
-				if (!resolved) {
+				if (!resolved && !settled) {
+					settled = true;
+					this.pendingStarts.delete(worktreePath);
 					cleanup();
 					reject(
 						new Error(
