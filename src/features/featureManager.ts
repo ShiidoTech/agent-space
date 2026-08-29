@@ -623,7 +623,11 @@ export class FeatureManager {
 	 * the cleanup command.
 	 */
 	getOrphanedFeatures(): Feature[] {
-		return this.features.filter((f) => !fs.existsSync(f.worktreePath));
+		return this.features.filter(
+			(f) =>
+				!fs.existsSync(f.worktreePath) &&
+				f.provisioning?.state !== "provisioning",
+		);
 	}
 
 	getFeature(id: string): Feature | undefined {

@@ -1567,6 +1567,8 @@ export async function activate(
 				if (action !== "Clean Up") return;
 				const touchedProjects = new Set<string>();
 				for (const { ctx, feature } of allOrphans) {
+					terminalController.killFeatureTerminals(feature.id);
+					sessionNameSyncer.clearFeature(feature.id);
 					ctx.featureManager.forgetFinishedFeature(feature.id);
 					touchedProjects.add(ctx.project.id);
 				}

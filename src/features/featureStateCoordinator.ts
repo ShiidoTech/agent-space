@@ -181,6 +181,7 @@ export class FeatureStateCoordinator implements Disposable {
 	 * the sole basis of `fs.existsSync`.
 	 */
 	private filesystemMissingWorktrees = new Set<string>();
+	private deepConfirmedMissing = new Set<string>();
 
 	constructor(
 		projectManager?: ProjectManager,
@@ -667,6 +668,7 @@ export class FeatureStateCoordinator implements Disposable {
 				this.featureRuntimeGenerations.delete(snapshot.feature.id);
 				this.featureDeepObservedAt.delete(snapshot.feature.id);
 				this.filesystemMissingWorktrees.delete(snapshot.feature.id);
+				this.deepConfirmedMissing.delete(snapshot.feature.id);
 				this.emit(undefined);
 			}
 			const orphanIds = new Set(
@@ -953,6 +955,14 @@ export class FeatureStateCoordinator implements Disposable {
 		// runtime reading when nothing has been published yet.
 		const runtime = previous?.runtime ?? observed.runtime;
 		const git = preferKnownGit(previous?.git, observed.git);
+		// Track when a deep observation confirms worktree.present = false so
+		// that resolveOrphanGitOverride can preserve it across path
+		// reappearance (shallow lane never overrides a deep-proven false).
+		if (git.worktree.status === "known" && !git.worktree.value.present) {
+			this.deepConfirmedMissing.add(feature.id);
+		} else if (git.worktree.status === "known" && git.worktree.value.present) {
+			this.deepConfirmedMissing.delete(feature.id);
+		}
 		const delivery = observed.delivery
 			? preferKnownDelivery(previous?.delivery, observed.delivery)
 			: previous?.delivery;
@@ -1053,16 +1063,13 @@ export class FeatureStateCoordinator implements Disposable {
 	 *
 	 * - **newly absent**: the path disappeared → track in
 	 *   `filesystemMissingWorktrees`, override `worktree.present = false`.
-	 * - **reappeared**: the path is back → remove from tracking, set
-	 *   `worktree` to `unknown` so the next deep observation revalidates.
-	 *   Never `present: true` on the sole basis of `fs.existsSync`.
+	 * - **reappeared**: the path is back → remove from tracking. If a deep
+	 *   observation previously confirmed `present=false` (tracked in
+	 *   `deepConfirmedMissing`), preserve that authoritative value;
+	 *   otherwise reset to `unknown` so the next deep observation
+	 *   revalidates. Never `present: true` from `fs.existsSync`.
 	 * - **still absent**: keep the `present = false` override.
 	 * - **never absent**: no override (use previous git observations as-is).
-	 *
-	 * A `present: false` set by a real deep Git observation is never cleared
-	 * by this method — the override only applies via `commitRuntime` which
-	 * reads it before `previous?.git`, so a subsequent deep `commitDeep`
-	 * will overwrite it with the authoritative value.
 	 */
 	private resolveOrphanGitOverride(
 		feature: Feature,
@@ -1077,8 +1084,24 @@ export class FeatureStateCoordinator implements Disposable {
 			return this.buildOrphanedGitOverride(feature, previous);
 		}
 		if (!currentlyOrphaned && wasMissing) {
-			// Path reappeared — stop tracking, reset worktree to unknown.
+			// Path reappeared — stop tracking.
 			this.filesystemMissingWorktrees.delete(feature.id);
+			// If a deep observation already confirmed present=false, preserve
+			// that authoritative value — the shallow lane never overrides a
+			// deep-proven false. Otherwise reset to unknown so the next deep
+			// observation revalidates.
+			if (this.deepConfirmedMissing.has(feature.id)) {
+				const prevWorktree = previous?.worktree;
+				if (
+					prevWorktree?.status === "known" &&
+					prevWorktree.value.present === false
+				) {
+					return {
+						...(previous ?? unavailableGit(feature.worktreePath)),
+						worktree: prevWorktree,
+					} as FeatureGitObservations;
+				}
+			}
 			return {
 				...(previous ?? unavailableGit(feature.worktreePath)),
 				worktree: unknown("worktree_missing", undefined, {
