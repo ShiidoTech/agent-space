@@ -24,6 +24,7 @@ import {
 } from "./diagnostics/tmuxSessionDiagnostics";
 import { runBootstrapCommands } from "./features/bootstrapRunner";
 import { createFeatureChangeFlusher } from "./features/featureChangeRouting";
+import { verifySessionsStopped } from "./features/featureFinish";
 import { runFeatureFinish } from "./features/featureFinishCommand";
 import { validateFeatureNameInput } from "./features/featureName";
 import { FeatureSidebarProvider } from "./features/featureSidebarProvider";
@@ -1565,9 +1566,38 @@ export async function activate(
 					"Clean Up",
 				);
 				if (action !== "Clean Up") return;
+				// Collect tracked tmux sessions for all orphans before killing.
+				const trackedSessions = new Set<string>();
+				for (const { ctx, feature } of allOrphans) {
+					for (const agent of ctx.agentManager.getAgents(feature.id)) {
+						const session =
+							agent.tmuxSession ?? tmux.sessionName(feature.id, agent.id);
+						trackedSessions.add(session);
+						trackedSessions.add(tmux.legacySessionName(feature.id, agent.id));
+					}
+					for (const service of ctx.serviceManager.getServices(feature.id)) {
+						trackedSessions.add(service.tmuxSession);
+					}
+				}
+				// Kill terminals for all orphans.
+				for (const { feature } of allOrphans) {
+					terminalController.killFeatureTerminals(feature.id);
+				}
+				// Verify sessions actually stopped before removing metadata.
+				if (trackedSessions.size > 0) {
+					const verification = verifySessionsStopped(
+						trackedSessions,
+						projectManager.observeTmuxSessions(),
+					);
+					if (verification.status === "blocked") {
+						void vscode.window.showErrorMessage(
+							`Cleanup aborted: ${verification.reason}. Metadata preserved.`,
+						);
+						return;
+					}
+				}
 				const touchedProjects = new Set<string>();
 				for (const { ctx, feature } of allOrphans) {
-					terminalController.killFeatureTerminals(feature.id);
 					sessionNameSyncer.clearFeature(feature.id);
 					ctx.featureManager.forgetFinishedFeature(feature.id);
 					touchedProjects.add(ctx.project.id);

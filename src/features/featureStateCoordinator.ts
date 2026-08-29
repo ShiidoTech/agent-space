@@ -955,12 +955,15 @@ export class FeatureStateCoordinator implements Disposable {
 		// runtime reading when nothing has been published yet.
 		const runtime = previous?.runtime ?? observed.runtime;
 		const git = preferKnownGit(previous?.git, observed.git);
-		// Track when a deep observation confirms worktree.present = false so
-		// that resolveOrphanGitOverride can preserve it across path
-		// reappearance (shallow lane never overrides a deep-proven false).
-		if (git.worktree.status === "known" && !git.worktree.value.present) {
+		// Track when a raw deep observation confirms worktree.present = false
+		// so that resolveOrphanGitOverride can preserve it across path
+		// reappearance. Use observed.git.worktree (pre-merge) to avoid
+		// inheriting a shallow present:false through preferKnownGit during a
+		// transient-error deep pass.
+		const rawWorktree = observed.git.worktree;
+		if (rawWorktree.status === "known" && !rawWorktree.value.present) {
 			this.deepConfirmedMissing.add(feature.id);
-		} else if (git.worktree.status === "known" && git.worktree.value.present) {
+		} else if (rawWorktree.status === "known" && rawWorktree.value.present) {
 			this.deepConfirmedMissing.delete(feature.id);
 		}
 		const delivery = observed.delivery
