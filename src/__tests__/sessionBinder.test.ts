@@ -3,7 +3,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
-import type { ProviderSessionAdapter } from "../agents/providers/types";
+import type {
+	CodingAgentProvider,
+	ProviderSessionAdapter,
+} from "../agents/providers/types";
 import { SessionBinder } from "../agents/sessionBinder";
 import type {
 	SessionCorrelationContext,
@@ -77,7 +80,10 @@ function adapter(
 	};
 }
 
-function registry(sessionAdapter?: ProviderSessionAdapter): CodingToolRegistry {
+function registry(
+	sessionAdapter?: ProviderSessionAdapter,
+	controlledProvider?: CodingAgentProvider,
+): CodingToolRegistry {
 	return {
 		resolveAgentTool: (toolId?: string) => ({
 			id: toolId ?? "stub",
@@ -108,6 +114,7 @@ function registry(sessionAdapter?: ProviderSessionAdapter): CodingToolRegistry {
 			sessionAdapter,
 		}),
 		getSessionAdapterForAgent: () => sessionAdapter,
+		getControlledProviderForCwd: async () => controlledProvider,
 	} as unknown as CodingToolRegistry;
 }
 

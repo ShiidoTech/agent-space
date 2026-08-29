@@ -111,7 +111,11 @@ export class AgentAttentionResolver {
 				source: "provider",
 			};
 		}
-		const providerSignal = this.readProviderSignal(tool, agent.sessionId);
+		const providerSignal = this.readProviderSignal(
+			tool,
+			agent.sessionId,
+			agent.worktreePath,
+		);
 		if (providerSignal) {
 			const age = describeAge(providerSignal.observedAt);
 			return {
@@ -226,6 +230,7 @@ export class AgentAttentionResolver {
 		const providerSignal = await this.readProviderSignalAsync(
 			tool,
 			agent.sessionId,
+			agent.worktreePath,
 		);
 		if (providerSignal) {
 			const age = describeAge(providerSignal.observedAt);
@@ -247,12 +252,14 @@ export class AgentAttentionResolver {
 	private async readProviderSignalAsync(
 		tool: import("../../types").CodingTool,
 		sessionId: string | null,
+		agentCwd?: string,
 	): Promise<ProviderAttentionSignal | null> {
 		if (!sessionId) return null;
 		return (
 			(await this.toolRegistry.getStructuredAttentionSignalAsync?.(
 				tool,
 				sessionId,
+				agentCwd,
 			)) ?? null
 		);
 	}
@@ -260,10 +267,12 @@ export class AgentAttentionResolver {
 	private readProviderSignal(
 		tool: import("../../types").CodingTool,
 		sessionId: string | null,
+		cwd?: string,
 	): ProviderAttentionSignal | null {
 		if (!sessionId) return null;
 		return (
-			this.toolRegistry.getStructuredAttentionSignal?.(tool, sessionId) ?? null
+			this.toolRegistry.getStructuredAttentionSignal?.(tool, sessionId, cwd) ??
+			null
 		);
 	}
 }

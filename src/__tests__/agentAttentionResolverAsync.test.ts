@@ -13,6 +13,7 @@ describe("AgentAttentionResolver.resolveAsync (non-blocking contract)", () => {
 		status: "running",
 		hasStarted: true,
 		createdAt: "2026-03-06T00:00:00Z",
+		worktreePath: "/repo/feature-one",
 	};
 
 	const tool = { id: "opencode" } as never;
@@ -81,6 +82,7 @@ describe("AgentAttentionResolver.resolveAsync (non-blocking contract)", () => {
 		expect(getStructuredAttentionSignalAsync).toHaveBeenCalledWith(
 			tool,
 			"session-1",
+			"/repo/feature-one",
 		);
 		// The synchronous tmux twins must never be taken either:
 		expect(tmux.isSessionAlive).not.toHaveBeenCalled();

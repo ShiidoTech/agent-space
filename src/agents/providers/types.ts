@@ -99,13 +99,21 @@ export interface CodingAgentProvider {
 	 * CLI family or from the number/order of files found after launch.
 	 */
 	readonly conversationIdentity: ProviderConversationIdentity;
-	readonly launchArgs?: (sessionId?: string | null) => string[];
-	readonly resumeArgs?: (sessionId?: string | null) => string[];
+	readonly launchArgs?: (sessionId?: string | null, cwd?: string) => string[];
+	readonly resumeArgs?: (sessionId?: string | null, cwd?: string) => string[];
 	getAttentionSignal?(sessionId: string): ProviderAttentionSignal | undefined;
 	getAttentionSignalAsync?(
 		sessionId: string,
 	): Promise<ProviderAttentionSignal | undefined>;
 	readonly sessionAdapter?: ProviderSessionAdapter;
+	/**
+	 * Optional hook to get a provider instance scoped to a specific worktree
+	 * for controlled backends (e.g., OpenCode). If provided, this is used by
+	 * SessionBinder.acquireConversation instead of the default sessionAdapter.
+	 */
+	readonly getControlledProviderForCwd?: (
+		cwd: string,
+	) => Promise<CodingAgentProvider | undefined>;
 }
 
 export const NO_ATTENTION_CAPABILITIES: ProviderCapabilities["attention"] = {

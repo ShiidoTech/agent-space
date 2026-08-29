@@ -213,6 +213,7 @@ export class TerminalController implements vscode.Disposable {
 					this.toolRegistry.buildStrictResumeLaunchCommand(
 						tool,
 						agent.sessionId,
+						cwd,
 					) ?? this.tryAutoAttachAndResume(feature, agent, tool);
 				if (!resumeCommand) {
 					const message = this.buildResumeBlockedMessage(agent.name, tool.name);
@@ -225,6 +226,7 @@ export class TerminalController implements vscode.Disposable {
 				baseCommand = this.toolRegistry.buildLaunchCommand(
 					tool,
 					agent.sessionId,
+					cwd,
 				);
 			}
 			// Ensure Hermes project skills in this worktree are trusted before
@@ -498,6 +500,7 @@ export class TerminalController implements vscode.Disposable {
 					this.toolRegistry.buildStrictResumeLaunchCommand(
 						tool,
 						agent.sessionId,
+						cwd,
 					) ?? this.tryAutoAttachAndResume(feature, agent, tool);
 				if (!resumeCommand) {
 					const message = this.buildResumeBlockedMessage(agent.name, tool.name);
@@ -510,6 +513,7 @@ export class TerminalController implements vscode.Disposable {
 				baseCommand = this.toolRegistry.buildLaunchCommand(
 					tool,
 					agent.sessionId,
+					cwd,
 				);
 			}
 			// Ensure Hermes project skills in this worktree are trusted before
@@ -919,9 +923,11 @@ export class TerminalController implements vscode.Disposable {
 		) {
 			return undefined;
 		}
+		const cwd = agent.worktreePath ?? feature.worktreePath;
 		return this.toolRegistry.buildStrictResumeLaunchCommand(
 			tool,
 			candidate.sessionId,
+			cwd,
 		);
 	}
 

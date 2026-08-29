@@ -198,7 +198,8 @@ describe("runFeatureFinish command flow", () => {
 	});
 
 	it("refreshes stale unknown integration evidence before assessing finish", async () => {
-		const { deps } = buildDeps();
+		const shutdownBackend = vi.fn();
+		const { deps } = buildDeps({ shutdownBackend });
 		const assess = vi.fn(() => ({
 			checks: [],
 			reasons: [],
@@ -229,7 +230,9 @@ describe("runFeatureFinish command flow", () => {
 		const { ui } = buildUi({ confirmed: "Finish Feature" });
 		const ctx = {
 			project: { repoPath: "/repo" },
-			agentManager: { getAgents: () => [] },
+			agentManager: {
+				getAgents: () => [{ worktreePath: "/repo/.worktrees/f1-agent" }],
+			},
 			serviceManager: { getServices: () => [] },
 			featureManager: {
 				removeFeatureWorktreeForFinish: vi.fn(() => ({
@@ -245,6 +248,8 @@ describe("runFeatureFinish command flow", () => {
 		expect(outcome.status).toBe("finished");
 		expect(deps.featureStateCoordinator.reconcile).toHaveBeenCalledTimes(1);
 		expect(assess).toHaveBeenCalledTimes(2);
+		expect(shutdownBackend).toHaveBeenCalledWith(feature().worktreePath);
+		expect(shutdownBackend).toHaveBeenCalledWith("/repo/.worktrees/f1-agent");
 	});
 
 	it("offers explicit residue removal without forgetting the feature", async () => {

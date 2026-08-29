@@ -216,6 +216,47 @@ describe("OpenCodeSessionProvider hasSession", () => {
 	});
 });
 
+describe("OpenCode controlled path", () => {
+	it("never invokes the SQL CLI when direct SQLite is unavailable", async () => {
+		const provider = new OpenCodeSessionProvider({
+			serverUrl: "http://127.0.0.1:1",
+			dbPath: path.join(tmpDir, "missing.db"),
+			sqliteOverride: {
+				DatabaseSync: class {
+					constructor() {
+						throw new Error("SQLite unavailable");
+					}
+				} as never,
+			},
+		});
+
+		provider.scanSessions();
+		provider.readName("ses_missing");
+		provider.readAttention("ses_missing");
+		provider.hasSession("ses_missing");
+		await provider.async.scanSessions();
+		await provider.async.readName("ses_missing");
+		await provider.async.hasSession("ses_missing");
+		await provider.readAttentionAsync("ses_missing");
+
+		expect(mockExecSync).not.toHaveBeenCalledWith(
+			"opencode",
+			expect.arrayContaining(["db"]),
+			expect.anything(),
+		);
+		expect(mockExecFileSync).not.toHaveBeenCalledWith(
+			"opencode",
+			expect.arrayContaining(["db"]),
+			expect.anything(),
+		);
+		expect(mockExecFile).not.toHaveBeenCalledWith(
+			"opencode",
+			expect.arrayContaining(["db"]),
+			expect.anything(),
+		);
+	});
+});
+
 describe("OpenCodeSessionProvider readAttention (regression)", () => {
 	const cases: Array<[string, SeedOptions, string, string]> = [
 		[

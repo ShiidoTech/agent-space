@@ -20,11 +20,14 @@ import {
 } from "./sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
 import { HermesSessionProvider } from "./sessionProviders/hermesSessionProvider";
+import { OpenCodeBackendManager } from "./sessionProviders/openCodeBackend";
 import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
 
 const claudeSessionAdapter = new ClaudeSessionProvider();
 const codexSessionAdapter = new CodexSessionProvider();
 const openCodeSessionAdapter = new OpenCodeSessionProvider();
+/** Shared backend manager — one `opencode serve` per worktree. */
+export const openCodeBackendManager = new OpenCodeBackendManager();
 
 /**
  * Per-home cache for Hermes session adapters. Each Hermes home directory
@@ -178,6 +181,34 @@ const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
 		// a discovery hint.
 		launchArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 		resumeArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
+	},
+	opencode: {
+		// PR5: controlled backend — `opencode attach` connects to the running
+		// server and opens the exact session. Fail-closed: no serverUrl = no launch.
+		launchArgs: (sessionId, cwd) => {
+			if (!cwd || !sessionId) return [];
+			const handle = openCodeBackendManager.get(cwd);
+			const serverUrl = handle?.baseUrl;
+			if (serverUrl) {
+				const args = ["attach", serverUrl, "--session", sessionId];
+				args.push("--dir", cwd);
+				return args;
+			}
+			// Fail-closed: controlled path only. No standalone fallback.
+			return [];
+		},
+		resumeArgs: (sessionId, cwd) => {
+			if (!cwd || !sessionId) return [];
+			const handle = openCodeBackendManager.get(cwd);
+			const serverUrl = handle?.baseUrl;
+			if (serverUrl) {
+				const args = ["attach", serverUrl, "--session", sessionId];
+				args.push("--dir", cwd);
+				return args;
+			}
+			// Fail-closed: controlled path only. No standalone fallback.
+			return [];
+		},
 	},
 };
 
@@ -581,6 +612,38 @@ export class CodingToolRegistry {
 	}
 
 	/**
+	 * Get a provider instance scoped to a specific worktree for controlled
+	 * backends (e.g., OpenCode). Ensures the backend is running and returns
+	 * a provider with the correct serverUrl. For providers without controlled
+	 * backends, returns the default provider.
+	 */
+	async getControlledProviderForCwd(
+		toolId: string,
+		cwd: string,
+	): Promise<CodingAgentProvider | undefined> {
+		const tool = this.resolveAgentTool(toolId);
+		const provider = this.getProvider(tool);
+		// Only OpenCode has a controlled backend currently.
+		if (toolId === "opencode" && provider.sessionAdapter?.acquireConversation) {
+			await openCodeBackendManager.ensure(cwd, "opencode", 10_000, {
+				serverPassword: "",
+			});
+			// Use the scoped provider from the backend manager (cached per worktree).
+			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
+			if (!scopedProvider) {
+				throw new Error(
+					`OpenCode backend started but no scoped provider for ${cwd}`,
+				);
+			}
+			return {
+				...provider,
+				sessionAdapter: scopedProvider,
+			};
+		}
+		return provider;
+	}
+
+	/**
 	 * Everything a diagnostic needs to explain how a persisted `toolId` is being
 	 * resolved right now: whether it is actually declared, which executable it
 	 * maps to, and which session store its provider will read. Resolved through
@@ -660,17 +723,37 @@ export class CodingToolRegistry {
 		Promise<ProviderAttentionSignal | undefined>
 	>();
 
-	getStructuredAttentionSignal(tool: CodingTool, sessionId: string) {
+	getStructuredAttentionSignal(
+		tool: CodingTool,
+		sessionId: string,
+		cwd?: string,
+	) {
 		const provider = this.getProvider(tool);
-		const signal = this.readAttentionSignalCached(provider, sessionId);
+		// For OpenCode, use the scoped provider from the backend manager
+		// which has the SSE event cache for the controlled backend.
+		let attentionProvider = provider;
+		if (tool.id === "opencode" && cwd) {
+			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
+			if (scopedProvider) {
+				attentionProvider = {
+					...provider,
+					sessionAdapter: scopedProvider,
+					getAttentionSignal: (sessionId) =>
+						scopedProvider.readAttention(sessionId) ?? undefined,
+					getAttentionSignalAsync: async (sessionId) =>
+						(await scopedProvider.readAttentionAsync(sessionId)) ?? undefined,
+				};
+			}
+		}
+		const signal = this.readAttentionSignalCached(attentionProvider, sessionId);
 		if (!signal) return undefined;
 		const statusCapability = {
 			working: "attention.working",
 			waiting_for_user: "attention.waitingForUser",
 			idle: "attention.idle",
 			failed: "attention.failed",
-		}[signal.status] as keyof typeof provider.capabilities.attention;
-		return provider.capabilities.attention[statusCapability]
+		}[signal.status] as keyof typeof attentionProvider.capabilities.attention;
+		return attentionProvider.capabilities.attention[statusCapability]
 			? signal
 			: undefined;
 	}
@@ -678,17 +761,34 @@ export class CodingToolRegistry {
 	async getStructuredAttentionSignalAsync(
 		tool: CodingTool,
 		sessionId: string,
+		cwd?: string,
 	): Promise<ProviderAttentionSignal | undefined> {
 		const provider = this.getProvider(tool);
-		const key = `${provider.id}:${sessionId}`;
+		// For OpenCode, use the scoped provider from the backend manager
+		// which has the SSE event cache for the controlled backend.
+		let attentionProvider = provider;
+		if (tool.id === "opencode" && cwd) {
+			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
+			if (scopedProvider) {
+				attentionProvider = {
+					...provider,
+					sessionAdapter: scopedProvider,
+					getAttentionSignal: (sessionId) =>
+						scopedProvider.readAttention(sessionId) ?? undefined,
+					getAttentionSignalAsync: async (sessionId) =>
+						(await scopedProvider.readAttentionAsync(sessionId)) ?? undefined,
+				};
+			}
+		}
+		const key = `${attentionProvider.id}:${sessionId}`;
 		const cached = this.attentionCache.get(key);
 		if (cached && cached.expiresAt > Date.now())
-			return this.capableAttention(provider, cached.signal);
+			return this.capableAttention(attentionProvider, cached.signal);
 		let pending = this.attentionInFlight.get(key);
 		if (!pending) {
 			pending = (async () => {
-				const signal = provider.getAttentionSignalAsync
-					? await provider.getAttentionSignalAsync(sessionId)
+				const signal = attentionProvider.getAttentionSignalAsync
+					? await attentionProvider.getAttentionSignalAsync(sessionId)
 					: undefined;
 				this.attentionCache.set(key, {
 					signal,
@@ -698,7 +798,7 @@ export class CodingToolRegistry {
 			})().finally(() => this.attentionInFlight.delete(key));
 			this.attentionInFlight.set(key, pending);
 		}
-		return this.capableAttention(provider, await pending);
+		return this.capableAttention(attentionProvider, await pending);
 	}
 
 	private capableAttention(
@@ -777,13 +877,17 @@ export class CodingToolRegistry {
 	 * the exact same session, launched through the exact same executable and
 	 * profile.
 	 */
-	buildLaunchCommand(tool: CodingTool, sessionId?: string | null): string {
+	buildLaunchCommand(
+		tool: CodingTool,
+		sessionId?: string | null,
+		cwd?: string,
+	): string {
 		const parts = [tool.command];
 		if (tool.args && tool.args.length > 0) {
 			parts.push(...tool.args);
 		}
 		const provider = this.getProvider(tool);
-		if (provider.launchArgs) parts.push(...provider.launchArgs(sessionId));
+		if (provider.launchArgs) parts.push(...provider.launchArgs(sessionId, cwd));
 		return `${envPrefix(tool)}${parts.join(" ")}`;
 	}
 
@@ -835,6 +939,7 @@ export class CodingToolRegistry {
 	buildStrictResumeLaunchCommand(
 		tool: CodingTool,
 		sessionId?: string | null,
+		cwd?: string,
 	): string | undefined {
 		if (!sessionId) return undefined;
 		if (tool.resumeCommand) {
@@ -844,7 +949,7 @@ export class CodingToolRegistry {
 		}
 		const provider = this.getProvider(tool);
 		if (!provider.capabilities.resume) return undefined;
-		const args = provider.resumeArgs?.(sessionId);
+		const args = provider.resumeArgs?.(sessionId, cwd);
 		if (!args || args.length === 0) return undefined;
 		return `${envPrefix(tool)}${tool.command} ${args.join(" ")}`;
 	}

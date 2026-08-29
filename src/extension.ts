@@ -7,7 +7,10 @@ import { collectWatchedAgents } from "./agents/attention/agentAttentionCollector
 import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor";
 import { presentOperationalNotification } from "./agents/attention/agentOperationalNotificationPolicy";
 import type { AgentOperationalTransition } from "./agents/attention/agentOperationalTransitions";
-import { CodingToolRegistry } from "./agents/codingToolRegistry";
+import {
+	CodingToolRegistry,
+	openCodeBackendManager,
+} from "./agents/codingToolRegistry";
 import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
@@ -144,6 +147,9 @@ export async function activate(
 		.get<string>("worktreeBasePath", ".worktrees");
 
 	const toolRegistry = new CodingToolRegistry();
+	context.subscriptions.push({
+		dispose: () => openCodeBackendManager.dispose(),
+	});
 
 	const projectManager = new ProjectManager(
 		globalStore,
@@ -1503,6 +1509,8 @@ export async function activate(
 								{ forceNewWindow: true },
 							);
 						},
+						shutdownBackend: (worktreePath) =>
+							openCodeBackendManager.shutdown(worktreePath),
 						removeWorktreeResidue: async (worktreePath) => {
 							const result =
 								await ctx.featureManager.removeWorktreeResidue(worktreePath);
@@ -2353,7 +2361,9 @@ export async function activate(
 	);
 }
 
-export function deactivate(): void {}
+export function deactivate(): void {
+	openCodeBackendManager.dispose();
+}
 
 async function isGitRepoAsync(cwd: string): Promise<boolean> {
 	return execAsyncSilent("git rev-parse --is-inside-work-tree", { cwd });

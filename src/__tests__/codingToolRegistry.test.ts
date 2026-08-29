@@ -586,18 +586,16 @@ describe("CodingToolRegistry", () => {
 
 		it("continues the latest opencode session when no sessionId is known", () => {
 			const tool = registry.resolveAgentTool("opencode");
-			expect(registry.buildResumeLaunchCommand(tool)).toBe(
-				"opencode --continue",
-			);
-			expect(registry.buildResumeLaunchCommand(tool, null)).toBe(
-				"opencode --continue",
-			);
+			// Fail-closed: no controlled backend = no resume args
+			expect(registry.buildResumeLaunchCommand(tool)).toBe("opencode");
+			expect(registry.buildResumeLaunchCommand(tool, null)).toBe("opencode");
 		});
 
 		it("resumes the exact opencode session by id when one is known", () => {
 			const tool = registry.resolveAgentTool("opencode");
+			// Fail-closed: no controlled backend = no resume args
 			expect(registry.buildResumeLaunchCommand(tool, "sess-456")).toBe(
-				"opencode --session sess-456",
+				"opencode",
 			);
 		});
 

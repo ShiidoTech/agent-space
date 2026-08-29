@@ -401,6 +401,7 @@ describe("TerminalController", () => {
 		expect(buildLaunchCommand).toHaveBeenCalledWith(
 			expect.objectContaining({ id: "claude" }),
 			"session-1",
+			"/repo/feature-one",
 		);
 		expect(buildResumeLaunchCommand).not.toHaveBeenCalled();
 		expect(markAgentStarted).toHaveBeenCalledWith("a1", "f1");
@@ -440,6 +441,7 @@ describe("TerminalController", () => {
 		expect(buildStrictResumeLaunchCommand).toHaveBeenCalledWith(
 			expect.objectContaining({ id: "claude" }),
 			"session-1",
+			"/repo/feature-one",
 		);
 		expect(buildLaunchCommand).not.toHaveBeenCalled();
 		expect(terminal).toBe(terminalInstance);
@@ -589,6 +591,7 @@ describe("TerminalController", () => {
 		expect(buildStrictResumeLaunchCommand).toHaveBeenCalledWith(
 			expect.objectContaining({ id: "claude" }),
 			"session-2",
+			"/repo/feature-one",
 		);
 		expect(terminal).toBe(terminalInstance);
 		expect(showErrorMessageMock).not.toHaveBeenCalled();

@@ -5,6 +5,7 @@ import type {
 import type { Agent, CodingTool, Feature } from "../types";
 import { execAsync } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
+import { openCodeBackendManager } from "./codingToolRegistry";
 import {
 	RuntimeOwnershipGuard,
 	runtimeOwnershipKey,
@@ -162,9 +163,30 @@ async function restoreAgentRuntimeUnlocked(
 		return persistBlocked(ctx, agent, reason, outcome);
 	}
 
+	const cwd = agent.worktreePath ?? feature.worktreePath;
+
+	// For OpenCode controlled backend, ensure the backend is running so
+	// buildStrictResumeLaunchCommand can construct the correct attach command.
+	if (tool.id === "opencode") {
+		try {
+			await openCodeBackendManager.ensure(cwd);
+		} catch (error) {
+			console.warn(
+				`[RuntimeRestorer] OpenCode backend ensure failed for ${cwd}: ${error}`,
+			);
+			return persistBlocked(
+				ctx,
+				agent,
+				"OpenCode backend could not be started; agent runtime not recreated",
+				outcome,
+			);
+		}
+	}
+
 	const resumeCommand = deps.toolRegistry.buildStrictResumeLaunchCommand(
 		tool,
 		agent.sessionId,
+		cwd,
 	);
 	if (!resumeCommand) {
 		const reason =
@@ -172,6 +194,7 @@ async function restoreAgentRuntimeUnlocked(
 		return persistBlocked(ctx, agent, reason, outcome);
 	}
 
+	// Hermes ownership guard: prevent duplicate live runtimes for the same session.
 	const ownership =
 		tool.family === "hermes"
 			? await new RuntimeOwnershipGuard(
@@ -188,7 +211,6 @@ async function restoreAgentRuntimeUnlocked(
 		return persistBlocked(ctx, agent, ownership.reason as string, outcome);
 	}
 
-	const cwd = agent.worktreePath ?? feature.worktreePath;
 	try {
 		await execAsync(deps.tmux.createCommand(sessionName, resumeCommand), {
 			cwd,

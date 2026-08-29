@@ -1,3 +1,8 @@
+import type { ProviderAttentionSignal } from "../providers/types";
+import {
+	OpenCodeHttpClient,
+	type OpenCodeServerEvent,
+} from "./openCodeHttpClient";
 import {
 	openCodeCliFallback,
 	resolveOpenCodeDbPath,
@@ -5,6 +10,9 @@ import {
 	SqliteReadOnlyDb,
 } from "./sqliteRead";
 import type {
+	AsyncSessionObservationAdapter,
+	ProviderConversationReceipt,
+	SessionCorrelationContext,
 	SessionInfo,
 	SessionProvider,
 	SessionRenameAdapter,
@@ -20,6 +28,14 @@ export interface OpenCodeSessionProviderOptions {
 	dbPath?: string;
 	/** Injected read-only DB (test seam). Skip to use the real `node:sqlite`. */
 	sqliteOverride?: SqliteModule | null;
+	/**
+	 * Base URL of a controlled OpenCode server for this worktree.
+	 * When set, acquireConversation / resumeConversation use the HTTP API
+	 * instead of SQLite candidate scanning.
+	 */
+	serverUrl?: string;
+	/** Server password for authenticated endpoints. */
+	serverPassword?: string;
 }
 
 /**
@@ -56,22 +72,46 @@ export class OpenCodeSessionProvider
 {
 	readonly toolId = "opencode";
 	private readonly sqlite: SqliteReadOnlyDb;
+	private readonly httpClient?: OpenCodeHttpClient;
+	/** Base URL of the controlled OpenCode server, when available. */
+	readonly serverUrl?: string;
+	/** Per-session SSE event listeners, keyed by sessionId. */
+	private readonly eventUnsubscribers = new Map<string, () => void>();
+	/** Latest attention signal per session, driven by SSE events. */
+	private readonly sseAttention = new Map<string, ProviderAttentionSignal>();
 
 	constructor(options: OpenCodeSessionProviderOptions = {}) {
-		const dbPath = options.dbPath ?? resolveOpenCodeDbPath();
+		const controlled = Boolean(options.serverUrl);
+		const dbPath =
+			options.dbPath ?? (controlled ? undefined : resolveOpenCodeDbPath());
 		this.sqlite = new SqliteReadOnlyDb(
 			dbPath,
-			openCodeCliFallback(),
+			controlled ? undefined : openCodeCliFallback(),
 			options.sqliteOverride,
 		);
+		this.serverUrl = options.serverUrl;
+		if (options.serverUrl) {
+			this.httpClient = new OpenCodeHttpClient(
+				options.serverUrl,
+				options.serverPassword,
+			);
+		}
 	}
 
-	readonly async = {
+	readonly async: AsyncSessionObservationAdapter & {
+		scanSessions: () => Promise<SessionInfo[]>;
+		readName: (sessionId: string) => Promise<string | null>;
+		hasSession: (sessionId: string) => Promise<boolean>;
+		// NOTE: NO correlateOwnedSession — fail-closed on controlled path.
+		// The only valid ownership proof is the receipt from acquireConversation().
+	} = {
 		scanSessions: async (): Promise<SessionInfo[]> => this.scanSessionsAsync(),
 		readName: async (sessionId: string): Promise<string | null> =>
 			this.readNameAsync(sessionId),
 		hasSession: async (sessionId: string): Promise<boolean> =>
 			this.hasSessionAsync(sessionId),
+		// No correlateOwnedSession — provider_assigned ownership comes only
+		// from the exact receipt returned by acquireConversation().
 	};
 
 	scanSessions(): SessionInfo[] {
@@ -92,6 +132,19 @@ export class OpenCodeSessionProvider
 	}
 
 	private async scanSessionsAsync(): Promise<SessionInfo[]> {
+		if (this.httpClient) {
+			try {
+				const sessions = await this.httpClient.listSessions();
+				return sessions.map((session) => ({
+					sessionId: session.id,
+					prompt: session.title ?? "",
+					created: epochMsToIso(session.timeCreated),
+					projectPath: session.directory,
+				}));
+			} catch {
+				return [];
+			}
+		}
 		const rows = await this.sqlite.queryAsync(
 			"SELECT id, title, directory, time_created FROM session ORDER BY time_created DESC LIMIT 200",
 		);
@@ -117,6 +170,16 @@ export class OpenCodeSessionProvider
 
 	private async readNameAsync(sessionId: string): Promise<string | null> {
 		if (!isSafeSessionId(sessionId)) return null;
+		if (this.httpClient) {
+			try {
+				const session = (await this.httpClient.listSessions()).find(
+					(candidate) => candidate.id === sessionId,
+				);
+				if (session?.title?.trim()) return session.title.trim();
+			} catch {
+				return null;
+			}
+		}
 		const title = await this.readTitleAsync(sessionId);
 		if (title) return title;
 		return this.readUserPromptAsync(sessionId);
@@ -166,11 +229,20 @@ export class OpenCodeSessionProvider
 
 	private async hasSessionAsync(sessionId: string): Promise<boolean> {
 		if (!isSafeSessionId(sessionId)) return false;
+		// Check the HTTP server first when available.
+		if (this.httpClient) {
+			try {
+				return await this.httpClient.hasSession(sessionId);
+			} catch {
+				// Fall through to SQLite.
+			}
+		}
 		return (
 			(
-				await this.sqlite.queryAsync("SELECT id FROM session WHERE id = ?", [
-					sessionId,
-				])
+				await this.sqlite.queryAsyncDirect(
+					"SELECT id FROM session WHERE id = ?",
+					[sessionId],
+				)
 			).length > 0
 		);
 	}
@@ -180,6 +252,70 @@ export class OpenCodeSessionProvider
 		knownSessionIds: ReadonlySet<string>,
 	): SessionInfo[] {
 		return sessionsForDirectory(cwd, knownSessionIds);
+	}
+
+	/**
+	 * Create a new session via the controlled OpenCode server.
+	 * This is the authoritative source of session identity — the id returned
+	 * here is persisted immediately and never inferred later.
+	 */
+	async acquireConversation(
+		_context: SessionCorrelationContext,
+	): Promise<ProviderConversationReceipt | undefined> {
+		if (!this.httpClient) return undefined;
+		try {
+			const { sessionId, proof } = await this.httpClient.createSession();
+			if (!sessionId) return undefined;
+			// Start consuming SSE events for this session.
+			this.startSseEventStream(sessionId);
+			return { sessionId, proof };
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * Reconnect to an existing session on the controlled OpenCode server.
+	 * Returns true if the session exists on the server.
+	 */
+	async resumeConversation(sessionId: string): Promise<boolean> {
+		if (!this.httpClient) return false;
+		try {
+			const exists = await this.httpClient.hasSession(sessionId);
+			if (exists) {
+				this.startSseEventStream(sessionId);
+			}
+			return exists;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Start consuming SSE events for a specific session. Events are mapped
+	 * to `ProviderAttentionSignal` and cached in `sseAttention`.
+	 */
+	private startSseEventStream(sessionId: string): void {
+		if (this.eventUnsubscribers.has(sessionId)) return;
+		if (!this.httpClient) return;
+		let unsubscribe = () => {};
+		unsubscribe = this.httpClient.onSessionEvents(
+			sessionId,
+			(event) => this.handleSseEvent(sessionId, event),
+			() => {
+				if (this.eventUnsubscribers.get(sessionId) === unsubscribe) {
+					this.eventUnsubscribers.delete(sessionId);
+				}
+			},
+		);
+		this.eventUnsubscribers.set(sessionId, unsubscribe);
+	}
+
+	private handleSseEvent(sessionId: string, event: OpenCodeServerEvent): void {
+		const signal = mapSseEventToAttentionSignal(event);
+		if (signal) {
+			this.sseAttention.set(sessionId, signal);
+		}
 	}
 
 	/**
@@ -193,7 +329,10 @@ export class OpenCodeSessionProvider
 	 */
 	readAttention(sessionId: string): OpenCodeAttentionSignal | null {
 		if (!isSafeSessionId(sessionId)) return null;
-		const rows = this.sqlite.querySync(GATE_SQL, [
+		// SSE-derived signal takes precedence over SQLite.
+		const sseSignal = this.sseAttention.get(sessionId);
+		if (sseSignal) return sseSignal;
+		const rows = this.sqlite.querySyncDirect(GATE_SQL, [
 			sessionId,
 			sessionId,
 			sessionId,
@@ -206,7 +345,10 @@ export class OpenCodeSessionProvider
 		sessionId: string,
 	): Promise<OpenCodeAttentionSignal | null> {
 		if (!isSafeSessionId(sessionId)) return null;
-		const rows = await this.sqlite.queryAsync(GATE_SQL, [
+		// SSE-derived signal takes precedence over SQLite.
+		const sseSignal = this.sseAttention.get(sessionId);
+		if (sseSignal) return sseSignal;
+		const rows = await this.sqlite.queryAsyncDirect(GATE_SQL, [
 			sessionId,
 			sessionId,
 			sessionId,
@@ -215,9 +357,102 @@ export class OpenCodeSessionProvider
 		return parseAttentionRow(rows[0] as Record<string, unknown>);
 	}
 
+	/**
+	 * Clear all state for a specific session (SSE events, caches).
+	 * Called when a session is unbound or the backend shuts down.
+	 */
+	clearSessionState(sessionId: string): void {
+		const unsub = this.eventUnsubscribers.get(sessionId);
+		if (unsub) {
+			unsub();
+			this.eventUnsubscribers.delete(sessionId);
+		}
+		this.sseAttention.delete(sessionId);
+	}
+
 	dispose(): void {
+		for (const unsub of this.eventUnsubscribers.values()) {
+			unsub();
+		}
+		this.eventUnsubscribers.clear();
+		this.sseAttention.clear();
 		this.sqlite.dispose();
 	}
+}
+
+/**
+ * Map an OpenCode server SSE event to a `ProviderAttentionSignal`.
+ *
+ * The exact event shapes depend on the OpenCode server version. The mapping
+ * is intentionally conservative: only clearly identified events produce a
+ * signal, everything else is silently ignored.
+ *
+ * Real OpenCode server SSE envelope (from `GET /event`):
+ * - `{ type: "session.status", properties: { sessionID, status: { type: "busy" | "idle" | "retry" } } }`
+ * - `{ type: "session.idle", properties: { sessionID } }`
+ * - `{ type: "permission.asked", properties: { sessionID } }`
+ * - `{ type: "permission.replied", properties: { sessionID } }`
+ * - `{ type: "session.error", properties: { sessionID } }`
+ */
+function mapSseEventToAttentionSignal(
+	event: OpenCodeServerEvent,
+): ProviderAttentionSignal | undefined {
+	const eventType = event.type;
+	const observedAt = event.timestamp;
+	const props = event.properties ?? {};
+
+	if (eventType === "session.status") {
+		const statusType = props.status?.type;
+		if (statusType === "busy" || statusType === "retry") {
+			return {
+				status: "working",
+				evidence: `opencode.sse.${eventType}.${statusType}`,
+				observedAt,
+			};
+		}
+		if (statusType === "idle") {
+			return {
+				status: "idle",
+				evidence: `opencode.sse.${eventType}.idle`,
+				observedAt,
+			};
+		}
+		return undefined;
+	}
+
+	if (eventType === "session.idle") {
+		return {
+			status: "idle",
+			evidence: `opencode.sse.${eventType}`,
+			observedAt,
+		};
+	}
+
+	if (eventType === "permission.asked") {
+		return {
+			status: "waiting_for_user",
+			evidence: `opencode.sse.${eventType}`,
+			observedAt,
+		};
+	}
+
+	if (eventType === "permission.replied") {
+		return {
+			status: "working",
+			evidence: `opencode.sse.${eventType}`,
+			observedAt,
+		};
+	}
+
+	if (eventType === "session.error") {
+		return {
+			status: "failed",
+			evidence: `opencode.sse.${eventType}`,
+			observedAt,
+		};
+	}
+
+	return undefined;
 }
 
 function parseAttentionRow(

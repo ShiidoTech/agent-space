@@ -183,6 +183,33 @@ export class SqliteReadOnlyDb {
 		return [];
 	}
 
+	/** Read without invoking a compatibility subprocess. */
+	querySyncDirect(sql: string, params: unknown[] = []): unknown[] {
+		const db = this.open();
+		if (!db) return [];
+		try {
+			return db.prepare(sql).all(...params);
+		} catch {
+			reportFallback("query_failed");
+			return [];
+		}
+	}
+
+	/** Async read without invoking a compatibility subprocess. */
+	async queryAsyncDirect(
+		sql: string,
+		params: unknown[] = [],
+	): Promise<unknown[]> {
+		const db = this.open();
+		if (!db) return [];
+		try {
+			return db.prepare(sql).all(...params);
+		} catch {
+			reportFallback("query_failed");
+			return [];
+		}
+	}
+
 	async queryAsync(sql: string, params: unknown[] = []): Promise<unknown[]> {
 		const db = this.open();
 		let sqliteFailed = !db;
