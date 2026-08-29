@@ -332,6 +332,28 @@ describe("OpenCode controlled path — contract tests", () => {
 			expect(spawnMock).toHaveBeenCalledTimes(1);
 		});
 
+		it("shutdown stops one worktree and permits a clean subsequent start", async () => {
+			const children: Array<ReturnType<typeof fakeChild>> = [];
+			const spawnMock = vi.fn(() => {
+				const child = fakeChild("http://127.0.0.1:4313");
+				children.push(child);
+				return child;
+			});
+			manager = new OpenCodeBackendManager({
+				spawn: spawnMock as unknown as OpenCodeBackendManagerOptions["spawn"],
+			});
+			fetchMock.mockResolvedValue({ ok: true });
+
+			const first = await manager.ensure("/tmp/ws-shutdown");
+			manager.shutdown("/tmp/ws-shutdown");
+			expect(manager.get("/tmp/ws-shutdown")).toBeUndefined();
+			expect(children[0].kill).toHaveBeenCalledWith("SIGTERM");
+
+			const second = await manager.ensure("/tmp/ws-shutdown");
+			expect(second).not.toBe(first);
+			expect(spawnMock).toHaveBeenCalledTimes(2);
+		});
+
 		it("get() returns undefined when no backend exists", () => {
 			expect(manager.get("/tmp/ws")).toBeUndefined();
 		});

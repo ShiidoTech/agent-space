@@ -147,6 +147,20 @@ export class OpenCodeBackendManager {
 		return this.backends.get(worktreePath)?.sessionProvider;
 	}
 
+	/** Stop and forget the backend serving one worktree. */
+	shutdown(worktreePath: string): void {
+		const handle = this.backends.get(worktreePath);
+		if (handle) {
+			handle.kill();
+			this.backends.delete(worktreePath);
+		}
+		const pending = this.ensurePromises.get(worktreePath);
+		if (pending) {
+			pending.reject(new Error(`Backend shutdown for ${worktreePath}`));
+			this.ensurePromises.delete(worktreePath);
+		}
+	}
+
 	/**
 	 * Kill all managed backends and clear the map.
 	 */

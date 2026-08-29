@@ -59,6 +59,8 @@ export interface FeatureFinishDeps {
 		evidence: { readonly integration: FeatureSnapshot["integration"] },
 	) => FeatureFinishAssessment | Promise<FeatureFinishAssessment>;
 	readonly openWorktree?: (worktreePath: string) => void;
+	/** Stop a controlled provider backend after the feature is finished. */
+	readonly shutdownBackend?: (worktreePath: string) => void;
 	readonly removeWorktreeResidue?: (worktreePath: string) =>
 		| {
 				readonly removed: boolean;
@@ -334,6 +336,7 @@ export async function runFeatureFinish(
 				}
 
 				progress.report({ message: "Finalizing…" });
+				deps.shutdownBackend?.(feature.worktreePath);
 				ctx.featureManager.forgetFinishedFeature(feature.id);
 				deps.sessionNameSyncer.clearFeature(feature.id);
 				// Invalidate the coordinator so the finished Feature leaves every
