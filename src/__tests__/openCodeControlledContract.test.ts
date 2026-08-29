@@ -53,7 +53,7 @@ function makeEvent(
 	return { type, properties, timestamp };
 }
 
-function fakeChild(url: string) {
+function fakeChild(url: string, announce = true) {
 	const stdout = new PassThrough();
 	const stderr = new PassThrough();
 	const child = Object.assign(new EventEmitter(), {
@@ -62,7 +62,8 @@ function fakeChild(url: string) {
 		pid: 12345,
 		kill: vi.fn(),
 	}) as unknown as import("node:child_process").ChildProcess;
-	queueMicrotask(() => stdout.write(`opencode server listening on ${url}\n`));
+	if (announce)
+		queueMicrotask(() => stdout.write(`opencode server listening on ${url}\n`));
 	return child;
 }
 
@@ -352,6 +353,37 @@ describe("OpenCode controlled path — contract tests", () => {
 			const second = await manager.ensure("/tmp/ws-shutdown");
 			expect(second).not.toBe(first);
 			expect(spawnMock).toHaveBeenCalledTimes(2);
+		});
+
+		it("cancels a pending startup on shutdown and dispose", async () => {
+			const children: Array<ReturnType<typeof fakeChild>> = [];
+			const spawnMock = vi.fn(() => {
+				const child = fakeChild("http://127.0.0.1:4314", false);
+				children.push(child);
+				return child;
+			});
+			fetchMock.mockResolvedValue({ ok: true });
+			manager = new OpenCodeBackendManager({
+				spawn: spawnMock as unknown as OpenCodeBackendManagerOptions["spawn"],
+			});
+
+			const shutdownPromise = manager.ensure("/tmp/ws-pending-shutdown");
+			manager.shutdown("/tmp/ws-pending-shutdown");
+			children[0].stdout?.emit(
+				"data",
+				Buffer.from("opencode server listening on http://127.0.0.1:4314\n"),
+			);
+			await expect(shutdownPromise).rejects.toThrow(/cancelled|shutdown/);
+			expect(manager.get("/tmp/ws-pending-shutdown")).toBeUndefined();
+
+			const disposePromise = manager.ensure("/tmp/ws-pending-dispose");
+			manager.dispose();
+			children[1].stdout?.emit(
+				"data",
+				Buffer.from("opencode server listening on http://127.0.0.1:4314\n"),
+			);
+			await expect(disposePromise).rejects.toThrow(/cancelled|disposed/);
+			expect(manager.get("/tmp/ws-pending-dispose")).toBeUndefined();
 		});
 
 		it("get() returns undefined when no backend exists", () => {

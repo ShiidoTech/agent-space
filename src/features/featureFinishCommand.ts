@@ -336,7 +336,17 @@ export async function runFeatureFinish(
 				}
 
 				progress.report({ message: "Finalizing…" });
-				deps.shutdownBackend?.(feature.worktreePath);
+				const backendPaths = new Set([
+					feature.worktreePath,
+					...ctx.agentManager
+						.getAgents(feature.id)
+						.map((agent) => agent.worktreePath)
+						.filter((worktreePath): worktreePath is string =>
+							Boolean(worktreePath),
+						),
+				]);
+				for (const worktreePath of backendPaths)
+					deps.shutdownBackend?.(worktreePath);
 				ctx.featureManager.forgetFinishedFeature(feature.id);
 				deps.sessionNameSyncer.clearFeature(feature.id);
 				// Invalidate the coordinator so the finished Feature leaves every

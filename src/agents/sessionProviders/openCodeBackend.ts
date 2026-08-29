@@ -56,6 +56,8 @@ export class OpenCodeBackendManager {
 	private pendingHealthChecks = new Map<string, PendingHealthCheck>();
 	/** In-flight ensure() promises, keyed by worktreePath, for coalescence. */
 	private ensurePromises = new Map<string, EnsurePromise>();
+	/** Invalidates startup completions after shutdown/dispose. */
+	private readonly generations = new Map<string, number>();
 
 	constructor(options: OpenCodeBackendManagerOptions = {}) {
 		this.spawnProcess = options.spawn ?? defaultSpawn;
@@ -75,7 +77,7 @@ export class OpenCodeBackendManager {
 	 * @returns A handle to the running backend (including the scoped provider).
 	 * @throws If the backend fails to start or the health check times out.
 	 */
-	async ensure(
+	ensure(
 		worktreePath: string,
 		openCodeBinary = "opencode",
 		healthCheckTimeoutMs = 10_000,
@@ -83,12 +85,21 @@ export class OpenCodeBackendManager {
 	): Promise<OpenCodeBackendHandle> {
 		const existing = this.backends.get(worktreePath);
 		if (existing) {
-			if (await this.isHealthy(existing.baseUrl)) {
-				return existing;
-			}
-			// Stale backend — kill and restart.
-			existing.kill();
-			this.backends.delete(worktreePath);
+			return this.isHealthy(existing.baseUrl).then((healthy) => {
+				if (healthy) {
+					if (this.backends.get(worktreePath) === existing) return existing;
+					throw new Error(`Backend was shut down for ${worktreePath}`);
+				}
+				// Stale backend — kill and restart.
+				existing.kill();
+				this.backends.delete(worktreePath);
+				return this.ensure(
+					worktreePath,
+					openCodeBinary,
+					healthCheckTimeoutMs,
+					providerOptions,
+				);
+			});
 		}
 
 		// Coalesce concurrent ensure() calls for the same worktree.
@@ -104,30 +115,42 @@ export class OpenCodeBackendManager {
 			rejectPromise = reject;
 		});
 		// Both are assigned in the executor before the promise is returned.
-		this.ensurePromises.set(worktreePath, {
+		const entry: EnsurePromise = {
 			promise,
 			resolve: resolvePromise,
 			reject: rejectPromise,
-		});
+		};
+		this.ensurePromises.set(worktreePath, entry);
+		const generation = this.generations.get(worktreePath) ?? 0;
 
-		try {
-			const handle = await this.startBackend(
-				worktreePath,
-				openCodeBinary,
-				healthCheckTimeoutMs,
-				providerOptions,
-			);
-			this.backends.set(worktreePath, handle);
-			this.ensurePromises.get(worktreePath)?.resolve(handle);
-			return handle;
-		} catch (error) {
-			this.ensurePromises
-				.get(worktreePath)
-				?.reject(error instanceof Error ? error : new Error(String(error)));
-			throw error;
-		} finally {
-			this.ensurePromises.delete(worktreePath);
-		}
+		void this.startBackend(
+			worktreePath,
+			openCodeBinary,
+			healthCheckTimeoutMs,
+			providerOptions,
+		)
+			.then((handle) => {
+				if (
+					(this.generations.get(worktreePath) ?? 0) !== generation ||
+					this.ensurePromises.get(worktreePath) !== entry
+				) {
+					handle.kill();
+					entry.reject(
+						new Error(`Backend startup cancelled for ${worktreePath}`),
+					);
+					return;
+				}
+				this.backends.set(worktreePath, handle);
+				entry.resolve(handle);
+			})
+			.catch((error) => {
+				entry.reject(error instanceof Error ? error : new Error(String(error)));
+			})
+			.finally(() => {
+				if (this.ensurePromises.get(worktreePath) === entry)
+					this.ensurePromises.delete(worktreePath);
+			});
+		return promise;
 	}
 
 	/**
@@ -149,6 +172,10 @@ export class OpenCodeBackendManager {
 
 	/** Stop and forget the backend serving one worktree. */
 	shutdown(worktreePath: string): void {
+		this.generations.set(
+			worktreePath,
+			(this.generations.get(worktreePath) ?? 0) + 1,
+		);
 		const handle = this.backends.get(worktreePath);
 		if (handle) {
 			handle.kill();
@@ -165,6 +192,15 @@ export class OpenCodeBackendManager {
 	 * Kill all managed backends and clear the map.
 	 */
 	dispose(): void {
+		for (const worktreePath of new Set([
+			...this.backends.keys(),
+			...this.ensurePromises.keys(),
+		])) {
+			this.generations.set(
+				worktreePath,
+				(this.generations.get(worktreePath) ?? 0) + 1,
+			);
+		}
 		for (const handle of this.backends.values()) {
 			handle.kill();
 			handle.sessionProvider.dispose();
