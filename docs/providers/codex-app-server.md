@@ -25,12 +25,20 @@ started.
 Agent Space therefore does **not** call `thread/start` before a fresh launch
 and does **not** acquire a pre-launch identity for Codex at all
 (`CodexSessionProvider` has no `acquireConversation`). A fresh Codex agent
-launches plain (`codex`, no args). Its session is bound the same way the
-Claude family is bound: `SessionBinder`'s file-backed discovery
-(`scanSessions`/`discoverSessionCandidates`) picks up the rollout once Codex
-actually writes it, gated by the pre-launch baseline and worktree so no agent
-can adopt another's session, and left `ambiguous` (never guessed) when more
-than one candidate could plausibly belong to the agent.
+launches plain (`codex`, no args). Its session is discovered the same way the
+Claude family's file-backed discovery scans (`scanSessions`/
+`discoverSessionCandidates`), gated by the pre-launch baseline and worktree so
+no agent can adopt another's session — but Codex's `conversationIdentity.
+ownership` is `provider_assigned`, not `preassigned`, and `CodexSessionProvider`
+implements no `correlateOwnedSession`. `SessionBinder.resolveClaim` never binds
+a discovered candidate without provider-specific ownership proof, so a single
+freshly-appeared rollout is left `ambiguous`, exactly like two or more
+candidates — it is **not** auto-bound the way a Claude session is. This
+matches OpenCode's existing fail-closed posture: the agent needs the explicit
+`Agent Space: Attach Provider Session` action once its rollout exists. A
+genuine Codex `correlateOwnedSession` would need provider-native proof (e.g.
+app-server driving the turn itself); CWD/timing/uniqueness never qualify, so
+none is implemented here.
 
 For an existing agent, resume stays strict and exact: `resumeConversation`
 first checks that a rollout file for the id actually exists on disk

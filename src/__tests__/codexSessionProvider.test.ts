@@ -116,6 +116,25 @@ describe("CodexSessionProvider", () => {
 			expect(fake.transport.request).not.toHaveBeenCalled();
 		});
 
+		it("Cas B2: async.hasSession answers from disk only, never falls through to a sync resume", async () => {
+			// async.hasSession used to be
+			// `findSessionFileAsync || resumeConversation`, and resumeConversation
+			// starts with the *synchronous* hasSession/findSessionFile walk of the
+			// store. A periodic async pass polling for an id with no rollout yet
+			// would therefore silently run a sync filesystem scan on the
+			// Extension Host — exactly what the async surface exists to avoid.
+			const fake = appServerFake([]);
+			const provider = new CodexSessionProvider(
+				tmpDir,
+				sessionIndexPath,
+				fake.transport,
+			);
+			const syncHasSession = vi.spyOn(provider, "hasSession");
+			expect(await provider.async.hasSession("missing-thread")).toBe(false);
+			expect(syncHasSession).not.toHaveBeenCalled();
+			expect(fake.transport.request).not.toHaveBeenCalled();
+		});
+
 		it("keeps two same-worktree threads' attention isolated, including reversed order", () => {
 			const fake = appServerFake([]);
 			const provider = new CodexSessionProvider(

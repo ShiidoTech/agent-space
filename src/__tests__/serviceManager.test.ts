@@ -124,7 +124,7 @@ describe("ServiceManager", () => {
 			const services = manager.getServices("f1");
 			expect(services[0].status).toBe("running");
 			expect(execSync).toHaveBeenCalledWith(
-				`tmux new-session -d -s "${svc.tmuxSession}" "npm run dev"`,
+				`tmux new-session -d -s "${svc.tmuxSession}" "npm run dev" \\; set-option -t "${svc.tmuxSession}" remain-on-exit on`,
 				expect.objectContaining({ cwd: "/repo" }),
 			);
 		});

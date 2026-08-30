@@ -273,9 +273,16 @@ describe("TmuxIntegration", () => {
 	// createCommand / attachCommand (unchanged — no exec calls)
 	// -------------------------------------------------------------------
 	describe("createCommand / attachCommand", () => {
-		it("returns create command string", () => {
+		it("returns create command string with remain-on-exit chained atomically", () => {
 			const cmd = tmux.createCommand("my-session", "claude");
-			expect(cmd).toBe('tmux new-session -d -s "my-session" "claude"');
+			expect(cmd).toBe(
+				'tmux new-session -d -s "my-session" "claude" \\; set-option -t "my-session" remain-on-exit on',
+			);
+		});
+
+		it("never touches the global -g default", () => {
+			const cmd = tmux.createCommand("my-session", "claude");
+			expect(cmd).not.toMatch(/-g\s+remain-on-exit/);
 		});
 
 		it("returns attach command string", () => {
@@ -440,42 +447,8 @@ describe("TmuxIntegration", () => {
 	});
 
 	// -------------------------------------------------------------------
-	// ensureRemainOnExit / clearRemainOnExitForSession
+	// clearRemainOnExitForSession
 	// -------------------------------------------------------------------
-	describe("ensureRemainOnExit", () => {
-		it("sets the server-wide default once", () => {
-			const fresh = new TmuxIntegration();
-			mockExec.mockReturnValue("");
-			fresh.ensureRemainOnExit();
-			fresh.ensureRemainOnExit();
-			expect(mockExec).toHaveBeenCalledTimes(1);
-			expect(mockExec).toHaveBeenCalledWith(
-				"tmux set-option -g remain-on-exit on",
-			);
-		});
-
-		it("swallows errors when the server is not ready", () => {
-			const fresh = new TmuxIntegration();
-			mockExec.mockImplementation(() => {
-				throw new Error("no server");
-			});
-			expect(() => fresh.ensureRemainOnExit()).not.toThrow();
-		});
-	});
-
-	describe("ensureRemainOnExitAsync", () => {
-		it("sets the server-wide default once", async () => {
-			const fresh = new TmuxIntegration();
-			mockExecAsync.mockResolvedValue("" as never);
-			await fresh.ensureRemainOnExitAsync();
-			await fresh.ensureRemainOnExitAsync();
-			expect(mockExecAsync).toHaveBeenCalledTimes(1);
-			expect(mockExecAsync).toHaveBeenCalledWith(
-				"tmux set-option -g remain-on-exit on",
-			);
-		});
-	});
-
 	describe("clearRemainOnExitForSession", () => {
 		it("clears remain-on-exit for one session", () => {
 			mockExec.mockReturnValue("");

@@ -254,7 +254,6 @@ export class TerminalController implements vscode.Disposable {
 				// before the CLI starts, so a session created by THIS launch is the
 				// only one that can later be attributed to the agent.
 				this.beforeLaunchCallback?.(feature, agent, cwd);
-				this.tmux.ensureRemainOnExit();
 				exec(this.tmux.createCommand(sessionName, launchCommand), { cwd });
 				this.tmux.configureSession(sessionName);
 				sessionReady = this.tmux.isSessionAlive(sessionName);
@@ -568,7 +567,6 @@ export class TerminalController implements vscode.Disposable {
 				// before the CLI starts — identical ordering to the sync path —
 				// so a session created by THIS launch is the only one that can
 				// later be attributed to the agent.
-				await this.tmux.ensureRemainOnExitAsync();
 				await execAsync(this.tmux.createCommand(sessionName, launchCommand), {
 					cwd,
 				});

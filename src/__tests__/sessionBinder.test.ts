@@ -1107,5 +1107,50 @@ describe("SessionBinder", () => {
 				expect(stored_agent?.sessionBinding?.state).toBe("ambiguous");
 			}
 		});
+
+		// Cas G: a *single* fresh Codex agent whose rollout materializes is not
+		// auto-bound either. CodexSessionProvider implements no
+		// correlateOwnedSession, so SessionBinder.resolveClaim has no
+		// provider-specific ownership proof and treats a lone discovered
+		// candidate exactly like an ambiguous one — the same fail-closed
+		// posture as OpenCode, not Claude's auto-bind. This locks in the
+		// corrected docs/providers/codex-app-server.md claim: earlier drafts of
+		// this PR incorrectly said file-backed discovery binds Codex "the same
+		// way the Claude family is bound", which this test would have caught.
+		it("Cas G: a single fresh Codex candidate stays ambiguous, not auto-bound (no correlateOwnedSession)", async () => {
+			const sessionsDir = tempDir("codex-binder-sessions-");
+			const { CodexSessionProvider } = await import(
+				"../agents/sessionProviders/codexSessionProvider"
+			);
+			const codexAdapter = new CodexSessionProvider(sessionsDir);
+			expect(
+				(codexAdapter as unknown as { correlateOwnedSession?: unknown })
+					.correlateOwnedSession,
+			).toBeUndefined();
+			const { projectManager, ctx } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({
+					id: "a1",
+					toolId: "codex",
+					tmuxSession: "agent-space-f1-a1",
+					launchedAt: "2026-08-09T07:51:00.000Z",
+				}),
+			]);
+
+			writeCodexRollout(
+				sessionsDir,
+				"ses-for-a1",
+				WORKTREE,
+				"2026-08-09T07:55:00.000Z",
+			);
+
+			const binder = new SessionBinder(registry(codexAdapter), tmux());
+			binder.start(projectManager, 0);
+			binder.reconcileAll();
+
+			const stored = ctx.store.loadAgents("f1")[0];
+			expect(stored.sessionId).toBeNull();
+			expect(stored.sessionBinding?.state).toBe("ambiguous");
+		});
 	});
 });

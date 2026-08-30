@@ -41,7 +41,6 @@ function sanitizeSessionName(name: string): string {
 
 export class TmuxIntegration {
 	private nativeScrollConfigured = false;
-	private remainOnExitConfigured = false;
 
 	sessionName(featureId: string, agentId: string): string {
 		return sanitizeSessionName(
@@ -142,37 +141,6 @@ export class TmuxIntegration {
 			return true;
 		} catch {
 			return false;
-		}
-	}
-
-	/**
-	 * Set the tmux server-wide default so a pane whose command exits leaves a
-	 * dead pane behind instead of tearing down the whole session. Set once as a
-	 * `-g` default (inherited by every session created afterward) rather than
-	 * per-session after the fact: a command that crashes almost immediately
-	 * (e.g. the CLI binary is missing) can exit before a post-creation
-	 * `set-option -t <session>` would ever reach it, destroying the session —
-	 * and with it the exit code and output — before anything could read them.
-	 * Without this, {@link getPaneStatus} and {@link capturePane} never see
-	 * anything: the session is already gone by the time they run.
-	 */
-	ensureRemainOnExit(): void {
-		if (this.remainOnExitConfigured) return;
-		try {
-			exec("tmux set-option -g remain-on-exit on");
-			this.remainOnExitConfigured = true;
-		} catch {
-			// Server may not be ready yet
-		}
-	}
-
-	async ensureRemainOnExitAsync(): Promise<void> {
-		if (this.remainOnExitConfigured) return;
-		try {
-			await execAsync("tmux set-option -g remain-on-exit on");
-			this.remainOnExitConfigured = true;
-		} catch {
-			// Server may not be ready yet
 		}
 	}
 
@@ -353,8 +321,18 @@ export class TmuxIntegration {
 		}
 	}
 
+	/**
+	 * Create the session and mark its own pane `remain-on-exit` in the same
+	 * tmux invocation, chained with `\;` so the server processes both as one
+	 * client request. That keeps a pane whose command crashes almost
+	 * immediately (e.g. the CLI binary is missing) around as a dead pane
+	 * instead of tearing the session down before anything could read its exit
+	 * code or output — without ever touching the server-wide `-g` default,
+	 * which would otherwise change `remain-on-exit` for every tmux session on
+	 * the machine, including ones outside Agent Space.
+	 */
 	createCommand(sessionName: string, innerCommand: string): string {
-		return `tmux new-session -d -s "${sessionName}" "${innerCommand}"`;
+		return `tmux new-session -d -s "${sessionName}" "${innerCommand}" \\; set-option -t "${sessionName}" remain-on-exit on`;
 	}
 
 	/**

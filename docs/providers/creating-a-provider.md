@@ -48,9 +48,12 @@ Current provider identity findings:
   `codex resume <id>` against that id fails with "No saved session found"
   (see `docs/providers/codex-app-server.md`, corrected after the #125
   regression). Agent Space does not acquire a pre-launch identity for Codex;
-  a fresh agent launches plain `codex` and is bound the same way as the
-  Claude family, through file-backed discovery once its rollout is actually
-  written. A previously bound resume stays strict: `resumeConversation`
+  a fresh agent launches plain `codex` and its rollout is discovered through
+  the same file-backed scan the Claude family uses, but Codex has no
+  `correlateOwnedSession` proof, so `SessionBinder` leaves even a single
+  freshly-appeared rollout `ambiguous` — like OpenCode, it stays fail-closed
+  until explicit `Attach Provider Session`, not auto-bound like Claude. A
+  previously bound resume stays strict: `resumeConversation`
   checks the rollout exists on disk before confirming it with
   `thread/resume`. `turn/started`, `turn/completed`, approval requests, and
   `item/tool/requestUserInput` are consumed only when they carry an exact

@@ -149,9 +149,12 @@ export class CodexSessionProvider
 				return [];
 			}
 		},
+		// Disk-only: this must never call `resumeConversation`, which starts
+		// with a synchronous `hasSession`/`findSessionFile` walk of the store —
+		// that would let a non-blocking periodic pass fall through to a sync
+		// filesystem scan and block the Extension Host.
 		hasSession: async (sessionId: string): Promise<boolean> =>
-			(await this.findSessionFileAsync(sessionId)) !== null ||
-			(await this.resumeConversation(sessionId)),
+			(await this.findSessionFileAsync(sessionId)) !== null,
 		readName: async (sessionId: string): Promise<string | null> => {
 			await this.loadSessionIndexAsync();
 			return (
