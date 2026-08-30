@@ -678,8 +678,8 @@ export class FeatureStateCoordinator implements Disposable {
 				const agents = readRuntime<Agent[]>(() =>
 					ctx.agentManager.getAgentsReadModel(feature.id),
 				);
-				const services = readRuntime<Service[]>(() =>
-					ctx.serviceManager.getServices(feature.id),
+				const services = await readRuntimeAsync<Service[]>(() =>
+					ctx.serviceManager.getServicesAsync(feature.id),
 				);
 				const agentTmux = runtimeMap(agents, tmuxSessions, (agent) =>
 					this.projectManager?.agentTmuxSessionName(
@@ -1733,6 +1733,19 @@ async function observeDelivery(
 function readRuntime<T>(read: () => T) {
 	try {
 		return knownRuntime(read());
+	} catch (error) {
+		return unknownRuntime(
+			"read_failed",
+			error instanceof Error ? error.message : String(error),
+		);
+	}
+}
+
+/** Async twin of {@link readRuntime}: same known/unknown packaging, for a
+ * read that itself needs to await non-blocking probes. */
+async function readRuntimeAsync<T>(read: () => Promise<T>) {
+	try {
+		return knownRuntime(await read());
 	} catch (error) {
 		return unknownRuntime(
 			"read_failed",

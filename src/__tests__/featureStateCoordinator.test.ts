@@ -166,7 +166,10 @@ function setup(
 			getAgents: vi.fn(() => []),
 			getAgentsReadModel: vi.fn(() => []),
 		},
-		serviceManager: { getServices: vi.fn(() => []) },
+		serviceManager: {
+			getServices: vi.fn(() => []),
+			getServicesAsync: vi.fn(async () => []),
+		},
 	} as unknown as ProjectContext;
 	let currentContext = context;
 	const manager = {
@@ -1604,7 +1607,10 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 				getAgents: vi.fn(() => []),
 				getAgentsReadModel: vi.fn(() => []),
 			},
-			serviceManager: { getServices: vi.fn(() => []) },
+			serviceManager: {
+				getServices: vi.fn(() => []),
+				getServicesAsync: vi.fn(async () => []),
+			},
 		} as unknown as ProjectContext;
 	}
 	const contexts: Record<string, ProjectContext> = {
@@ -2104,6 +2110,17 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("reconcilePresence reads services through the async, non-blocking twin — never the sync getServices", async () => {
+		const fixture = setup();
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcilePresence();
+
+		expect(fixture.context.serviceManager.getServicesAsync).toHaveBeenCalled();
+		expect(fixture.context.serviceManager.getServices).not.toHaveBeenCalled();
+		coordinator.dispose();
+	});
+
 	it("a feature seeded only by reconcilePresence is still stale — a runtime tick must not fake deep freshness", async () => {
 		const inspects = {
 			p1: vi.fn(async () => git(feature("f1"))),
@@ -2397,7 +2414,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				getAgents: vi.fn(() => []),
 				getAgentsReadModel: vi.fn(() => []),
 			},
-			serviceManager: { getServices: vi.fn(() => []) },
+			serviceManager: {
+				getServices: vi.fn(() => []),
+				getServicesAsync: vi.fn(async () => []),
+			},
 		} as unknown as ProjectContext;
 	}
 
@@ -2507,7 +2527,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -2695,7 +2718,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -2864,7 +2890,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -3022,7 +3051,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -3172,7 +3204,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),

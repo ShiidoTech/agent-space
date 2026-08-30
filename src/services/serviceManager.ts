@@ -27,6 +27,27 @@ export class ServiceManager {
 		return [...this.loadServices(featureId)];
 	}
 
+	/**
+	 * Non-blocking twin of {@link getServices}: identical TTL-guarded refresh
+	 * semantics, but the tmux probes run through the async helpers
+	 * (`isSessionAliveAsync` / `getPaneStatusAsync`) so background
+	 * reconciliation (`FeatureStateCoordinator.reconcilePresence`) never
+	 * blocks the Extension Host on a subprocess.
+	 */
+	async getServicesAsync(featureId: string): Promise<Service[]> {
+		await this.refreshStatusesAsync(featureId);
+		return [...this.loadServices(featureId)];
+	}
+
+	/**
+	 * Read the persisted service model without probing tmux at all — zero
+	 * I/O. For a caller that only needs the read model (a UI path that must
+	 * never touch tmux) rather than a freshly reconciled status.
+	 */
+	getServicesReadModel(featureId: string): Service[] {
+		return [...this.loadServices(featureId)];
+	}
+
 	createService(
 		featureId: string,
 		name: string,
@@ -125,6 +146,51 @@ export class ServiceManager {
 				changed = true;
 			}
 		}
+		if (changed) {
+			this.saveServices(featureId, services);
+		}
+	}
+
+	/**
+	 * Non-blocking twin of {@link refreshStatuses}: identical TTL-guarded
+	 * decision tree, but probes run through `isSessionAliveAsync` /
+	 * `getPaneStatusAsync` so a caller on a background reconciliation path
+	 * never blocks the Extension Host on a subprocess.
+	 */
+	private async refreshStatusesAsync(featureId: string): Promise<void> {
+		const lastRefresh = this.lastRefreshTime.get(featureId);
+		if (
+			lastRefresh &&
+			Date.now() - lastRefresh < ServiceManager.REFRESH_TTL_MS
+		) {
+			return;
+		}
+		this.lastRefreshTime.set(featureId, Date.now());
+
+		const services = this.loadServices(featureId);
+		let changed = false;
+		await Promise.all(
+			services.map(async (service) => {
+				if (service.status === "stopped" || service.status === "errored") {
+					return;
+				}
+
+				const alive =
+					(await this.tmux.isSessionAliveAsync?.(service.tmuxSession)) ?? false;
+				if (!alive) {
+					service.status = "stopped";
+					changed = true;
+					return;
+				}
+
+				const pane =
+					(await this.tmux.getPaneStatusAsync?.(service.tmuxSession)) ?? null;
+				if (pane?.dead) {
+					service.status = pane.exitCode === 0 ? "stopped" : "errored";
+					changed = true;
+				}
+			}),
+		);
 		if (changed) {
 			this.saveServices(featureId, services);
 		}

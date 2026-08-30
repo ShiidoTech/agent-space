@@ -249,4 +249,34 @@ describe("ServiceManager", () => {
 			expect(aliveSpy.mock.calls.length).toBeGreaterThan(firstCallCount);
 		});
 	});
+
+	describe("getServicesAsync / getServicesReadModel (P0 zero-I/O UI)", () => {
+		it("getServicesReadModel never touches tmux", () => {
+			manager.createService("f1", "dev", "npm run dev");
+			const aliveSpy = vi.spyOn(tmux, "isSessionAlive");
+			const paneSpy = vi.spyOn(tmux, "getPaneStatus");
+
+			const services = manager.getServicesReadModel("f1");
+
+			expect(services).toHaveLength(1);
+			expect(aliveSpy).not.toHaveBeenCalled();
+			expect(paneSpy).not.toHaveBeenCalled();
+		});
+
+		it("getServicesAsync refreshes status through the async tmux twins, never the sync ones", async () => {
+			const svc = manager.createService("f1", "dev", "npm run dev");
+			const aliveSpy = vi.spyOn(tmux, "isSessionAlive");
+			const paneSpy = vi.spyOn(tmux, "getPaneStatus");
+			const aliveAsyncSpy = vi
+				.spyOn(tmux, "isSessionAliveAsync")
+				.mockResolvedValue(false);
+
+			const services = await manager.getServicesAsync("f1");
+
+			expect(services.find((s) => s.id === svc.id)?.status).toBe("stopped");
+			expect(aliveAsyncSpy).toHaveBeenCalled();
+			expect(aliveSpy).not.toHaveBeenCalled();
+			expect(paneSpy).not.toHaveBeenCalled();
+		});
+	});
 });
