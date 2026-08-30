@@ -41,6 +41,7 @@ function sanitizeSessionName(name: string): string {
 
 export class TmuxIntegration {
 	private nativeScrollConfigured = false;
+	private remainOnExitConfigured = false;
 
 	sessionName(featureId: string, agentId: string): string {
 		return sanitizeSessionName(
@@ -141,6 +142,61 @@ export class TmuxIntegration {
 			return true;
 		} catch {
 			return false;
+		}
+	}
+
+	/**
+	 * Set the tmux server-wide default so a pane whose command exits leaves a
+	 * dead pane behind instead of tearing down the whole session. Set once as a
+	 * `-g` default (inherited by every session created afterward) rather than
+	 * per-session after the fact: a command that crashes almost immediately
+	 * (e.g. the CLI binary is missing) can exit before a post-creation
+	 * `set-option -t <session>` would ever reach it, destroying the session —
+	 * and with it the exit code and output — before anything could read them.
+	 * Without this, {@link getPaneStatus} and {@link capturePane} never see
+	 * anything: the session is already gone by the time they run.
+	 */
+	ensureRemainOnExit(): void {
+		if (this.remainOnExitConfigured) return;
+		try {
+			exec("tmux set-option -g remain-on-exit on");
+			this.remainOnExitConfigured = true;
+		} catch {
+			// Server may not be ready yet
+		}
+	}
+
+	async ensureRemainOnExitAsync(): Promise<void> {
+		if (this.remainOnExitConfigured) return;
+		try {
+			await execAsync("tmux set-option -g remain-on-exit on");
+			this.remainOnExitConfigured = true;
+		} catch {
+			// Server may not be ready yet
+		}
+	}
+
+	/**
+	 * Revert one session to the ordinary "session dies with its pane" behavior
+	 * once startup diagnostics for it are no longer needed. A CLI that crashes
+	 * later, mid-conversation, must still make the whole session disappear so
+	 * the existing close detection (the VS Code terminal's `tmux attach`
+	 * exiting, firing `onDidCloseTerminal`) keeps working — a dead pane that
+	 * lingers forever under the server-wide default would silently stop that.
+	 */
+	clearRemainOnExitForSession(sessionName: string): void {
+		try {
+			exec(`tmux set-option -t "${sessionName}" remain-on-exit off`);
+		} catch {
+			// Session may not exist
+		}
+	}
+
+	async clearRemainOnExitForSessionAsync(sessionName: string): Promise<void> {
+		try {
+			await execAsync(`tmux set-option -t "${sessionName}" remain-on-exit off`);
+		} catch {
+			// Session may not exist
 		}
 	}
 
@@ -380,6 +436,22 @@ export class TmuxIntegration {
 			return exec(
 				`tmux capture-pane -t "${sessionName}" -p -S -${lines}`,
 			).trimEnd();
+		} catch {
+			return null;
+		}
+	}
+
+	/** Non-blocking twin of {@link capturePane}. */
+	async capturePaneAsync(
+		sessionName: string,
+		lines = 50,
+	): Promise<string | null> {
+		try {
+			return (
+				await execAsync(`tmux capture-pane -t "${sessionName}" -p -S -${lines}`)
+			)
+				.toString()
+				.trimEnd();
 		} catch {
 			return null;
 		}

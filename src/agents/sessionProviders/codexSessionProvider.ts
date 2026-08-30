@@ -15,8 +15,6 @@ import {
 	readIncrementalJsonlAsync,
 } from "./incrementalJsonl";
 import type {
-	ProviderConversationReceipt,
-	SessionCorrelationContext,
 	SessionInfo,
 	SessionProvider,
 	SessionRenameAdapter,
@@ -95,24 +93,31 @@ export class CodexSessionProvider
 			appServer.onClose?.(() => this.appServerAttention.clear()) ?? (() => {});
 	}
 
-	/** Create the exact thread before the interactive Codex CLI is launched. */
-	async acquireConversation(
-		context: SessionCorrelationContext,
-	): Promise<ProviderConversationReceipt | undefined> {
-		try {
-			const result = await this.appServer.request<{
-				thread?: { id?: unknown };
-			}>("thread/start", { cwd: context.cwd, ephemeral: false });
-			const id = result.thread?.id;
-			if (typeof id !== "string" || id.length === 0) return undefined;
-			return { sessionId: id, proof: "codex.app-server.thread/start" };
-		} catch {
-			return undefined;
-		}
-	}
+	/**
+	 * No pre-launch identity is acquired for Codex. `app-server thread/start`
+	 * returns a thread id before Codex has written a rollout file for it — on
+	 * Codex CLI 0.151.0 the rollout only materializes once a turn actually
+	 * runs, so `codex resume <that-id>` fails with "No saved session found"
+	 * for a thread that was merely started, never turned. Treating that id as
+	 * an exact resumable identity was the bug: it made every fresh Codex
+	 * launch try to resume a session that did not exist yet.
+	 *
+	 * Without this hook, `SessionBinder` leaves the agent unbound and Codex
+	 * launches plain (`codex`, no args); the ordinary file-backed discovery
+	 * path (`scanSessions`/`discoverSessionCandidates`, gated by the launch
+	 * baseline and worktree so no agent can adopt another's session) binds the
+	 * agent once its rollout is actually written — the same mechanism the
+	 * Claude family already relies on.
+	 */
 
-	/** Reconnect the app-server to exactly the persisted thread, never a recent one. */
+	/**
+	 * Reconnect to a previously bound Codex session. Only a rollout file that
+	 * actually exists on disk proves `codex resume <sessionId>` will find a
+	 * session — that disk store is exactly what the native TUI reads, so it is
+	 * the authoritative check, not the app-server's own in-memory bookkeeping.
+	 */
 	async resumeConversation(sessionId: string): Promise<boolean> {
+		if (!this.hasSession(sessionId)) return false;
 		try {
 			const result = await this.appServer.request<{
 				thread?: { id?: unknown };

@@ -498,6 +498,31 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildLaunchCommand(tool, null)).toBe("claude");
 		});
 
+		// Cas B (#125 regression): a fresh Codex launch has no rollout file on
+		// disk yet — `codex resume <id>` would fail with "No saved session
+		// found" even if a sessionId happens to be set. The fresh-launch command
+		// must always be plain `codex`, never `codex resume`.
+		it("Cas B: never resumes on a fresh Codex launch, even with a sessionId set", () => {
+			const tool = registry.resolveAgentTool("codex");
+			expect(registry.buildLaunchCommand(tool)).toBe("codex");
+			expect(registry.buildLaunchCommand(tool, "01a04fbe-thread")).toBe(
+				"codex",
+			);
+			expect(registry.buildLaunchCommand(tool, null)).toBe("codex");
+		});
+
+		// Cas C: a resume that targets an id genuinely believed to be a
+		// persisted session stays the strict `codex resume <id>` path.
+		it("Cas C: resume still targets the exact persisted Codex session id", () => {
+			const tool = registry.resolveAgentTool("codex");
+			expect(registry.buildResumeLaunchCommand(tool, "sess-real")).toBe(
+				"codex resume sess-real",
+			);
+			expect(registry.buildStrictResumeLaunchCommand(tool, "sess-real")).toBe(
+				"codex resume sess-real",
+			);
+		});
+
 		it("deep-merges custom args over a built-in (delta-only config)", () => {
 			mockConfig({
 				codingTools: [

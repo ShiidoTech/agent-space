@@ -423,6 +423,93 @@ describe("TmuxIntegration", () => {
 		});
 	});
 
+	describe("capturePaneAsync", () => {
+		it("returns trimmed pane output", async () => {
+			mockExecAsync.mockResolvedValue("line1\nline2\n  \n" as never);
+			const result = await tmux.capturePaneAsync("my-session");
+			expect(result).toBe("line1\nline2");
+			expect(mockExecAsync).toHaveBeenCalledWith(
+				'tmux capture-pane -t "my-session" -p -S -50',
+			);
+		});
+
+		it("returns null when session does not exist", async () => {
+			mockExecAsync.mockRejectedValue(new Error("no session"));
+			expect(await tmux.capturePaneAsync("gone")).toBeNull();
+		});
+	});
+
+	// -------------------------------------------------------------------
+	// ensureRemainOnExit / clearRemainOnExitForSession
+	// -------------------------------------------------------------------
+	describe("ensureRemainOnExit", () => {
+		it("sets the server-wide default once", () => {
+			const fresh = new TmuxIntegration();
+			mockExec.mockReturnValue("");
+			fresh.ensureRemainOnExit();
+			fresh.ensureRemainOnExit();
+			expect(mockExec).toHaveBeenCalledTimes(1);
+			expect(mockExec).toHaveBeenCalledWith(
+				"tmux set-option -g remain-on-exit on",
+			);
+		});
+
+		it("swallows errors when the server is not ready", () => {
+			const fresh = new TmuxIntegration();
+			mockExec.mockImplementation(() => {
+				throw new Error("no server");
+			});
+			expect(() => fresh.ensureRemainOnExit()).not.toThrow();
+		});
+	});
+
+	describe("ensureRemainOnExitAsync", () => {
+		it("sets the server-wide default once", async () => {
+			const fresh = new TmuxIntegration();
+			mockExecAsync.mockResolvedValue("" as never);
+			await fresh.ensureRemainOnExitAsync();
+			await fresh.ensureRemainOnExitAsync();
+			expect(mockExecAsync).toHaveBeenCalledTimes(1);
+			expect(mockExecAsync).toHaveBeenCalledWith(
+				"tmux set-option -g remain-on-exit on",
+			);
+		});
+	});
+
+	describe("clearRemainOnExitForSession", () => {
+		it("clears remain-on-exit for one session", () => {
+			mockExec.mockReturnValue("");
+			tmux.clearRemainOnExitForSession("my-session");
+			expect(mockExec).toHaveBeenCalledWith(
+				'tmux set-option -t "my-session" remain-on-exit off',
+			);
+		});
+
+		it("swallows errors when the session is gone", () => {
+			mockExec.mockImplementation(() => {
+				throw new Error("no session");
+			});
+			expect(() => tmux.clearRemainOnExitForSession("gone")).not.toThrow();
+		});
+	});
+
+	describe("clearRemainOnExitForSessionAsync", () => {
+		it("clears remain-on-exit for one session", async () => {
+			mockExecAsync.mockResolvedValue("" as never);
+			await tmux.clearRemainOnExitForSessionAsync("my-session");
+			expect(mockExecAsync).toHaveBeenCalledWith(
+				'tmux set-option -t "my-session" remain-on-exit off',
+			);
+		});
+
+		it("swallows errors when the session is gone", async () => {
+			mockExecAsync.mockRejectedValue(new Error("no session"));
+			await expect(
+				tmux.clearRemainOnExitForSessionAsync("gone"),
+			).resolves.toBeUndefined();
+		});
+	});
+
 	describe("adoptSession", () => {
 		it("returns true when the preferred session already exists", () => {
 			mockExecFile.mockReturnValueOnce("").mockImplementationOnce(() => {

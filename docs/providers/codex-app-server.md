@@ -1,24 +1,44 @@
 # Codex app-server integration
 
-PR4 uses the experimental JSON-RPC protocol exposed by the locally installed
-Codex CLI. Agent Space owns one long-lived `codex app-server --stdio`
-connection per Codex session adapter. The built-in adapter is shared by all
-Codex agents, so the server multiplexes threads; the persisted Codex thread id
-is the only routing key. A custom Codex profile gets its own adapter and
-connection.
+Agent Space owns one long-lived `codex app-server --stdio` connection per
+Codex session adapter, used for structured events and for validating a
+resume. The built-in adapter is shared by all Codex agents, so the server
+multiplexes threads; the persisted Codex thread id is the routing key. A
+custom Codex profile gets its own adapter and connection.
 
-## Identity lifecycle
+## Identity lifecycle (corrected after #125)
 
-For a new Codex agent, Agent Space sends `initialize`, then
-`thread/start {"cwd": "...", "ephemeral": false}`. It accepts an identity
-only from the response's `result.thread.id`, persists it immediately in the
-existing `Agent Space agentId -> sessionId` binding, and starts the native UI
-with `codex resume <thread.id>`. No scan, cwd match, timestamp, prompt order,
-or terminal text participates in ownership.
+PR4/#125 originally sent `thread/start {"cwd": "...", "ephemeral": false}`
+before every fresh launch and treated the response's `result.thread.id` as an
+exact, immediately resumable identity, then started the native UI with
+`codex resume <thread.id>`. That is not the real contract: verified against a
+real `codex app-server --stdio` process on Codex CLI 0.151.0, `thread/start`
+returns a thread id and a `path` for its rollout file *before that file exists
+on disk*. The rollout is only written once a turn actually runs (confirmed by
+sending a real `turn/start` over the same connection and observing the file
+appear only after the turn completed). `codex resume <that-id>` run as a
+separate process — which is what actually happens, since the native TUI is
+spawned as its own CLI process, not driven through this RPC connection —
+fails with `No saved session found with ID <id>` for a thread that was merely
+started.
 
-For an existing agent, `thread/resume {"threadId": "<persisted id>"}` must return
-the same id. Reload and runtime restoration use that exact request. If it fails,
-the agent remains unresolved/blocked; a recent thread is never adopted.
+Agent Space therefore does **not** call `thread/start` before a fresh launch
+and does **not** acquire a pre-launch identity for Codex at all
+(`CodexSessionProvider` has no `acquireConversation`). A fresh Codex agent
+launches plain (`codex`, no args). Its session is bound the same way the
+Claude family is bound: `SessionBinder`'s file-backed discovery
+(`scanSessions`/`discoverSessionCandidates`) picks up the rollout once Codex
+actually writes it, gated by the pre-launch baseline and worktree so no agent
+can adopt another's session, and left `ambiguous` (never guessed) when more
+than one candidate could plausibly belong to the agent.
+
+For an existing agent, resume stays strict and exact: `resumeConversation`
+first checks that a rollout file for the id actually exists on disk
+(`hasSession`/`findSessionFile` — the same store the native TUI reads), and
+only then confirms it with `thread/resume {"threadId": "<persisted id>"}`. If
+either check fails, the agent remains unresolved/blocked; a recent or
+in-memory-only thread is never adopted, and `codex resume` without an id (or
+"most recent session") is never used as a fallback.
 
 ## Events and process failure
 
@@ -31,26 +51,31 @@ The adapter consumes only thread-scoped structured messages:
   error;
 - `error` → provider `failed`.
 
-These observations are parsed for a future path where Agent Space directly
-controls the app-server turn stream. They are not advertised as native-TUI
-attention today: the TUI is a separate process, and the decisive smoke did not
-prove cross-process delivery. The provider does not maintain a second state
-machine or persist `finished`; PR2 owns `turn_completed` and the review receipt
-when a proven event source is enabled.
+These events are only emitted by the app-server for threads it is itself
+driving through this RPC connection. The interactive Codex agent Agent Space
+launches runs as a separate native TUI process in its own tmux pane, so these
+events do not fire for it today — this observation path is dormant until
+Agent Space drives turns directly through app-server instead of a spawned TUI.
+It is not advertised as native-TUI attention: PR2 owns `turn_completed` and
+the review receipt when a proven event source is enabled.
 
-If the app-server exits, pending requests fail and live app-server observations
-are cleared. The next exact `thread/resume` lazily starts a fresh connection.
-No terminal close, exit code, silence, or JSONL recency creates a completion.
-Rollout JSONL remains a same-thread diagnostic fallback, never an ownership
-source.
+If the app-server exits, pending requests fail and live app-server
+observations are cleared. The next resume validation lazily starts a fresh
+connection. No terminal close, exit code, silence, or JSONL recency creates a
+completion. Rollout JSONL remains a same-thread diagnostic fallback, never an
+ownership source.
 
 ## Capability smoke
 
-On 2026-08-28, local `codex-cli 0.150.1` was queried with a real stdio
-connection. `initialize` returned successfully, `thread/start` returned a
-UUIDv7 `thread.id`, and `thread/started` carried the same id. The decisive
-cross-process smoke launched `codex resume <thread.id>` in a separate TUI and
-sent a prompt, but the TUI received HTTP 401 from
-`wss://api.openai.com/v1/responses`; no external `turn/started` or
-`turn/completed` was observed. Native Codex attention is consequently
-unsupported, not inferred from this incomplete smoke.
+On 2026-08-30, local `codex-cli 0.151.0` was queried with a real stdio
+connection (see the #125 regression investigation). `initialize` returned
+successfully; `thread/start` returned a UUIDv7 `thread.id` and a rollout
+`path` that did not yet exist on disk. A native `codex resume <that-id>` in a
+separate process failed with `No saved session found`. Sending a real
+`turn/start` over the same app-server connection produced `item/*` and
+`turn/completed` events, and only then did the rollout file at the previously
+reported `path` appear; a subsequent native `codex resume <that-id>` in a
+separate PTY-attached process then opened normally. This is the basis for the
+identity-lifecycle correction above: a thread id is only an exact, resumable
+identity once its rollout is materialized by a real turn, never merely by
+`thread/start`.

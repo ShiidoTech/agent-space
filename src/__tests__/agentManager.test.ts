@@ -348,6 +348,48 @@ describe("AgentManager", () => {
 		});
 	});
 
+	describe("advanceStartupStep", () => {
+		// Cas F regression: `beginAgentStartup(..., waitingForWorktree=true)`
+		// leaves "worktree" as the running step. Without an explicit advance, a
+		// failure that actually happens in the provider phase gets blamed on
+		// "worktree" (recordAgentFailure fails whichever step is `running`).
+		it("completes every step before the target and marks it running", () => {
+			const agent = manager.createAgent(feature);
+			manager.beginAgentStartup(agent.id, "f1", true);
+
+			manager.advanceStartupStep(agent.id, "f1", "terminal");
+			let steps = manager.getAgents("f1")[0].startup?.steps;
+			expect(steps?.map((s) => [s.id, s.status])).toEqual([
+				["worktree", "completed"],
+				["terminal", "running"],
+				["provider", "pending"],
+			]);
+
+			manager.advanceStartupStep(agent.id, "f1", "provider");
+			steps = manager.getAgents("f1")[0].startup?.steps;
+			expect(steps?.map((s) => [s.id, s.status])).toEqual([
+				["worktree", "completed"],
+				["terminal", "completed"],
+				["provider", "running"],
+			]);
+
+			// A provider crash from here on is blamed on "provider", never
+			// "worktree" — exactly the misattribution this fix corrects.
+			manager.recordAgentFailure(agent.id, "f1", "Codex exited during startup");
+			steps = manager.getAgents("f1")[0].startup?.steps;
+			expect(steps?.find((s) => s.id === "provider")?.status).toBe("failed");
+			expect(steps?.find((s) => s.id === "worktree")?.status).toBe("completed");
+		});
+
+		it("does nothing when the agent has no startup state", () => {
+			const agent = manager.createAgent(feature);
+			expect(() =>
+				manager.advanceStartupStep(agent.id, "f1", "provider"),
+			).not.toThrow();
+			expect(manager.getAgents("f1")[0].startup).toBeUndefined();
+		});
+	});
+
 	describe("recordTurnCompleted / acknowledgeReview", () => {
 		it("opens a review receipt that survives a reload and clears it on acknowledgement", () => {
 			const agent = manager.createAgent(feature);

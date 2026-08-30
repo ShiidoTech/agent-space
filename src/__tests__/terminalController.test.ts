@@ -93,6 +93,7 @@ describe("TerminalController", () => {
 
 	const markAgentStarted = vi.fn();
 	const recordAgentFailure = vi.fn();
+	const advanceStartupStep = vi.fn();
 	const notifyChange = vi.fn();
 	const findContextByFeatureId = vi.fn();
 	const getAgent = vi.fn();
@@ -101,6 +102,14 @@ describe("TerminalController", () => {
 	const configureSession = vi.fn();
 	const isSessionAlive = vi.fn();
 	const getPaneStatus = vi.fn();
+	const getPaneStatusAsync = vi.fn();
+	const capturePane = vi.fn();
+	const capturePaneAsync = vi.fn();
+	const killSession = vi.fn();
+	const ensureRemainOnExit = vi.fn();
+	const ensureRemainOnExitAsync = vi.fn();
+	const clearRemainOnExitForSession = vi.fn();
+	const clearRemainOnExitForSessionAsync = vi.fn();
 	const resolveAgentTool = vi.fn();
 	const resolveAgentToolForAgent = vi.fn();
 	const buildLaunchCommand = vi.fn();
@@ -138,13 +147,21 @@ describe("TerminalController", () => {
 			return { dispose: vi.fn() };
 		}) as never);
 		findContextByFeatureId.mockReturnValue({
-			agentManager: { getAgent, markAgentStarted, recordAgentFailure },
+			agentManager: {
+				getAgent,
+				markAgentStarted,
+				recordAgentFailure,
+				advanceStartupStep,
+			},
 		});
 		getAgent.mockReturnValue({ ...agent, status: "stopped" });
 		adoptSession.mockReturnValue(false);
 		createCommand.mockReturnValue('tmux new-session -d -s "session" "claude"');
 		isSessionAlive.mockReturnValue(true);
 		getPaneStatus.mockReturnValue(null);
+		getPaneStatusAsync.mockResolvedValue(null);
+		capturePane.mockReturnValue(null);
+		capturePaneAsync.mockResolvedValue(null);
 		resolveAgentTool.mockReturnValue({
 			id: "claude",
 			name: "Claude Code",
@@ -174,6 +191,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -226,6 +251,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -265,6 +298,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -306,6 +347,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive: vi.fn().mockReturnValue(false),
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -346,6 +395,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive: vi.fn().mockReturnValue(false),
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -367,6 +424,119 @@ describe("TerminalController", () => {
 		expect(notifyChange).toHaveBeenCalledTimes(1);
 	});
 
+	// Cas E: a CLI that is present but exits immediately (e.g. `codex resume
+	// <id>` printing "No saved session found" and exiting) must surface its
+	// real exit code and captured output, not the generic "Check that the CLI
+	// is installed" message — the process demonstrably ran.
+	it("Cas E: surfaces the real exit code and pane output for a CLI that exits immediately", () => {
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
+			} as never,
+			{
+				resolveAgentTool,
+				resolveAgentToolForAgent,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		vi.mocked(exec).mockReturnValue("");
+		isSessionAlive.mockReturnValue(true);
+		getPaneStatus.mockReturnValue({ dead: true, exitCode: 1 });
+		capturePane.mockReturnValue(
+			'ERROR: No saved session found with ID "01a04fbe-thread".',
+		);
+
+		const terminal = controller.createTerminal(feature, agent, 0);
+
+		expect(terminal).toBeUndefined();
+		expect(killSession).toHaveBeenCalledWith("agent-space-f1-a1");
+		expect(recordAgentFailure).toHaveBeenCalledWith(
+			"a1",
+			"f1",
+			expect.stringContaining("exit code 1"),
+			1,
+		);
+		expect(recordAgentFailure).toHaveBeenCalledWith(
+			"a1",
+			"f1",
+			expect.stringContaining("No saved session found"),
+			1,
+		);
+		expect(recordAgentFailure).not.toHaveBeenCalledWith(
+			"a1",
+			"f1",
+			expect.stringContaining("Check that the CLI is installed"),
+			expect.anything(),
+		);
+	});
+
+	// Cas F: the worktree step must never be blamed for a failure that
+	// happened after the worktree and terminal both provably succeeded — here
+	// the tmux session comes up fine and only the provider process crashes.
+	it("Cas F: blames the provider startup step, not worktree, for a post-terminal crash", () => {
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSession,
+				createCommand,
+				configureSession,
+				isSessionAlive,
+				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
+			} as never,
+			{
+				resolveAgentTool,
+				resolveAgentToolForAgent,
+				buildLaunchCommand,
+				buildResumeLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+
+		vi.mocked(exec).mockReturnValue("");
+		isSessionAlive.mockReturnValue(true);
+		getPaneStatus.mockReturnValue({ dead: true, exitCode: 1 });
+
+		controller.createTerminal(feature, agent, 0);
+
+		expect(advanceStartupStep).toHaveBeenCalledWith("a1", "f1", "terminal");
+		expect(advanceStartupStep).toHaveBeenCalledWith("a1", "f1", "provider");
+		// "provider" was reached (and is therefore the step recordAgentFailure's
+		// real implementation would find `running`) strictly after "terminal" —
+		// a worktree/terminal that never ran would never call this at all.
+		const stepCalls = advanceStartupStep.mock.calls.map((call) => call[2]);
+		expect(stepCalls.indexOf("terminal")).toBeLessThan(
+			stepCalls.indexOf("provider"),
+		);
+	});
+
 	it("launches a fresh agent with the normal command even when resume was requested", () => {
 		const controller = new TerminalController(
 			{ findContextByFeatureId, notifyChange } as never,
@@ -378,6 +548,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -419,6 +597,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -460,6 +646,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -508,6 +702,14 @@ describe("TerminalController", () => {
 				isSessionAliveAsync,
 				adoptSessionAsync,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -563,6 +765,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -624,6 +834,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -676,6 +894,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -735,6 +961,14 @@ describe("TerminalController", () => {
 				isSessionAliveAsync,
 				adoptSessionAsync,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -778,6 +1012,14 @@ describe("TerminalController", () => {
 				configureSession,
 				isSessionAlive: sessionAliveMock,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -792,10 +1034,16 @@ describe("TerminalController", () => {
 			agentManager: {
 				markAgentStarted,
 				recordAgentFailure,
+				advanceStartupStep,
 				getAgents: vi.fn().mockReturnValue([{ ...agent, status: "running" }]),
 			},
 		});
-		getPaneStatus.mockReturnValue({ dead: true, exitCode: 17 });
+		// Alive (not dead) for the post-launch startup check, then dead once the
+		// terminal has actually closed later — this test is about a crash that
+		// happens after a genuinely successful launch, not an instant one.
+		getPaneStatus
+			.mockReturnValueOnce(null)
+			.mockReturnValue({ dead: true, exitCode: 17 });
 		vi.mocked(exec).mockReturnValue("");
 
 		const terminal = controller.createTerminal(
@@ -838,6 +1086,14 @@ describe("TerminalController", () => {
 				createShellCommand,
 				configureServiceSession,
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
@@ -884,6 +1140,14 @@ describe("TerminalController", () => {
 					configureSession,
 					isSessionAlive,
 					getPaneStatus,
+					getPaneStatusAsync,
+					capturePane,
+					capturePaneAsync,
+					killSession,
+					ensureRemainOnExit,
+					ensureRemainOnExitAsync,
+					clearRemainOnExitForSession,
+					clearRemainOnExitForSessionAsync,
 				} as never,
 				{
 					resolveAgentTool,
@@ -928,6 +1192,14 @@ describe("TerminalController", () => {
 					isSessionAliveAsync,
 					adoptSessionAsync,
 					getPaneStatus,
+					getPaneStatusAsync,
+					capturePane,
+					capturePaneAsync,
+					killSession,
+					ensureRemainOnExit,
+					ensureRemainOnExitAsync,
+					clearRemainOnExitForSession,
+					clearRemainOnExitForSessionAsync,
 				} as never,
 				{
 					resolveAgentTool,
@@ -974,6 +1246,14 @@ describe("TerminalController", () => {
 					isSessionAliveAsync,
 					adoptSessionAsync,
 					getPaneStatus,
+					getPaneStatusAsync,
+					capturePane,
+					capturePaneAsync,
+					killSession,
+					ensureRemainOnExit,
+					ensureRemainOnExitAsync,
+					clearRemainOnExitForSession,
+					clearRemainOnExitForSessionAsync,
 				} as never,
 				{
 					resolveAgentTool,
@@ -1021,6 +1301,14 @@ describe("TerminalController", () => {
 					isSessionAliveAsync,
 					adoptSessionAsync,
 					getPaneStatus,
+					getPaneStatusAsync,
+					capturePane,
+					capturePaneAsync,
+					killSession,
+					ensureRemainOnExit,
+					ensureRemainOnExitAsync,
+					clearRemainOnExitForSession,
+					clearRemainOnExitForSessionAsync,
 				} as never,
 				{
 					resolveAgentTool,
@@ -1064,6 +1352,14 @@ describe("TerminalController", () => {
 					isSessionAliveAsync,
 					adoptSessionAsync,
 					getPaneStatus,
+					getPaneStatusAsync,
+					capturePane,
+					capturePaneAsync,
+					killSession,
+					ensureRemainOnExit,
+					ensureRemainOnExitAsync,
+					clearRemainOnExitForSession,
+					clearRemainOnExitForSessionAsync,
 				} as never,
 				{
 					resolveAgentTool,
@@ -1121,6 +1417,14 @@ describe("TerminalController", () => {
 					isSessionAliveAsync,
 					adoptSessionAsync,
 					getPaneStatus,
+					getPaneStatusAsync,
+					capturePane,
+					capturePaneAsync,
+					killSession,
+					ensureRemainOnExit,
+					ensureRemainOnExitAsync,
+					clearRemainOnExitForSession,
+					clearRemainOnExitForSessionAsync,
 				} as never,
 				{
 					resolveAgentTool,
@@ -1164,6 +1468,14 @@ describe("TerminalController", () => {
 					isSessionAliveAsync,
 					adoptSessionAsync,
 					getPaneStatus,
+					getPaneStatusAsync,
+					capturePane,
+					capturePaneAsync,
+					killSession,
+					ensureRemainOnExit,
+					ensureRemainOnExitAsync,
+					clearRemainOnExitForSession,
+					clearRemainOnExitForSessionAsync,
 				} as never,
 				{
 					resolveAgentTool,
@@ -1196,6 +1508,14 @@ describe("TerminalController", () => {
 				createShellCommand,
 				configureServiceSession: vi.fn(),
 				getPaneStatus,
+				getPaneStatusAsync,
+				capturePane,
+				capturePaneAsync,
+				killSession,
+				ensureRemainOnExit,
+				ensureRemainOnExitAsync,
+				clearRemainOnExitForSession,
+				clearRemainOnExitForSessionAsync,
 			} as never,
 			{
 				resolveAgentTool,
