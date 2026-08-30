@@ -340,7 +340,9 @@ export class TmuxIntegration {
 	 * keeping the same tmux session (and therefore the same VS Code terminal
 	 * attached to it) rather than killing and recreating it. Used to reconnect
 	 * a live `opencode attach` pane to a replacement backend without dropping
-	 * the terminal the user has open.
+	 * the terminal the user has open. Runtime restoration uses this only for
+	 * providers whose native process must be restarted; a live direct OpenCode
+	 * pane is treated as already survived.
 	 *
 	 * Throws if the session does not exist or `respawn-pane` fails — callers
 	 * that want a kill/recreate fallback must catch and do so explicitly;

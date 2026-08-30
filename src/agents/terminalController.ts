@@ -6,7 +6,7 @@ import {
 } from "../projects/projectKnowledge";
 import type { ProjectManager } from "../projects/projectManager";
 import type { Agent, CodingTool, Feature, Service } from "../types";
-import { exec, execAsync, getTerminalShellArgs } from "../utils/platform";
+import { exec, getTerminalShellArgs } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import {
 	ensureHermesProjectSkillsTrusted,
@@ -584,9 +584,11 @@ export class TerminalController implements vscode.Disposable {
 				// before the CLI starts — identical ordering to the sync path —
 				// so a session created by THIS launch is the only one that can
 				// later be attributed to the agent.
-				await execAsync(this.tmux.createCommand(sessionName, launchCommand), {
-					cwd,
-				});
+				// `new-session -d` is detached: waiting on the shell wrapper here can
+				// inherit the CLI's lifetime and hit execAsync's 30s timeout. The
+				// synchronous call returns as soon as tmux accepts the session; all
+				// follow-up checks remain asynchronous below.
+				exec(this.tmux.createCommand(sessionName, launchCommand), { cwd });
 				this.tmux.configureSession(sessionName);
 				sessionReady = await this.tmux.isSessionAliveAsync(sessionName);
 				if (sessionReady) {

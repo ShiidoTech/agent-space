@@ -300,13 +300,7 @@ export class SessionBinder {
 			launchedAtMs: Date.now(),
 		};
 
-		// For controlled backends (e.g., OpenCode), get a provider scoped to this
-		// worktree with the backend's serverUrl. This MUST happen first so that
-		// both resume and fresh acquire use the same backend-scoped adapter.
-		const toolId = agent.toolId ?? "opencode";
-		const controlledProvider =
-			await this.toolRegistry.getControlledProviderForCwd(toolId, cwd);
-		const adapter = controlledProvider?.sessionAdapter ?? defaultAdapter;
+		const adapter = defaultAdapter;
 
 		if (resume && agent.sessionId && adapter.resumeConversation) {
 			if (!(await adapter.resumeConversation(agent.sessionId))) {

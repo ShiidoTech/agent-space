@@ -314,7 +314,7 @@ describe("TerminalController", () => {
 
 		expect(beforeLaunch).toHaveBeenCalledOnce();
 		expect(beforeLaunchAsync).not.toHaveBeenCalled();
-		expect(execAsync).toHaveBeenCalledOnce();
+		expect(exec).toHaveBeenCalledOnce();
 	});
 
 	it("coalesces Add Agent and focus into one runtime creation", async () => {
@@ -339,7 +339,7 @@ describe("TerminalController", () => {
 
 		expect(second).toBe(first);
 		await Promise.all([first, second]);
-		expect(execAsync).toHaveBeenCalledOnce();
+		expect(exec).toHaveBeenCalledOnce();
 	});
 
 	it("attaches an existing session without adoption or process creation", () => {
@@ -1192,7 +1192,7 @@ describe("TerminalController", () => {
 
 			expect(terminal).toBe(terminalInstance);
 			expect(terminalInstance.show).toHaveBeenCalled();
-			expect(vi.mocked(exec)).not.toHaveBeenCalled();
+			expect(vi.mocked(execAsync)).not.toHaveBeenCalled();
 			expect(vi.mocked(execAsync)).not.toHaveBeenCalled();
 			expect(adoptSession).not.toHaveBeenCalled();
 			expect(isSessionAlive).not.toHaveBeenCalled();
@@ -1305,7 +1305,7 @@ describe("TerminalController", () => {
 			expect(markAgentStarted).toHaveBeenCalledWith("a1", "f1");
 		});
 
-		it("spawns a fresh session via async exec only when no tmux session can be adopted", async () => {
+		it("spawns a fresh session without waiting for the CLI process", async () => {
 			const isSessionAliveAsync = vi.fn().mockResolvedValue(true);
 			const adoptSessionAsync = vi.fn().mockResolvedValue(false);
 			const controller = new TerminalController(
@@ -1345,11 +1345,11 @@ describe("TerminalController", () => {
 			);
 
 			expect(terminal).toBe(terminalInstance);
-			expect(vi.mocked(execAsync)).toHaveBeenCalledWith(
+			expect(vi.mocked(exec)).toHaveBeenCalledWith(
 				'tmux new-session -d -s "session" "claude"',
 				{ cwd: feature.worktreePath },
 			);
-			expect(vi.mocked(exec)).not.toHaveBeenCalled();
+			expect(vi.mocked(execAsync)).not.toHaveBeenCalled();
 			expect(adoptSession).not.toHaveBeenCalled();
 			expect(isSessionAlive).not.toHaveBeenCalled();
 		});

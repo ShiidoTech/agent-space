@@ -20,14 +20,11 @@ import {
 } from "./sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
 import { HermesSessionProvider } from "./sessionProviders/hermesSessionProvider";
-import { OpenCodeBackendManager } from "./sessionProviders/openCodeBackend";
 import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
 
 const claudeSessionAdapter = new ClaudeSessionProvider();
 const codexSessionAdapter = new CodexSessionProvider();
 const openCodeSessionAdapter = new OpenCodeSessionProvider();
-/** Shared backend manager — one `opencode serve` per worktree. */
-export const openCodeBackendManager = new OpenCodeBackendManager();
 
 /**
  * Per-home cache for Hermes session adapters. Each Hermes home directory
@@ -185,21 +182,10 @@ const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
 		resumeArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 	},
 	opencode: {
-		// Fresh launches belong to the native TUI. Controlled backends remain
-		// available to the explicit resume/reconnect path below.
+		// OpenCode owns session creation in its native TUI. Fresh agents remain
+		// unbound until the user explicitly links a SQLite session.
 		launchArgs: () => [],
-		resumeArgs: (sessionId, cwd) => {
-			if (!cwd || !sessionId) return [];
-			const handle = openCodeBackendManager.get(cwd);
-			const serverUrl = handle?.baseUrl;
-			if (serverUrl) {
-				const args = ["attach", serverUrl, "--session", sessionId];
-				args.push("--dir", cwd);
-				return args;
-			}
-			// Fail-closed: controlled path only. No standalone fallback.
-			return [];
-		},
+		resumeArgs: (sessionId) => (sessionId ? ["--session", sessionId] : []),
 	},
 };
 
@@ -603,38 +589,6 @@ export class CodingToolRegistry {
 	}
 
 	/**
-	 * Get a provider instance scoped to a specific worktree for controlled
-	 * backends (e.g., OpenCode). Ensures the backend is running and returns
-	 * a provider with the correct serverUrl. For providers without controlled
-	 * backends, returns the default provider.
-	 */
-	async getControlledProviderForCwd(
-		toolId: string,
-		cwd: string,
-	): Promise<CodingAgentProvider | undefined> {
-		const tool = this.resolveAgentTool(toolId);
-		const provider = this.getProvider(tool);
-		// Only OpenCode has a controlled backend currently.
-		if (toolId === "opencode" && provider.sessionAdapter?.acquireConversation) {
-			await openCodeBackendManager.ensure(cwd, "opencode", 10_000, {
-				serverPassword: "",
-			});
-			// Use the scoped provider from the backend manager (cached per worktree).
-			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
-			if (!scopedProvider) {
-				throw new Error(
-					`OpenCode backend started but no scoped provider for ${cwd}`,
-				);
-			}
-			return {
-				...provider,
-				sessionAdapter: scopedProvider,
-			};
-		}
-		return provider;
-	}
-
-	/**
 	 * Everything a diagnostic needs to explain how a persisted `toolId` is being
 	 * resolved right now: whether it is actually declared, which executable it
 	 * maps to, and which session store its provider will read. Resolved through
@@ -717,25 +671,10 @@ export class CodingToolRegistry {
 	getStructuredAttentionSignal(
 		tool: CodingTool,
 		sessionId: string,
-		cwd?: string,
+		_cwd?: string,
 	) {
 		const provider = this.getProvider(tool);
-		// For OpenCode, use the scoped provider from the backend manager
-		// which has the SSE event cache for the controlled backend.
-		let attentionProvider = provider;
-		if (tool.id === "opencode" && cwd) {
-			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
-			if (scopedProvider) {
-				attentionProvider = {
-					...provider,
-					sessionAdapter: scopedProvider,
-					getAttentionSignal: (sessionId) =>
-						scopedProvider.readAttention(sessionId) ?? undefined,
-					getAttentionSignalAsync: async (sessionId) =>
-						(await scopedProvider.readAttentionAsync(sessionId)) ?? undefined,
-				};
-			}
-		}
+		const attentionProvider = provider;
 		const signal = this.readAttentionSignalCached(attentionProvider, sessionId);
 		if (!signal) return undefined;
 		const statusCapability = {
@@ -752,25 +691,10 @@ export class CodingToolRegistry {
 	async getStructuredAttentionSignalAsync(
 		tool: CodingTool,
 		sessionId: string,
-		cwd?: string,
+		_cwd?: string,
 	): Promise<ProviderAttentionSignal | undefined> {
 		const provider = this.getProvider(tool);
-		// For OpenCode, use the scoped provider from the backend manager
-		// which has the SSE event cache for the controlled backend.
-		let attentionProvider = provider;
-		if (tool.id === "opencode" && cwd) {
-			const scopedProvider = openCodeBackendManager.getSessionProvider(cwd);
-			if (scopedProvider) {
-				attentionProvider = {
-					...provider,
-					sessionAdapter: scopedProvider,
-					getAttentionSignal: (sessionId) =>
-						scopedProvider.readAttention(sessionId) ?? undefined,
-					getAttentionSignalAsync: async (sessionId) =>
-						(await scopedProvider.readAttentionAsync(sessionId)) ?? undefined,
-				};
-			}
-		}
+		const attentionProvider = provider;
 		const key = `${attentionProvider.id}:${sessionId}`;
 		const cached = this.attentionCache.get(key);
 		if (cached && cached.expiresAt > Date.now())
