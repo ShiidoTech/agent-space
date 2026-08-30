@@ -319,6 +319,7 @@ describe("issue #120: non-structural notifyChange scope (zero-reload eligible)",
 		};
 		const projectManager = {
 			findContextByFeatureId: vi.fn(() => ctx),
+			peekWarmContext: vi.fn(() => ctx),
 			resolveFeature: vi.fn(() => ({ ctx, feature })),
 			notifyChange,
 		};

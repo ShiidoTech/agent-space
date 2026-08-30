@@ -69,6 +69,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 	const ctx = { agentManager: { getAgents, observe, observeCached: observe } };
 	const resolveFeature = vi.fn().mockReturnValue({ ctx, feature });
 	const findContextByFeatureId = vi.fn(() => ctx);
+	const peekWarmContext = vi.fn(() => ctx);
 
 	let receiveMessage: ReturnType<typeof vi.fn>;
 	let getTerminal: ReturnType<typeof vi.fn>;
@@ -119,6 +120,7 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 				resolveFeature,
 				getContext: vi.fn(() => undefined),
 				findContextByFeatureId,
+				peekWarmContext,
 			} as never,
 			{
 				getSnapshot,
@@ -1355,6 +1357,7 @@ describe("HomePanel navigation (P0 zero-I/O UI)", () => {
 				resolveFeatureCached,
 				getContext: vi.fn(() => undefined),
 				findContextByFeatureId: vi.fn(() => ctx),
+				peekWarmContext: vi.fn(() => ctx),
 			} as never,
 			{
 				getSnapshot: vi.fn(() => undefined),

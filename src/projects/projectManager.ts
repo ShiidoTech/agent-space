@@ -386,16 +386,17 @@ export class ProjectManager {
 	}
 
 	/**
-	 * Zero-I/O twin of {@link resolveFeature}: uses
-	 * {@link FeatureManager.getFeatureCached} instead of `getFeature()`, so it
-	 * never triggers a synchronous Git branch-link reconciliation. For
-	 * render/navigation paths (P0 zero-I/O UI mandate) that only need feature
-	 * identity, not up-to-the-moment checkout state.
+	 * Zero-I/O twin of {@link resolveFeature}: uses {@link peekWarmContext}
+	 * (strictly cache-only, never lazy-inits a project's Store/FeatureManager)
+	 * and {@link FeatureManager.getFeatureCached} (no Git branch-link
+	 * reconciliation). For render/navigation paths (P0 zero-I/O UI mandate)
+	 * that only need feature identity, not up-to-the-moment checkout state —
+	 * a cold cache returns `undefined` rather than paying to warm it.
 	 */
 	resolveFeatureCached(
 		featureId: string,
 	): { ctx: ProjectContext; feature: Feature } | undefined {
-		const ctx = this.findContextByFeatureId(featureId);
+		const ctx = this.peekWarmContext(featureId);
 		if (!ctx) return undefined;
 
 		if (featureId.startsWith("base:")) {

@@ -621,7 +621,7 @@ export class HomePanel {
 
 	// -- Service actions ------------------------------------------
 	private handleStopService(featureId: string, serviceId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 		const service = ctx.serviceManager
 			.getServices(featureId)
@@ -689,7 +689,7 @@ export class HomePanel {
 	}
 
 	private handleKillAgentSession(featureId: string, agentId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 		this.terminalController?.killAgentTerminal(agentId, featureId);
 		ctx.agentManager.closeAgent(agentId, featureId);
@@ -697,7 +697,7 @@ export class HomePanel {
 	}
 
 	private handleKillServiceSession(featureId: string, serviceId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 		const service = ctx.serviceManager
 			.getServices(featureId)
@@ -712,7 +712,7 @@ export class HomePanel {
 	}
 
 	private handleKillFeatureSessions(featureId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 
 		this.terminalController?.killFeatureTerminals(featureId);
@@ -744,9 +744,7 @@ export class HomePanel {
 	// -- Activity polling -----------------------------------------
 	private sendActivityForAgent(agentId: string): void {
 		if (!this.currentFeatureId) return;
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		if (!ctx) return;
 		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		const agent = agents.find((a) => a.id === agentId);
@@ -765,9 +763,7 @@ export class HomePanel {
 
 	private sendActivityForAgents(agentIds: string[]): void {
 		if (!this.currentFeatureId || agentIds.length === 0) return;
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		if (!ctx) return;
 		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		for (const agentId of agentIds) {
@@ -787,9 +783,7 @@ export class HomePanel {
 
 	private sendActivityForService(serviceId: string): void {
 		if (!this.currentFeatureId) return;
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		if (!ctx) return;
 		const services = ctx.serviceManager.getServices(this.currentFeatureId);
 		const service = services.find((s) => s.id === serviceId);
@@ -805,9 +799,7 @@ export class HomePanel {
 
 	private sendActivityForServices(serviceIds: string[]): void {
 		if (!this.currentFeatureId || serviceIds.length === 0) return;
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		if (!ctx) return;
 		const services = ctx.serviceManager.getServices(this.currentFeatureId);
 		for (const serviceId of serviceIds) {
@@ -840,14 +832,13 @@ export class HomePanel {
 	 */
 	private async sendRuntimeUpdateAsync(): Promise<void> {
 		if (!this.currentFeatureId) return;
-		// Zero-I/O: findContextByFeatureId is an in-memory lookup, unlike
-		// resolveFeature() — which resolves through FeatureManager.getFeature()
-		// and can trigger a synchronous Git branch reconciliation. This patch
-		// path only ever needs the project context, never the resolved
-		// Feature record itself (P0 zero-I/O UI mandate).
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		// Zero-I/O: peekWarmContext is a strictly cache-only, in-memory lookup
+		// — unlike resolveFeature()/findContextByFeatureId(), which can lazily
+		// init a cold project context (disk reads) or trigger a synchronous
+		// Git branch reconciliation. This patch path only ever needs the
+		// project context, never the resolved Feature record itself (P0
+		// zero-I/O UI mandate).
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		const snapshot = this.featureStateCoordinator.getSnapshot(
 			this.currentFeatureId,
 		);
@@ -1028,7 +1019,7 @@ export class HomePanel {
 	private observeAgentCached(featureId: string, agent: Agent) {
 		return (
 			this.projectManager
-				.findContextByFeatureId(featureId)
+				.peekWarmContext(featureId)
 				?.agentManager.observeCached(agent) ?? {
 				identity: { agentName: agent.name },
 				lifecycle: { state: agent.status, source: "agentspace" as const },

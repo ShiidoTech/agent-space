@@ -335,7 +335,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private handleStopService(featureId: string, serviceId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 		const service = ctx.serviceManager
 			.getServices(featureId)
@@ -374,7 +374,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		featureId: string,
 		agentId: string,
 	): Promise<void> {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 
 		const agents = ctx.agentManager.getAgentsReadModel(featureId);
@@ -651,7 +651,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	private observeAgentCached(featureId: string, agent: Agent) {
 		return (
 			this.projectManager
-				.findContextByFeatureId(featureId)
+				.peekWarmContext(featureId)
 				?.agentManager.observeCached(agent) ?? {
 				identity: { agentName: agent.name },
 				lifecycle: { state: agent.status, source: "agentspace" as const },

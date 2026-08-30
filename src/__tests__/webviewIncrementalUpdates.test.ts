@@ -260,6 +260,17 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 						})),
 					},
 				})),
+				peekWarmContext: vi.fn(() => ({
+					agentManager: {
+						observeCached: vi.fn(() => ({
+							identity: { agentName: agent.name },
+							lifecycle: { state: "running", source: "agentspace" },
+							attention: { state: "working" },
+							session: { state: "bound" },
+							review: { pending: false },
+						})),
+					},
+				})),
 			} as never,
 			{
 				getSnapshot,
