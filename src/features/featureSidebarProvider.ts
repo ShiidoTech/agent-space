@@ -22,6 +22,7 @@ import {
 	ICON_RESTART,
 	ICON_STOP,
 } from "../constants/icons";
+import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import { recordFullRebuild } from "../diagnostics/webviewRebuildDiagnostics";
 import type {
 	ProjectContext,
@@ -206,7 +207,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	/** Update live state without replacing the webview DOM or its local UI state. */
 	refreshState(): void {
-		this.sendUpdate().catch(() => {});
+		measurePerfAsync("sidebar.refreshState", () => this.sendUpdate()).catch(
+			() => {},
+		);
 	}
 
 	private async refreshAsync(): Promise<void> {

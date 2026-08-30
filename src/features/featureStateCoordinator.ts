@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import type { Disposable } from "vscode";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
+import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
 import {
 	type FeatureGitObservations,
@@ -649,6 +650,12 @@ export class FeatureStateCoordinator implements Disposable {
 	 * project; this is what keeps the sidebar live.
 	 */
 	async reconcilePresence(scopeProjectId?: string): Promise<void> {
+		return measurePerfAsync("runtime.reconcile", () =>
+			this.reconcilePresenceInner(scopeProjectId),
+		);
+	}
+
+	private async reconcilePresenceInner(scopeProjectId?: string): Promise<void> {
 		const manager = this.projectManager;
 		if (!manager || this.disposed) return;
 		const tmuxSessions = this.observeTmuxRuntime(manager);

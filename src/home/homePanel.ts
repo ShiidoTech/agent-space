@@ -11,6 +11,7 @@ import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_BRAND } from "../constants/icons";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
+import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import { recordFullRebuild } from "../diagnostics/webviewRebuildDiagnostics";
 import {
 	type FeatureCockpitPresentation,
@@ -250,7 +251,9 @@ export class HomePanel {
 			? `Agent Space: ${resolved.feature.branch}`
 			: "Agent Space";
 		this.panel.reveal(vscode.ViewColumn.One, true);
-		this.sendRuntimeUpdateAsync().catch(() => {});
+		measurePerfAsync("Home.refreshLive", () =>
+			this.sendRuntimeUpdateAsync(),
+		).catch(() => {});
 		this.panel.webview.html = this.getFeatureHtml(featureId);
 		agentSpaceDiagnostic(
 			`focus feature:${featureId} local-render ${Date.now() - startedAt}ms`,
@@ -331,8 +334,14 @@ export class HomePanel {
 	 * the affected agents/services already exist in this panel's DOM.
 	 */
 	public refreshLiveState(): void {
-		if (this.currentFeatureId) this.sendRuntimeUpdateAsync().catch(() => {});
-		this.sendFleetUpdateAsync().catch(() => {});
+		if (this.currentFeatureId) {
+			measurePerfAsync("Home.refreshLive", () =>
+				this.sendRuntimeUpdateAsync(),
+			).catch(() => {});
+		}
+		measurePerfAsync("Home.refreshLive.fleet", () =>
+			this.sendFleetUpdateAsync(),
+		).catch(() => {});
 	}
 
 	/**
