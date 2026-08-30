@@ -403,6 +403,39 @@ export class TmuxIntegration {
 		}
 	}
 
+	/**
+	 * Non-blocking twin of {@link observeSessions}. This is the single global
+	 * tmux sweep behind `FeatureStateCoordinator.reconcilePresence()` — the
+	 * cheap tier that runs frequently to keep the sidebar/Home live — so it
+	 * must never run a synchronous `tmux list-sessions` on that tick (P0
+	 * zero-I/O UI mandate).
+	 */
+	async observeSessionsAsync(): Promise<TmuxSessionsObservation> {
+		if (!(await this.isAvailableAsync())) {
+			return { status: "unknown", detail: "tmux is not available" };
+		}
+		try {
+			const { stdout } = await execFileAsync("tmux", [
+				"list-sessions",
+				"-F",
+				"#{session_name}",
+			]);
+			const sessions = stdout
+				.split("\n")
+				.map((line) => line.trim())
+				.filter(Boolean);
+			return { status: "known", sessions };
+		} catch (error) {
+			if (noTmuxSessionsAreRunning(error)) {
+				return { status: "known", sessions: [] };
+			}
+			return {
+				status: "unknown",
+				detail: error instanceof Error ? error.message : String(error),
+			};
+		}
+	}
+
 	killSession(sessionName: string): void {
 		try {
 			execFile("tmux", ["kill-session", "-t", sessionName]);

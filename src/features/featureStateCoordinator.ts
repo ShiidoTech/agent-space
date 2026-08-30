@@ -658,7 +658,10 @@ export class FeatureStateCoordinator implements Disposable {
 	private async reconcilePresenceInner(scopeProjectId?: string): Promise<void> {
 		const manager = this.projectManager;
 		if (!manager || this.disposed) return;
-		const tmuxSessions = this.observeTmuxRuntime(manager);
+		// Non-blocking: this is the global tmux sweep behind the cheap
+		// presence tier that keeps the sidebar/Home live — it must never run
+		// a synchronous `tmux list-sessions` (P0 zero-I/O UI mandate).
+		const tmuxSessions = await this.observeTmuxRuntimeAsync(manager);
 		const contexts = scopeProjectId
 			? [manager.getContext(scopeProjectId)].filter(
 					(ctx): ctx is ProjectContext => ctx !== undefined,
@@ -754,6 +757,16 @@ export class FeatureStateCoordinator implements Disposable {
 		manager: ProjectManager,
 	): RuntimeObservation<readonly string[]> {
 		const observation = manager.observeTmuxSessions();
+		return observation.status === "known"
+			? knownRuntime(observation.sessions)
+			: unknownRuntime("read_failed", observation.detail);
+	}
+
+	/** Non-blocking twin of {@link observeTmuxRuntime}, for `reconcilePresenceInner`. */
+	private async observeTmuxRuntimeAsync(
+		manager: ProjectManager,
+	): Promise<RuntimeObservation<readonly string[]>> {
+		const observation = await manager.observeTmuxSessionsAsync();
 		return observation.status === "known"
 			? knownRuntime(observation.sessions)
 			: unknownRuntime("read_failed", observation.detail);

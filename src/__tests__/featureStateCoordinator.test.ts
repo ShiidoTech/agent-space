@@ -182,6 +182,10 @@ function setup(
 			status: "known" as const,
 			sessions: [] as string[],
 		})),
+		observeTmuxSessionsAsync: vi.fn(async () => ({
+			status: "known" as const,
+			sessions: [] as string[],
+		})),
 		agentTmuxSessionName: vi.fn(
 			(featureId: string, agentId: string, persisted?: string) =>
 				persisted ?? `agent-space-${featureId}-${agentId}`,
@@ -1625,6 +1629,10 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 			status: "known" as const,
 			sessions: [] as string[],
 		})),
+		observeTmuxSessionsAsync: vi.fn(async () => ({
+			status: "known" as const,
+			sessions: [] as string[],
+		})),
 		agentTmuxSessionName: vi.fn(
 			(featureId: string, agentId: string, persisted?: string) =>
 				persisted ?? `agent-space-${featureId}-${agentId}`,
@@ -2121,6 +2129,17 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("reconcilePresence sweeps tmux through the async, non-blocking twin — never the sync observeTmuxSessions", async () => {
+		const fixture = setup();
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcilePresence();
+
+		expect(fixture.manager.observeTmuxSessionsAsync).toHaveBeenCalled();
+		expect(fixture.manager.observeTmuxSessions).not.toHaveBeenCalled();
+		coordinator.dispose();
+	});
+
 	it("a feature seeded only by reconcilePresence is still stale — a runtime tick must not fake deep freshness", async () => {
 		const inspects = {
 			p1: vi.fn(async () => git(feature("f1"))),
@@ -2429,6 +2448,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				status: "known" as const,
 				sessions: [] as string[],
 			})),
+			observeTmuxSessionsAsync: vi.fn(async () => ({
+				status: "known" as const,
+				sessions: [] as string[],
+			})),
 			agentTmuxSessionName: vi.fn(() => undefined),
 			findContextByFeatureId: vi.fn(() => ctx),
 			resolveFeature: vi.fn((featureId: string) => {
@@ -2539,6 +2562,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				),
 				listTmuxSessions: vi.fn(() => []),
 				observeTmuxSessions: vi.fn(() => ({
+					status: "known" as const,
+					sessions: [] as string[],
+				})),
+				observeTmuxSessionsAsync: vi.fn(async () => ({
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
@@ -2733,6 +2760,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
+				observeTmuxSessionsAsync: vi.fn(async () => ({
+					status: "known" as const,
+					sessions: [] as string[],
+				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
 						persisted ?? `agent-space-${fId}-${aId}`,
@@ -2905,6 +2936,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
+				observeTmuxSessionsAsync: vi.fn(async () => ({
+					status: "known" as const,
+					sessions: [] as string[],
+				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
 						persisted ?? `agent-space-${fId}-${aId}`,
@@ -3066,6 +3101,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
+				observeTmuxSessionsAsync: vi.fn(async () => ({
+					status: "known" as const,
+					sessions: [] as string[],
+				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
 						persisted ?? `agent-space-${fId}-${aId}`,
@@ -3216,6 +3255,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				),
 				listTmuxSessions: vi.fn(() => []),
 				observeTmuxSessions: vi.fn(() => ({
+					status: "known" as const,
+					sessions: [] as string[],
+				})),
+				observeTmuxSessionsAsync: vi.fn(async () => ({
 					status: "known" as const,
 					sessions: [] as string[],
 				})),

@@ -264,6 +264,11 @@ export class ProjectManager {
 		return this.tmux.observeSessions();
 	}
 
+	/** Non-blocking twin of {@link observeTmuxSessions}, for hot reconciliation ticks. */
+	observeTmuxSessionsAsync() {
+		return this.tmux.observeSessionsAsync();
+	}
+
 	agentTmuxSessionName(
 		featureId: string,
 		agentId: string,

@@ -561,6 +561,48 @@ describe("TmuxIntegration", () => {
 		});
 	});
 
+	describe("observeSessionsAsync", () => {
+		it("lists sessions using only the async exec path", async () => {
+			mockExecFileAsync
+				.mockResolvedValueOnce({ stdout: "", stderr: "" }) // isAvailableAsync's `tmux -V`
+				.mockResolvedValueOnce({
+					stdout: "agent-space-f1-a1\nagent-space-f2-a1\n",
+					stderr: "",
+				});
+			await expect(tmux.observeSessionsAsync()).resolves.toEqual({
+				status: "known",
+				sessions: ["agent-space-f1-a1", "agent-space-f2-a1"],
+			});
+			expect(mockExecFile).not.toHaveBeenCalled();
+			expect(mockExec).not.toHaveBeenCalled();
+			expect(mockCommandExists).not.toHaveBeenCalled();
+		});
+
+		it("reports empty sessions rather than unknown when tmux has no server running", async () => {
+			mockExecFileAsync
+				.mockResolvedValueOnce({ stdout: "", stderr: "" })
+				.mockRejectedValueOnce(
+					Object.assign(new Error("no server running on ..."), {
+						status: 1,
+						stderr: "no server running on /tmp/tmux-1000/default",
+					}),
+				);
+			await expect(tmux.observeSessionsAsync()).resolves.toEqual({
+				status: "known",
+				sessions: [],
+			});
+		});
+
+		it("returns unknown without touching sync exec when tmux itself is unavailable", async () => {
+			mockExecFileAsync.mockRejectedValueOnce(new Error("not found"));
+			await expect(tmux.observeSessionsAsync()).resolves.toMatchObject({
+				status: "unknown",
+			});
+			expect(mockExecFile).not.toHaveBeenCalled();
+			expect(mockExec).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("adoptSessionAsync", () => {
 		it("returns true when the preferred session already exists, using only async exec", async () => {
 			mockExecFileAsync
