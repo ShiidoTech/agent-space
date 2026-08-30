@@ -976,6 +976,14 @@ export class HomePanel {
 				).length,
 			};
 		});
+		const projectUpdates = [
+			...new Set(snapshots.map((snapshot) => snapshot.projectId)),
+		].map((projectId) => ({
+			id: projectId,
+			...this.runtimeTotals(
+				snapshots.filter((snapshot) => snapshot.projectId === projectId),
+			),
+		}));
 		this.panel.webview.postMessage({
 			type: "fleetUpdate",
 			target: this.currentFeatureId
@@ -989,7 +997,29 @@ export class HomePanel {
 			rollup,
 			agents: agentUpdates,
 			features: featureUpdates,
+			projects: projectUpdates,
+			totals: this.runtimeTotals(snapshots),
 		});
+	}
+
+	private runtimeTotals(snapshots: readonly FeatureSnapshot[]) {
+		let agents = 0;
+		let scripts = 0;
+		let attention = 0;
+		let activeFeatures = 0;
+		for (const snapshot of snapshots) {
+			if (
+				!snapshot.feature.id.startsWith("base:") &&
+				snapshot.feature.status !== "done"
+			)
+				activeFeatures += 1;
+			if (snapshot.runtime.agents.status === "known")
+				agents += snapshot.runtime.agents.value.length;
+			if (snapshot.runtime.services.status === "known")
+				scripts += snapshot.runtime.services.value.length;
+			attention += snapshot.attention.length;
+		}
+		return { activeFeatures, agents, scripts, attention };
 	}
 
 	private snapshotGitStats(snapshot: FeatureSnapshot): GitStats | null {
@@ -1286,12 +1316,10 @@ export class HomePanel {
 			);
 			const totalsChips = [
 				`<span class="portfolio-total-chip"><strong>${contexts.length}</strong> project${contexts.length === 1 ? "" : "s"}</span>`,
-				`<span class="portfolio-total-chip"><strong>${totals.activeFeatures}</strong> active feature${totals.activeFeatures === 1 ? "" : "s"}</span>`,
-				`<span class="portfolio-total-chip"><strong>${totals.agents}</strong> agent${totals.agents === 1 ? "" : "s"}</span>`,
-				`<span class="portfolio-total-chip"><strong>${totals.scripts}</strong> script${totals.scripts === 1 ? "" : "s"}</span>`,
-				totals.attention > 0
-					? `<span class="portfolio-total-chip attention clickable" role="button" title="List every attention item" onclick="showProblems()"><strong>${totals.attention}</strong> need${totals.attention === 1 ? "s" : ""} attention</span>`
-					: "",
+				`<span class="portfolio-total-chip" data-portfolio-total="activeFeatures"><strong>${totals.activeFeatures}</strong> active feature${totals.activeFeatures === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip" data-portfolio-total="agents"><strong>${totals.agents}</strong> agent${totals.agents === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip" data-portfolio-total="scripts"><strong>${totals.scripts}</strong> script${totals.scripts === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip attention clickable" data-portfolio-total="attention" role="button" title="List every attention item" onclick="showProblems()" style="display: ${totals.attention > 0 ? "" : "none"}"><strong>${totals.attention}</strong> need${totals.attention === 1 ? "s" : ""} attention</span>`,
 			].join("");
 
 			// For "New Feature" button, use first project if only one
@@ -1991,9 +2019,9 @@ export class HomePanel {
 				<div id="fleet-rollup-project-${projectId}" class="fleet-rollup">${this.renderFleetRollupForSnapshots(snapshots)}</div>
 				<div class="project-overview-grid">
 					<div><strong>${featureSnapshots.length}</strong><span>Features</span></div>
-					<div><strong>${featureSnapshots.filter((snapshot) => snapshot.feature.status === "active").length}</strong><span>Active</span></div>
-					<div><strong>${projectAgentCount ?? "?"}</strong><span>Agents</span></div>
-					<div><strong>${projectServiceCount ?? "?"}</strong><span>Scripts</span></div>
+					<div data-project-overview-total="${projectId}:activeFeatures"><strong>${featureSnapshots.filter((snapshot) => snapshot.feature.status === "active").length}</strong><span>Active</span></div>
+					<div data-project-overview-total="${projectId}:agents"><strong>${projectAgentCount ?? "?"}</strong><span>Agents</span></div>
+					<div data-project-overview-total="${projectId}:scripts"><strong>${projectServiceCount ?? "?"}</strong><span>Scripts</span></div>
 				</div>
 				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong> ${baseCommitLabel ? `&middot; <span title="Observed base SHA">${this.escapeHtml(baseCommitLabel)}</span>` : ""}</p>
 				<div class="project-base-chips">${referenceHealthChip}${baseStateChips}${baseUpdateAction}</div>
@@ -2466,8 +2494,8 @@ export class HomePanel {
 			</div>
 			<div class="portfolio-card-stats">
 				<span class="portfolio-stat"><strong>${summary.activeFeatureCount}</strong>/${summary.featureCount} features</span>
-				<span class="portfolio-stat"><strong>${summary.agentsActive}</strong> agent${summary.agentsActive === 1 ? "" : "s"}</span>
-				<span class="portfolio-stat"><strong>${summary.servicesActive}</strong> script${summary.servicesActive === 1 ? "" : "s"}</span>
+				<span class="portfolio-stat" data-project-total="${projectId}:agents"><strong>${summary.agentsActive}</strong> agent${summary.agentsActive === 1 ? "" : "s"}</span>
+				<span class="portfolio-stat" data-project-total="${projectId}:scripts"><strong>${summary.servicesActive}</strong> script${summary.servicesActive === 1 ? "" : "s"}</span>
 			</div>
 			<div class="portfolio-features">${preview}</div>
 			<div class="portfolio-card-footer">

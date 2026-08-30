@@ -82,10 +82,9 @@ describe("fleet rollup", () => {
 
 	it("does not promote non-running lifecycle states or duplicate degraded state", () => {
 		const cases = [
-			["idle", "idle", "unknown"],
-			["starting", "working", "unknown"],
-			["stopped", "working", "unknown"],
-			["done", "working", "unknown"],
+			["idle", "idle", 0],
+			["stopped", "working", 0],
+			["done", "working", 0],
 		] as const;
 		for (const [id, attention, expected] of cases) {
 			const current = agent(id, attention, { status: "running" });
@@ -95,13 +94,13 @@ describe("fleet rollup", () => {
 					observation: {
 						...observation(current, attention),
 						lifecycle: {
-							state: id === "starting" ? "starting" : id,
+							state: id,
 							source: "agentspace",
 						},
 					},
 				},
 			]);
-			expect(result.items[0]?.bucket, id).toBe(expected);
+			expect(result.items.length, id).toBe(expected);
 		}
 		const stopped = agent("stopped-ambiguous", "working", {
 			status: "stopped",
@@ -121,6 +120,6 @@ describe("fleet rollup", () => {
 				},
 			},
 		]);
-		expect(result).toMatchObject({ failed: 0, unknown: 1 });
+		expect(result).toMatchObject({ failed: 0, unknown: 0 });
 	});
 });

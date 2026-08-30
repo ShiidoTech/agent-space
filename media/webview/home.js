@@ -389,9 +389,10 @@ function updateAttention(agent) {
  */
 function patchKeyedFragment(el, html, key) {
 	if (key !== undefined && el.dataset.key === key) return;
-	const focusedFleetItem = typeof el.contains === "function" && el.contains(document.activeElement)
-		? document.activeElement?.getAttribute("data-fleet-item")
-		: null;
+	const focusedFleetItem =
+		typeof el.contains === "function" && el.contains(document.activeElement)
+			? document.activeElement?.getAttribute("data-fleet-item")
+			: null;
 	el.innerHTML = html;
 	if (key !== undefined) el.dataset.key = key;
 	if (focusedFleetItem) {
@@ -515,6 +516,42 @@ window.addEventListener("message", (event) => {
 				);
 				if (counts)
 					counts.textContent = `${feature.activeAgents} agent${feature.activeAgents === 1 ? "" : "s"}${feature.runningServices ? ` · ${feature.runningServices} script${feature.runningServices === 1 ? "" : "s"}` : ""}`;
+			}
+			for (const project of message.projects || []) {
+				for (const kind of ["activeFeatures", "agents", "scripts"]) {
+					const value = project[kind];
+					for (const selector of [
+						"data-project-total",
+						"data-project-overview-total",
+					]) {
+						const el = document.querySelector(
+							`[${selector}="${project.id}:${kind}"]`,
+						);
+						if (el) {
+							const strong = el.querySelector("strong");
+							if (strong) strong.textContent = String(value ?? "?");
+						}
+					}
+				}
+			}
+			if (message.totals) {
+				for (const kind of [
+					"activeFeatures",
+					"agents",
+					"scripts",
+					"attention",
+				]) {
+					const el = document.querySelector(
+						`[data-portfolio-total="${kind}"] strong`,
+					);
+					if (el) {
+						el.textContent = String(message.totals[kind]);
+						if (kind === "attention" && el.parentElement) {
+							el.parentElement.style.display =
+								message.totals[kind] > 0 ? "" : "none";
+						}
+					}
+				}
 			}
 			break;
 		}

@@ -45,6 +45,11 @@ export function projectFleetRollup(
 	const items: FleetRollupItem[] = [];
 	for (const input of inputs) {
 		const { agent, observation } = input;
+		// Completed, stopped, and idle agents are healthy inventory, not active
+		// Fleet work. Do not turn them into an "unknown" attention bucket.
+		if (["done", "stopped", "idle"].includes(observation.lifecycle.state)) {
+			continue;
+		}
 		const bindingDegraded =
 			agent.sessionBinding?.state === "ambiguous" ||
 			agent.sessionBinding?.state === "unverified";

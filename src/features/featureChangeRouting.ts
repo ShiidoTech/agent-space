@@ -15,10 +15,9 @@ export interface FeatureChangeRoutingDeps {
 	 */
 	patchHomeFeature(featureId: string): boolean;
 	/**
-	 * Rebuild only the singleton portfolio/project Home panel — never a
-	 * Feature panel. Called at most once per flush, only when at least one
-	 * runtime-changed Feature had no open panel to patch (portfolio/project
-	 * rollups aren't incremental yet — issue #120 follow-up).
+	 * Patch the singleton portfolio/project Home panel — never a Feature
+	 * panel. Called once per runtime-only flush so its aggregate totals stay in
+	 * sync even when a Feature panel is also open.
 	 */
 	refreshHomeInstance(): void;
 	nudgeAttention(): void;
@@ -35,10 +34,9 @@ export interface FeatureChangeRoutingDeps {
  * stale delivery/Git state is never shown.
  *
  * Within a runtime-only window, each changed Feature's own open panel (if
- * any) is patched directly; a Feature with no open panel never triggers a
- * rebuild of other, unrelated Feature panels — at most one bounded
- * portfolio-singleton refresh covers that case, regardless of how many
- * such Features changed in the window.
+ * any) is patched directly; the portfolio singleton is also patched once so
+ * its aggregate state stays current, without rebuilding unrelated Feature
+ * panels.
  */
 export function createFeatureChangeFlusher(
 	deps: FeatureChangeRoutingDeps,
@@ -69,13 +67,10 @@ export function createFeatureChangeFlusher(
 
 			deps.refreshSidebarState();
 			if (flushOnlyRuntime && flushFeatureIds.length > 0) {
-				let needsInstanceRefresh = false;
 				for (const featureId of flushFeatureIds) {
-					if (!deps.patchHomeFeature(featureId)) {
-						needsInstanceRefresh = true;
-					}
+					deps.patchHomeFeature(featureId);
 				}
-				if (needsInstanceRefresh) deps.refreshHomeInstance();
+				deps.refreshHomeInstance();
 			} else {
 				deps.refreshHomeAll();
 			}
