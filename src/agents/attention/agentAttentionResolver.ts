@@ -1,7 +1,7 @@
 import type { Agent, AgentAttentionStatus, AgentStatus } from "../../types";
 import type { CodingToolRegistry } from "../codingToolRegistry";
 import type { ProviderAttentionSignal } from "../providers/types";
-import type { TmuxIntegration } from "../tmux";
+import type { TmuxIntegration, TmuxPaneObservation } from "../tmux";
 
 export interface AgentAttentionSnapshot {
 	status: AgentAttentionStatus | "unsupported";
@@ -146,12 +146,18 @@ export class AgentAttentionResolver {
 	 * `knownAlive`, when given, is tmux liveness the caller already resolved
 	 * this tick (its own single global sweep) — skips this method's own
 	 * `isSessionAliveAsync` probe entirely (P0 mandate: O(1) tmux observation
-	 * per tick, not one probe per agent per resolver).
+	 * per tick, not one probe per agent per resolver). `knownPane`, when
+	 * given alongside it (`null` is a valid "known absent" value, distinct
+	 * from "not supplied"), is that same sweep's dead/exit-code/tty record —
+	 * skips this method's own `getPaneStatusAsync` probe too, so a caller
+	 * with a canonical `list-panes -a` sweep in hand never pays a second
+	 * tmux round trip per agent for pane status.
 	 */
 	async resolveAsync(
 		agent: Agent,
 		lifecycleState?: AgentStatus,
 		knownAlive?: boolean,
+		knownPane?: TmuxPaneObservation | null,
 	): Promise<AgentAttentionSnapshot> {
 		if ((lifecycleState ?? agent.status) === "done") {
 			return {
@@ -203,10 +209,14 @@ export class AgentAttentionResolver {
 		}
 
 		let pane: Awaited<ReturnType<TmuxIntegration["getPaneStatusAsync"]>> = null;
-		try {
-			pane = (await this.tmux.getPaneStatusAsync?.(sessionName)) ?? null;
-		} catch {
-			pane = null;
+		if (knownPane !== undefined) {
+			pane = knownPane;
+		} else {
+			try {
+				pane = (await this.tmux.getPaneStatusAsync?.(sessionName)) ?? null;
+			} catch {
+				pane = null;
+			}
 		}
 		if (pane?.dead) {
 			if (pane.exitCode !== 0) {

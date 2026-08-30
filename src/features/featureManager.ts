@@ -140,6 +140,31 @@ export class FeatureManager {
 		};
 	}
 
+	/**
+	 * Zero-I/O twin of {@link getBaseFeature}: never runs Git. Uses the
+	 * configured `baseBranch` or whatever `getBaseBranch()` has already
+	 * cached from a prior call — never a fresh `git rev-parse` — and falls
+	 * back to the explicit "(unknown base)" placeholder otherwise. For
+	 * render/navigation paths (P0 zero-I/O UI mandate) that only need the
+	 * base card's identity, not an up-to-the-moment detected branch.
+	 */
+	getBaseFeatureCached(projectId: string): Feature {
+		const branch =
+			this.cachedBaseBranch ||
+			this.config.baseBranch?.trim() ||
+			"(unknown base)";
+		return {
+			id: `base:${projectId}`,
+			name: branch,
+			branch,
+			worktreePath: this.repoRoot,
+			status: "active",
+			color: "terminal.ansiBlue",
+			isolation: "shared",
+			createdAt: new Date(0).toISOString(),
+		};
+	}
+
 	/** The effective base branch (configured, or checked-out as a fallback). */
 	getBaseBranchName(): string {
 		return this.getBaseBranch();

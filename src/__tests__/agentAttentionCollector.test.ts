@@ -36,6 +36,13 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 		status: "idle",
 	};
 
+	function observeTmuxPanesAsyncMock() {
+		return vi.fn(async () => ({
+			status: "known" as const,
+			panes: new Map(),
+		}));
+	}
+
 	function buildContext(agentsByFeature: Record<string, Agent[]>) {
 		const getFeatures = vi.fn();
 		const listFeaturesCached = vi.fn(() => [featureA, featureB]);
@@ -67,7 +74,8 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 			f2: [idleAgent],
 		});
 
-		const watched = await collectWatchedAgents([ctx]);
+		const observeTmuxPanesAsync = observeTmuxPanesAsyncMock();
+		const watched = await collectWatchedAgents([ctx], observeTmuxPanesAsync);
 
 		// No Git reconciliation:
 		expect(ctx.featureManager.getFeatures).not.toHaveBeenCalled();
@@ -75,9 +83,15 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 		// No synchronous tmux/provider probing:
 		expect(ctx.agentManager.getAgents).not.toHaveBeenCalled();
 
+		// Exactly one canonical tmux sweep for the whole scan (P0 mandate):
+		expect(observeTmuxPanesAsync).toHaveBeenCalledTimes(1);
+
 		// Read-model pre-filter: only the feature with a running agent is probed.
 		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledTimes(1);
-		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith("f1");
+		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith(
+			"f1",
+			expect.any(Map),
+		);
 
 		expect(watched).toEqual([
 			{
@@ -91,23 +105,47 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 		]);
 	});
 
-	it("skips every feature when no agent is running — zero probes at all", async () => {
+	it("skips every feature when no agent is running — zero probes at all, including tmux", async () => {
 		const ctx = buildContext({ f1: [idleAgent] });
+		const observeTmuxPanesAsync = observeTmuxPanesAsyncMock();
 
-		const watched = await collectWatchedAgents([ctx]);
+		const watched = await collectWatchedAgents([ctx], observeTmuxPanesAsync);
 
 		expect(ctx.agentManager.getAgentsAsync).not.toHaveBeenCalled();
+		expect(observeTmuxPanesAsync).not.toHaveBeenCalled();
 		expect(watched).toEqual([]);
 	});
 
-	it("collects across several project contexts", async () => {
+	it("collects across several project contexts with a single shared tmux sweep", async () => {
 		const ctx1 = buildContext({ f1: [runningAgent] });
 		const ctx2 = buildContext({ f2: [idleAgent] });
+		const observeTmuxPanesAsync = observeTmuxPanesAsyncMock();
 
-		const watched = await collectWatchedAgents([ctx1, ctx2]);
+		const watched = await collectWatchedAgents(
+			[ctx1, ctx2],
+			observeTmuxPanesAsync,
+		);
 
 		expect(watched).toHaveLength(1);
 		expect(watched[0]?.featureId).toBe("f1");
+		expect(observeTmuxPanesAsync).toHaveBeenCalledTimes(1);
+	});
+
+	it("issues exactly one tmux sweep for a scan spanning ten running agents across several features", async () => {
+		const agentsByFeature: Record<string, Agent[]> = {};
+		for (let i = 0; i < 10; i++) {
+			const featureId = i % 2 === 0 ? "f1" : "f2";
+			agentsByFeature[featureId] = [
+				...(agentsByFeature[featureId] ?? []),
+				{ ...runningAgent, id: `a${i}`, featureId, status: "running" },
+			];
+		}
+		const ctx = buildContext(agentsByFeature);
+		const observeTmuxPanesAsync = observeTmuxPanesAsyncMock();
+
+		await collectWatchedAgents([ctx], observeTmuxPanesAsync);
+
+		expect(observeTmuxPanesAsync).toHaveBeenCalledTimes(1);
 	});
 
 	// PR #122 review, blocker 1: AgentManager.recordAgentFailure() sets
@@ -123,9 +161,15 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 		};
 		const ctx = buildContext({ f1: [erroredAgent] });
 
-		const watched = await collectWatchedAgents([ctx]);
+		const watched = await collectWatchedAgents(
+			[ctx],
+			observeTmuxPanesAsyncMock(),
+		);
 
-		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith("f1");
+		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith(
+			"f1",
+			expect.any(Map),
+		);
 		expect(watched).toHaveLength(1);
 		expect(watched[0]?.id).toBe("a3");
 	});
@@ -139,7 +183,10 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 		const doneAgent: Agent = { ...runningAgent, id: "a5", status: "done" };
 		const ctx = buildContext({ f1: [stoppedAgent, doneAgent] });
 
-		const watched = await collectWatchedAgents([ctx]);
+		const watched = await collectWatchedAgents(
+			[ctx],
+			observeTmuxPanesAsyncMock(),
+		);
 
 		expect(ctx.agentManager.getAgentsAsync).not.toHaveBeenCalled();
 		expect(watched).toEqual([]);
@@ -150,7 +197,9 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 		const runningCtx = buildContext({ f1: [runningAgent] });
 
 		// First tick: agent is running/working — no failure yet.
-		let transitions = detector.scan(await collectWatchedAgents([runningCtx]));
+		let transitions = detector.scan(
+			await collectWatchedAgents([runningCtx], observeTmuxPanesAsyncMock()),
+		);
 		expect(transitions.some((t) => t.kind === "failed")).toBe(false);
 
 		// The agent crashes: lifecycle flips to "errored" (as
@@ -171,12 +220,16 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 			},
 		]);
 
-		transitions = detector.scan(await collectWatchedAgents([erroredCtx]));
+		transitions = detector.scan(
+			await collectWatchedAgents([erroredCtx], observeTmuxPanesAsyncMock()),
+		);
 		expect(transitions).toHaveLength(1);
 		expect(transitions[0]).toMatchObject({ kind: "failed", agentId: "a1" });
 
 		// Repeated polls in the same episode: no duplicate.
-		transitions = detector.scan(await collectWatchedAgents([erroredCtx]));
+		transitions = detector.scan(
+			await collectWatchedAgents([erroredCtx], observeTmuxPanesAsyncMock()),
+		);
 		expect(transitions.filter((t) => t.kind === "failed")).toEqual([]);
 	});
 });

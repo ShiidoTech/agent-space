@@ -406,7 +406,13 @@ export class ProjectManager {
 		if (!ctx) return undefined;
 
 		if (featureId.startsWith("base:")) {
-			const feature = ctx.featureManager.getBaseFeature(ctx.project.id);
+			// Zero-I/O: getBaseFeatureCached() never runs Git — unlike
+			// getBaseFeature(), which can fall into a synchronous
+			// `git rev-parse --abbrev-ref HEAD` when baseBranch isn't configured
+			// or cached yet. The base card is clickable via showFeature("base:...")
+			// so this path must stay Git-free before first paint (P0 zero-I/O UI
+			// mandate).
+			const feature = ctx.featureManager.getBaseFeatureCached(ctx.project.id);
 			return { ctx, feature };
 		}
 

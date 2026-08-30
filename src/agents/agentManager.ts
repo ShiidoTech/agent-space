@@ -22,7 +22,7 @@ import { CodingToolRegistry } from "./codingToolRegistry";
 import { resolveCreationProfile } from "./hermesProfileResolver";
 import { AgentObservationResolver } from "./observation/agentObservationResolver";
 import type { AgentObservation } from "./observation/types";
-import type { TmuxIntegration } from "./tmux";
+import type { TmuxIntegration, TmuxPaneObservation } from "./tmux";
 
 export interface AgentWorktreeRemovalResult {
 	readonly removed: boolean;
@@ -110,13 +110,34 @@ export class AgentManager {
 	 * `reconcilePresence`'s much more frequent runtime tick never needs (and
 	 * must never run) its own attention probe — it just reads what was last
 	 * committed here (P0 mandate: one attention source, not two).
+	 *
+	 * `knownTmuxPanes`, when given, is the caller's own single canonical
+	 * `list-panes -a` sweep for this scan (shared across every feature/agent
+	 * it watches) — every agent's liveness/pane lookup below reads from it
+	 * instead of probing tmux again, so a whole `AgentAttentionMonitor` tick
+	 * costs exactly one tmux subprocess, not one per agent (P0 mandate).
 	 */
-	async getAgentsAsync(featureId: string): Promise<Agent[]> {
+	async getAgentsAsync(
+		featureId: string,
+		knownTmuxPanes?: ReadonlyMap<string, TmuxPaneObservation>,
+	): Promise<Agent[]> {
 		const agents = this.loadAgents(featureId);
 		const pending = this.loadReviewInbox(featureId);
 		return Promise.all(
 			agents.map(async (agent) => {
-				const attention = await this.attentionResolver.resolveAsync(agent);
+				const sessionName =
+					agent.tmuxSession ?? this.tmux.sessionName(agent.featureId, agent.id);
+				const pane = knownTmuxPanes?.get(sessionName);
+				const knownAlive = knownTmuxPanes
+					? Boolean(pane && !pane.dead)
+					: undefined;
+				const knownPane = knownTmuxPanes ? (pane ?? null) : undefined;
+				const attention = await this.attentionResolver.resolveAsync(
+					agent,
+					undefined,
+					knownAlive,
+					knownPane,
+				);
 				this.commitAttention(agent, attention);
 				return this.withPendingReview(
 					{

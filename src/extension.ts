@@ -697,7 +697,10 @@ export async function activate(
 	// only nudge the monitor — coalesced and off the change stack.
 	const attentionMonitor = new AgentAttentionMonitor(
 		{
-			collect: () => collectWatchedAgents(projectManager.getAllContexts()),
+			collect: () =>
+				collectWatchedAgents(projectManager.getAllContexts(), () =>
+					projectManager.observeTmuxPanesAsync(),
+				),
 			onTransition: (transition) => {
 				if (transition.kind === "turn_completed" && transition.featureId) {
 					projectManager

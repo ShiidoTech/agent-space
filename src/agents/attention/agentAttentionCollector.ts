@@ -1,4 +1,5 @@
 import type { Agent, Feature } from "../../types";
+import type { TmuxPaneObservation, TmuxPanesObservation } from "../tmux";
 import type { AttentionWatchedAgent } from "./agentOperationalTransitions";
 
 /**
@@ -16,7 +17,10 @@ export interface AttentionCollectableContext {
 	};
 	agentManager: {
 		getAgentsReadModel?(featureId: string): Agent[];
-		getAgentsAsync(featureId: string): Promise<Agent[]>;
+		getAgentsAsync(
+			featureId: string,
+			knownTmuxPanes?: ReadonlyMap<string, TmuxPaneObservation>,
+		): Promise<Agent[]>;
 	};
 }
 
@@ -38,34 +42,60 @@ export interface AttentionCollectableContext {
  *   beyond the already-cheap `getAgentsAsync()` call itself. Definitively
  *   quiescent lifecycle states (`stopped`, `done`) stay excluded;
  * - remaining agents are probed through `getAgentsAsync()` — async tmux and
- *   provider evidence only, no `execSync`/`execFileSync`.
+ *   provider evidence only, no `execSync`/`execFileSync`;
+ * - tmux liveness/pane evidence for all of them comes from exactly ONE
+ *   canonical `list-panes -a` sweep (`observeTmuxPanesAsync`), taken once
+ *   per scan and shared across every project/feature/agent below — never
+ *   one `has-session`/`display-message` pair per agent (P0 zero-I/O UI
+ *   mandate: O(1) tmux subprocesses per attention scan, not O(N)).
  */
 export async function collectWatchedAgents(
 	contexts: readonly AttentionCollectableContext[],
+	observeTmuxPanesAsync: () => Promise<TmuxPanesObservation>,
 ): Promise<AttentionWatchedAgent[]> {
-	const watched: AttentionWatchedAgent[] = [];
+	const candidates: Array<{
+		ctx: AttentionCollectableContext;
+		featureId: string;
+		featureName: string;
+	}> = [];
 	for (const ctx of contexts) {
 		for (const feature of ctx.featureManager.listFeaturesCached()) {
 			const known = ctx.agentManager.getAgentsReadModel?.(feature.id) ?? [];
 			if (
-				!known.some(
+				known.some(
 					(agent) => agent.status === "running" || agent.status === "errored",
 				)
 			) {
-				continue;
-			}
-			const agents = await ctx.agentManager.getAgentsAsync(feature.id);
-			for (const agent of agents) {
-				watched.push({
-					id: agent.id,
-					name: agent.name,
+				candidates.push({
+					ctx,
 					featureId: feature.id,
 					featureName: feature.name,
-					attentionStatus: agent.attentionStatus,
-					attentionReason: agent.attentionReason,
-					attentionSource: agent.attentionSource,
 				});
 			}
+		}
+	}
+	if (candidates.length === 0) return [];
+
+	const panesObservation = await observeTmuxPanesAsync();
+	const knownTmuxPanes =
+		panesObservation.status === "known" ? panesObservation.panes : undefined;
+
+	const watched: AttentionWatchedAgent[] = [];
+	for (const { ctx, featureId, featureName } of candidates) {
+		const agents = await ctx.agentManager.getAgentsAsync(
+			featureId,
+			knownTmuxPanes,
+		);
+		for (const agent of agents) {
+			watched.push({
+				id: agent.id,
+				name: agent.name,
+				featureId,
+				featureName,
+				attentionStatus: agent.attentionStatus,
+				attentionReason: agent.attentionReason,
+				attentionSource: agent.attentionSource,
+			});
 		}
 	}
 	return watched;
