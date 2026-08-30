@@ -681,16 +681,17 @@ export class FeatureStateCoordinator implements Disposable {
 				const services = readRuntime<Service[]>(() =>
 					ctx.serviceManager.getServices(feature.id),
 				);
+				const agentTmux = runtimeMap(agents, tmuxSessions, (agent) =>
+					this.projectManager?.agentTmuxSessionName(
+						feature.id,
+						agent.id,
+						agent.tmuxSession,
+					),
+				);
 				const runtime = observeFeatureRuntime({
 					agents,
 					services,
-					agentTmux: runtimeMap(agents, tmuxSessions, (agent) =>
-						this.projectManager?.agentTmuxSessionName(
-							feature.id,
-							agent.id,
-							agent.tmuxSession,
-						),
-					),
+					agentTmux,
 					serviceTmux: runtimeMap(
 						services,
 						tmuxSessions,
@@ -707,7 +708,12 @@ export class FeatureStateCoordinator implements Disposable {
 				// `agentManager.observeCached()` warm for sidebar/Home
 				// presentation without slowing down this presence tick. Async and
 				// off the render path — never awaited here (P0 zero-I/O UI).
-				void ctx.agentManager.refreshObservationCache?.(feature.id);
+				// `agentTmux` is this tick's single global tmux sweep, already
+				// resolved above — passing it through means an agent whose
+				// liveness is already known here never triggers a second,
+				// per-agent async tmux probe inside the observation refresh
+				// (mandate: O(1) tmux observation per tick, not O(N)).
+				void ctx.agentManager.refreshObservationCache?.(feature.id, agentTmux);
 			}
 		}
 	}

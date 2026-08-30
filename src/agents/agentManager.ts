@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { normalizeFeatureName } from "../features/featureName";
+import type { RuntimeObservation } from "../features/runtimeObservation";
 import type { ProjectConfig } from "../projects/projectConfig";
 import type { Store } from "../storage/store";
 import type {
@@ -190,14 +191,28 @@ export class AgentManager {
 	 * reconciliation (e.g. `FeatureStateCoordinator.reconcilePresence`) —
 	 * never awaited on a render path. A single agent's probe failing does not
 	 * abort the others; that agent's cache entry is simply left stale.
+	 *
+	 * `knownTmuxAlive`, when given, is the caller's own single global tmux
+	 * sweep for this tick (keyed by agentId): an agent found there skips its
+	 * own tmux probe entirely, so a runtime tick costs one tmux subprocess
+	 * total rather than one per agent (P0 mandate: O(1) tmux observation per
+	 * tick).
 	 */
-	async refreshObservationCache(featureId: string): Promise<void> {
+	async refreshObservationCache(
+		featureId: string,
+		knownTmuxAlive?: ReadonlyMap<string, RuntimeObservation<boolean>>,
+	): Promise<void> {
 		const agents = this.getAgentsReadModel(featureId);
 		await Promise.all(
 			agents.map(async (agent) => {
 				try {
-					const observation =
-						await this.observationResolver.resolveAsync(agent);
+					const known = knownTmuxAlive?.get(agent.id);
+					const knownAlive =
+						known?.status === "known" ? known.value : undefined;
+					const observation = await this.observationResolver.resolveAsync(
+						agent,
+						knownAlive,
+					);
 					this.observationCache.set(agent.id, observation);
 				} catch {
 					// Leave the previous cache entry (or the read-model default) in

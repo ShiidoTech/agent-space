@@ -862,6 +862,27 @@ describe("AgentManager", () => {
 			expect(mockExecFile).not.toHaveBeenCalled();
 		});
 
+		it("refreshObservationCache skips its own tmux probe when the caller already knows liveness (O(1) tmux per tick)", async () => {
+			const asyncTmux = tmux as unknown as {
+				isSessionAliveAsync: ReturnType<typeof vi.fn>;
+			};
+			asyncTmux.isSessionAliveAsync = vi.fn(async () => true);
+
+			const agent = manager.createAgent(feature, "copilot");
+			manager.markAgentStarted(agent.id, feature.id);
+
+			await manager.refreshObservationCache(
+				feature.id,
+				new Map([[agent.id, { status: "known" as const, value: true }]]),
+			);
+
+			const observation = manager.observeCached(agent);
+			expect(observation.lifecycle.state).toBe("running");
+			expect(asyncTmux.isSessionAliveAsync).not.toHaveBeenCalled();
+			expect(mockExecSync).not.toHaveBeenCalled();
+			expect(mockExecFile).not.toHaveBeenCalled();
+		});
+
 		it("observeCached keeps returning the last-known observation after a refresh failure", async () => {
 			const asyncTmux = tmux as unknown as {
 				isSessionAliveAsync: ReturnType<typeof vi.fn>;

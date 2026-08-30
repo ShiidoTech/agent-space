@@ -35,14 +35,23 @@ export class AgentObservationResolver {
 	 * background observers (runtime reconciliation, the attention monitor)
 	 * never block the Extension Host on a subprocess. Used to populate
 	 * `AgentManager`'s observation cache — never called from a render path.
+	 *
+	 * `knownAlive`, when given, is tmux liveness already resolved by the
+	 * caller's own single global sweep for this tick — lifecycle resolution
+	 * then skips its own tmux probe entirely (P0 mandate: O(1) tmux
+	 * observation per tick, not one probe per agent).
 	 */
-	async resolveAsync(agent: Agent): Promise<AgentObservation> {
-		const lifecycle = await this.resolveLifecycleAsync(agent);
+	async resolveAsync(
+		agent: Agent,
+		knownAlive?: boolean,
+	): Promise<AgentObservation> {
+		const lifecycle = await this.resolveLifecycleAsync(agent, knownAlive);
 		const attention = await this.attentionResolver.resolveAsync(
 			agent,
 			lifecycle.state === "starting" || lifecycle.state === "unknown"
 				? undefined
 				: lifecycle.state,
+			knownAlive,
 		);
 		return this.assemble(agent, lifecycle, attention);
 	}
@@ -118,6 +127,7 @@ export class AgentObservationResolver {
 
 	private async resolveLifecycleAsync(
 		agent: Agent,
+		knownAlive?: boolean,
 	): Promise<AgentObservation["lifecycle"]> {
 		if (agent.status === "errored") {
 			return { state: "errored", source: "agentspace" };
@@ -130,6 +140,12 @@ export class AgentObservationResolver {
 		}
 		if (agent.hasStarted !== true) {
 			return { state: "starting", source: "agentspace" };
+		}
+
+		if (knownAlive !== undefined) {
+			return knownAlive
+				? { state: "running", source: "tmux" }
+				: { state: "stopped", source: "tmux" };
 		}
 
 		const sessionName =

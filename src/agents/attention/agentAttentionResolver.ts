@@ -142,10 +142,16 @@ export class AgentAttentionResolver {
 	 * identical semantics, but the tmux probes run through the async helpers
 	 * (`isSessionAliveAsync` / `getPaneStatusAsync`) so background observers
 	 * (attention monitoring) never block the Extension Host on a subprocess.
+	 *
+	 * `knownAlive`, when given, is tmux liveness the caller already resolved
+	 * this tick (its own single global sweep) — skips this method's own
+	 * `isSessionAliveAsync` probe entirely (P0 mandate: O(1) tmux observation
+	 * per tick, not one probe per agent per resolver).
 	 */
 	async resolveAsync(
 		agent: Agent,
 		lifecycleState?: AgentStatus,
+		knownAlive?: boolean,
 	): Promise<AgentAttentionSnapshot> {
 		if ((lifecycleState ?? agent.status) === "done") {
 			return {
@@ -179,10 +185,14 @@ export class AgentAttentionResolver {
 		const sessionName =
 			agent.tmuxSession ?? this.tmux.sessionName(agent.featureId, agent.id);
 		let alive = false;
-		try {
-			alive = (await this.tmux.isSessionAliveAsync?.(sessionName)) ?? false;
-		} catch {
-			alive = false;
+		if (knownAlive !== undefined) {
+			alive = knownAlive;
+		} else {
+			try {
+				alive = (await this.tmux.isSessionAliveAsync?.(sessionName)) ?? false;
+			} catch {
+				alive = false;
+			}
 		}
 		if (!alive) {
 			return {
