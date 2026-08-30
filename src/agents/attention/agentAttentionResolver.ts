@@ -1,7 +1,7 @@
 import type { Agent, AgentAttentionStatus, AgentStatus } from "../../types";
 import type { CodingToolRegistry } from "../codingToolRegistry";
 import type { ProviderAttentionSignal } from "../providers/types";
-import type { TmuxIntegration, TmuxPaneObservation } from "../tmux";
+import type { TmuxIntegration, TmuxPanesObservation } from "../tmux";
 
 export interface AgentAttentionSnapshot {
 	status: AgentAttentionStatus | "unsupported";
@@ -143,21 +143,22 @@ export class AgentAttentionResolver {
 	 * (`isSessionAliveAsync` / `getPaneStatusAsync`) so background observers
 	 * (attention monitoring) never block the Extension Host on a subprocess.
 	 *
-	 * `knownAlive`, when given, is tmux liveness the caller already resolved
-	 * this tick (its own single global sweep) — skips this method's own
-	 * `isSessionAliveAsync` probe entirely (P0 mandate: O(1) tmux observation
-	 * per tick, not one probe per agent per resolver). `knownPane`, when
-	 * given alongside it (`null` is a valid "known absent" value, distinct
-	 * from "not supplied"), is that same sweep's dead/exit-code/tty record —
-	 * skips this method's own `getPaneStatusAsync` probe too, so a caller
-	 * with a canonical `list-panes -a` sweep in hand never pays a second
-	 * tmux round trip per agent for pane status.
+	 * `knownTmux`, when given, is the caller's own single canonical
+	 * `list-panes -a` sweep for this tick/scan — skips this method's own
+	 * `isSessionAliveAsync`/`getPaneStatusAsync` probes entirely (P0 mandate:
+	 * O(1) tmux observation per tick, not one probe per agent per resolver).
+	 *
+	 * Critically, `knownTmux.status === "unknown"` (the sweep was attempted
+	 * and failed) is handled distinctly from "not supplied at all": it must
+	 * NOT fall back to this method's own per-agent probe — that would turn
+	 * one failed global sweep into an O(N) tmux retry storm, exactly what
+	 * the shared sweep exists to prevent. A failed sweep resolves straight
+	 * to an honest "unknown" attention snapshot instead.
 	 */
 	async resolveAsync(
 		agent: Agent,
 		lifecycleState?: AgentStatus,
-		knownAlive?: boolean,
-		knownPane?: TmuxPaneObservation | null,
+		knownTmux?: TmuxPanesObservation,
 	): Promise<AgentAttentionSnapshot> {
 		if ((lifecycleState ?? agent.status) === "done") {
 			return {
@@ -191,8 +192,21 @@ export class AgentAttentionResolver {
 		const sessionName =
 			agent.tmuxSession ?? this.tmux.sessionName(agent.featureId, agent.id);
 		let alive = false;
-		if (knownAlive !== undefined) {
-			alive = knownAlive;
+		let pane: Awaited<ReturnType<TmuxIntegration["getPaneStatusAsync"]>> = null;
+		if (knownTmux) {
+			if (knownTmux.status === "unknown") {
+				return {
+					status: "unknown",
+					reason: `tmux observation failed: ${knownTmux.detail}`,
+					source: "tmux",
+				};
+			}
+			// Presence in the sweep means the tmux session exists — a dead
+			// pane (remain-on-exit) still belongs to a live session and must
+			// reach the exit-code classification below, not be collapsed to
+			// "no live tmux session" before its exit code is ever read.
+			pane = knownTmux.panes.get(sessionName) ?? null;
+			alive = pane !== null;
 		} else {
 			try {
 				alive = (await this.tmux.isSessionAliveAsync?.(sessionName)) ?? false;
@@ -208,10 +222,7 @@ export class AgentAttentionResolver {
 			};
 		}
 
-		let pane: Awaited<ReturnType<TmuxIntegration["getPaneStatusAsync"]>> = null;
-		if (knownPane !== undefined) {
-			pane = knownPane;
-		} else {
+		if (!knownTmux) {
 			try {
 				pane = (await this.tmux.getPaneStatusAsync?.(sessionName)) ?? null;
 			} catch {

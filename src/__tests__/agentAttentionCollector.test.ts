@@ -88,10 +88,10 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 
 		// Read-model pre-filter: only the feature with a running agent is probed.
 		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledTimes(1);
-		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith(
-			"f1",
-			expect.any(Map),
-		);
+		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith("f1", {
+			status: "known",
+			panes: expect.any(Map),
+		});
 
 		expect(watched).toEqual([
 			{
@@ -148,6 +148,39 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 		expect(observeTmuxPanesAsync).toHaveBeenCalledTimes(1);
 	});
 
+	// PR #133 review, fail-path blocker: a failed canonical sweep must be
+	// passed through to getAgentsAsync() as-is, never re-attempted per agent
+	// — one failed sweep call stays one call, not one plus N retries.
+	it("still issues exactly one tmux sweep for ten running agents when the canonical sweep itself fails", async () => {
+		const agentsByFeature: Record<string, Agent[]> = {};
+		for (let i = 0; i < 10; i++) {
+			const featureId = i % 2 === 0 ? "f1" : "f2";
+			agentsByFeature[featureId] = [
+				...(agentsByFeature[featureId] ?? []),
+				{ ...runningAgent, id: `a${i}`, featureId, status: "running" },
+			];
+		}
+		const ctx = buildContext(agentsByFeature);
+		const observeTmuxPanesAsync = vi.fn(async () => ({
+			status: "unknown" as const,
+			detail: "tmux: unexpected transient failure",
+		}));
+
+		await collectWatchedAgents([ctx], observeTmuxPanesAsync);
+
+		expect(observeTmuxPanesAsync).toHaveBeenCalledTimes(1);
+		// The failed sweep result is what getAgentsAsync() actually receives —
+		// not silently swapped for "no sweep supplied".
+		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith("f1", {
+			status: "unknown",
+			detail: "tmux: unexpected transient failure",
+		});
+		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith("f2", {
+			status: "unknown",
+			detail: "tmux: unexpected transient failure",
+		});
+	});
+
 	// PR #122 review, blocker 1: AgentManager.recordAgentFailure() sets
 	// lifecycle status "errored". A single-agent Feature must not be
 	// dropped by the pre-filter the instant that happens, or the `failed`
@@ -166,10 +199,10 @@ describe("collectWatchedAgents (non-blocking contract)", () => {
 			observeTmuxPanesAsyncMock(),
 		);
 
-		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith(
-			"f1",
-			expect.any(Map),
-		);
+		expect(ctx.agentManager.getAgentsAsync).toHaveBeenCalledWith("f1", {
+			status: "known",
+			panes: expect.any(Map),
+		});
 		expect(watched).toHaveLength(1);
 		expect(watched[0]?.id).toBe("a3");
 	});

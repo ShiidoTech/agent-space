@@ -1,5 +1,5 @@
 import type { Agent, Feature } from "../../types";
-import type { TmuxPaneObservation, TmuxPanesObservation } from "../tmux";
+import type { TmuxPanesObservation } from "../tmux";
 import type { AttentionWatchedAgent } from "./agentOperationalTransitions";
 
 /**
@@ -19,7 +19,7 @@ export interface AttentionCollectableContext {
 		getAgentsReadModel?(featureId: string): Agent[];
 		getAgentsAsync(
 			featureId: string,
-			knownTmuxPanes?: ReadonlyMap<string, TmuxPaneObservation>,
+			knownTmuxPanes?: TmuxPanesObservation,
 		): Promise<Agent[]>;
 	};
 }
@@ -47,7 +47,10 @@ export interface AttentionCollectableContext {
  *   canonical `list-panes -a` sweep (`observeTmuxPanesAsync`), taken once
  *   per scan and shared across every project/feature/agent below — never
  *   one `has-session`/`display-message` pair per agent (P0 zero-I/O UI
- *   mandate: O(1) tmux subprocesses per attention scan, not O(N)).
+ *   mandate: O(1) tmux subprocesses per attention scan, not O(N)). The raw
+ *   sweep result (`status: "known"` or `"unknown"`) is passed through to
+ *   `getAgentsAsync()` as-is — a failed sweep must resolve every agent to
+ *   unknown attention directly, never fall back to a per-agent tmux probe.
  */
 export async function collectWatchedAgents(
 	contexts: readonly AttentionCollectableContext[],
@@ -77,14 +80,12 @@ export async function collectWatchedAgents(
 	if (candidates.length === 0) return [];
 
 	const panesObservation = await observeTmuxPanesAsync();
-	const knownTmuxPanes =
-		panesObservation.status === "known" ? panesObservation.panes : undefined;
 
 	const watched: AttentionWatchedAgent[] = [];
 	for (const { ctx, featureId, featureName } of candidates) {
 		const agents = await ctx.agentManager.getAgentsAsync(
 			featureId,
-			knownTmuxPanes,
+			panesObservation,
 		);
 		for (const agent of agents) {
 			watched.push({

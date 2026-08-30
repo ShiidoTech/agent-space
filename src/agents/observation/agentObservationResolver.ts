@@ -1,3 +1,4 @@
+import type { RuntimeObservation } from "../../features/runtimeObservation";
 import type { Agent } from "../../types";
 import {
 	AgentAttentionResolver,
@@ -48,11 +49,16 @@ export class AgentObservationResolver {
 	 * `knownAlive`, when given, is tmux liveness already resolved by the
 	 * caller's own single global sweep for this tick — lifecycle resolution
 	 * then skips its own tmux probe entirely (P0 mandate: O(1) tmux
-	 * observation per tick, not one probe per agent).
+	 * observation per tick, not one probe per agent). Passed through as the
+	 * full {@link RuntimeObservation} rather than a plain boolean: a sweep
+	 * that was attempted and failed (`status: "unknown"`) must resolve
+	 * lifecycle to unknown directly, not fall back to probing tmux again —
+	 * collapsing it to `undefined` here would be indistinguishable from "no
+	 * sweep supplied" and turn one failed sweep into an O(N) retry storm.
 	 */
 	async resolveAsync(
 		agent: Agent,
-		knownAlive?: boolean,
+		knownAlive?: RuntimeObservation<boolean>,
 		previousAttention?: AgentAttentionSnapshot,
 	): Promise<AgentObservation> {
 		const lifecycle = await this.resolveLifecycleAsync(agent, knownAlive);
@@ -135,7 +141,7 @@ export class AgentObservationResolver {
 
 	private async resolveLifecycleAsync(
 		agent: Agent,
-		knownAlive?: boolean,
+		knownAlive?: RuntimeObservation<boolean>,
 	): Promise<AgentObservation["lifecycle"]> {
 		if (agent.status === "errored") {
 			return { state: "errored", source: "agentspace" };
@@ -150,8 +156,15 @@ export class AgentObservationResolver {
 			return { state: "starting", source: "agentspace" };
 		}
 
-		if (knownAlive !== undefined) {
-			return knownAlive
+		if (knownAlive) {
+			if (knownAlive.status === "unknown") {
+				return {
+					state: "unknown",
+					source: "tmux",
+					reason: `tmux observation failed: ${knownAlive.detail ?? knownAlive.reason}`,
+				};
+			}
+			return knownAlive.value
 				? { state: "running", source: "tmux" }
 				: { state: "stopped", source: "tmux" };
 		}

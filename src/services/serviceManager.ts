@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import * as crypto from "node:crypto";
-import type { TmuxIntegration, TmuxPaneObservation } from "../agents/tmux";
+import type { TmuxIntegration, TmuxPanesObservation } from "../agents/tmux";
 import type { Store } from "../storage/store";
 import type { Service, ServiceStatus } from "../types";
 import { exec } from "../utils/platform";
@@ -32,12 +32,14 @@ export class ServiceManager {
 	 * semantics, but background reconciliation
 	 * (`FeatureStateCoordinator.reconcilePresence`) never blocks the
 	 * Extension Host on a subprocess — and, when `knownTmuxPanes` is given
-	 * (that tick's single canonical `list-panes -a` sweep, keyed by session
-	 * name), never makes a tmux call of its own at all.
+	 * (that tick's single canonical `list-panes -a` sweep), never makes a
+	 * tmux call of its own at all, whether the sweep succeeded or failed
+	 * (`status: "unknown"` is a fail-closed "don't retry", not "not
+	 * supplied" — see {@link refreshStatusesAsync}).
 	 */
 	async getServicesAsync(
 		featureId: string,
-		knownTmuxPanes?: ReadonlyMap<string, TmuxPaneObservation>,
+		knownTmuxPanes?: TmuxPanesObservation,
 	): Promise<Service[]> {
 		await this.refreshStatusesAsync(featureId, knownTmuxPanes);
 		return [...this.loadServices(featureId)];
@@ -163,7 +165,7 @@ export class ServiceManager {
 	 */
 	private async refreshStatusesAsync(
 		featureId: string,
-		knownTmuxPanes?: ReadonlyMap<string, TmuxPaneObservation>,
+		knownTmuxPanes?: TmuxPanesObservation,
 	): Promise<void> {
 		const lastRefresh = this.lastRefreshTime.get(featureId);
 		if (
@@ -184,9 +186,16 @@ export class ServiceManager {
 
 				// The caller's own canonical sweep for this tick — trust it
 				// exclusively, no tmux call of our own (P0 mandate: one tmux
-				// subprocess per tick, not one per service).
+				// subprocess per tick, not one per service). A sweep that was
+				// attempted and failed (`status: "unknown"`) must NOT fall
+				// through to the per-service probe below — that would turn one
+				// failed global sweep into an O(N) retry storm. Leave the
+				// service's last-known status untouched instead.
 				if (knownTmuxPanes) {
-					const pane = knownTmuxPanes.get(service.tmuxSession);
+					if (knownTmuxPanes.status === "unknown") {
+						return;
+					}
+					const pane = knownTmuxPanes.panes.get(service.tmuxSession);
 					if (!pane) {
 						service.status = "stopped";
 						changed = true;

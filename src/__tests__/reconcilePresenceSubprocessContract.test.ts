@@ -125,7 +125,7 @@ describe("reconcilePresence subprocess contract (real AgentManager/ServiceManage
 		} as unknown as ProjectManager;
 	}
 
-	it("issues exactly one tmux subprocess for 10 agents + 5 services in a single reconcilePresence tick", async () => {
+	function seedTenAgentsAndFiveServices(): Service[] {
 		for (let i = 0; i < 10; i++) {
 			const agent = agentManager.createAgent(feature, "generic");
 			agentManager.markAgentStarted(agent.id, feature.id);
@@ -148,6 +148,11 @@ describe("reconcilePresence subprocess contract (real AgentManager/ServiceManage
 			};
 		});
 		store.saveServices(feature.id, services);
+		return services;
+	}
+
+	it("issues exactly one tmux subprocess for 10 agents + 5 services in a single reconcilePresence tick", async () => {
+		seedTenAgentsAndFiveServices();
 
 		const ctx = makeContext();
 		const coordinator = new FeatureStateCoordinator(makeManager(ctx));
@@ -163,6 +168,39 @@ describe("reconcilePresence subprocess contract (real AgentManager/ServiceManage
 		expect(delta.tmux).toBe(1);
 		expect(execFileAsyncCalls).toHaveLength(1);
 		expect(execFileAsyncCalls[0]).toMatchObject({ file: "tmux" });
+
+		coordinator.dispose();
+	});
+
+	// PR #133 review, fail-path blocker: a failed canonical sweep must not be
+	// collapsed to "no shared sweep supplied" downstream — that would let
+	// ServiceManager/AgentManager fall back to per-item tmux probing and turn
+	// one failed `list-panes -a` call into an O(N) retry storm.
+	it("still issues only one tmux subprocess for 10 agents + 5 services when the canonical sweep itself fails", async () => {
+		const services = seedTenAgentsAndFiveServices();
+		_setExecFileAsyncForTest(async (file: string, args: readonly string[]) => {
+			execFileAsyncCalls.push({ file, args });
+			throw new Error("tmux: unexpected transient failure");
+		});
+
+		const ctx = makeContext();
+		const coordinator = new FeatureStateCoordinator(makeManager(ctx));
+		const before = snapshotSubprocessCounts();
+
+		await coordinator.reconcilePresence();
+		await new Promise((resolve) => setImmediate(resolve));
+
+		const delta = diffSubprocessCounts(before, snapshotSubprocessCounts());
+		expect(delta.tmux).toBe(1);
+		expect(execFileAsyncCalls).toHaveLength(1);
+
+		// Fail-closed: no per-service retry flipped a running service to
+		// stopped/errored off a failed sweep — the last-known status survives.
+		const persisted = store.loadServices(feature.id);
+		expect(persisted).toHaveLength(services.length);
+		for (const service of persisted) {
+			expect(service.status).toBe("running");
+		}
 
 		coordinator.dispose();
 	});

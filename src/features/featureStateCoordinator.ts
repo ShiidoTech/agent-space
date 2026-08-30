@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import type { Disposable } from "vscode";
-import type { TmuxPaneObservation } from "../agents/tmux";
+import type { TmuxPaneObservation, TmuxPanesObservation } from "../agents/tmux";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
@@ -663,11 +663,14 @@ export class FeatureStateCoordinator implements Disposable {
 		// presence tier that keeps the sidebar/Home live — it must never run
 		// a synchronous tmux call, and it must be the ONLY tmux subprocess in
 		// this whole tick (P0 zero-I/O UI mandate). Every downstream
-		// agent/service liveness check below reads from this single Map —
-		// none of them probes tmux again.
-		const tmuxPanesRuntime = await this.observeTmuxPanesRuntimeAsync(manager);
-		const tmuxPanes =
-			tmuxPanesRuntime.status === "known" ? tmuxPanesRuntime.value : undefined;
+		// agent/service liveness check below reads from this single sweep —
+		// none of them probes tmux again, including when the sweep itself
+		// failed (`status: "unknown"` is passed through as-is below, never
+		// collapsed to `undefined` — a failed sweep must resolve to unknown/
+		// last-known state, not retry tmux per agent/service).
+		const panesObservation: TmuxPanesObservation =
+			await manager.observeTmuxPanesAsync();
+		const tmuxPanesRuntime = this.toPanesRuntimeObservation(panesObservation);
 		const contexts = scopeProjectId
 			? [manager.getContext(scopeProjectId)].filter(
 					(ctx): ctx is ProjectContext => ctx !== undefined,
@@ -695,7 +698,7 @@ export class FeatureStateCoordinator implements Disposable {
 					ctx.agentManager.getAgentsReadModel(feature.id),
 				);
 				const services = await readRuntimeAsync<Service[]>(() =>
-					ctx.serviceManager.getServicesAsync(feature.id, tmuxPanes),
+					ctx.serviceManager.getServicesAsync(feature.id, panesObservation),
 				);
 				const agentTmux = runtimeMapFromPanes(
 					agents,
@@ -772,18 +775,14 @@ export class FeatureStateCoordinator implements Disposable {
 	}
 
 	/**
-	 * Canonical non-blocking tmux sweep for `reconcilePresenceInner`: one
-	 * `list-panes -a` call yields liveness AND pane-dead/exit-code/tty for
-	 * every session, keyed by session name. Shared as-is with
-	 * `AgentManager.refreshObservationCache` (agent liveness) and
-	 * `ServiceManager.getServicesAsync` (service liveness + dead-pane
-	 * status) — neither makes its own tmux call in this tick (P0 mandate:
-	 * one tmux subprocess per tick, not one per agent/service).
+	 * Wraps an already-fetched canonical tmux sweep into this file's
+	 * `RuntimeObservation` convention, for `runtimeMapFromPanes` — does not
+	 * itself call tmux (the sweep must have been fetched exactly once by the
+	 * caller, see `reconcilePresenceInner`).
 	 */
-	private async observeTmuxPanesRuntimeAsync(
-		manager: ProjectManager,
-	): Promise<RuntimeObservation<ReadonlyMap<string, TmuxPaneObservation>>> {
-		const observation = await manager.observeTmuxPanesAsync();
+	private toPanesRuntimeObservation(
+		observation: TmuxPanesObservation,
+	): RuntimeObservation<ReadonlyMap<string, TmuxPaneObservation>> {
 		return observation.status === "known"
 			? knownRuntime(observation.panes)
 			: unknownRuntime("read_failed", observation.detail);

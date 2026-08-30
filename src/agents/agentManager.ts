@@ -22,7 +22,7 @@ import { CodingToolRegistry } from "./codingToolRegistry";
 import { resolveCreationProfile } from "./hermesProfileResolver";
 import { AgentObservationResolver } from "./observation/agentObservationResolver";
 import type { AgentObservation } from "./observation/types";
-import type { TmuxIntegration, TmuxPaneObservation } from "./tmux";
+import type { TmuxIntegration, TmuxPanesObservation } from "./tmux";
 
 export interface AgentWorktreeRemovalResult {
 	readonly removed: boolean;
@@ -115,28 +115,24 @@ export class AgentManager {
 	 * `list-panes -a` sweep for this scan (shared across every feature/agent
 	 * it watches) — every agent's liveness/pane lookup below reads from it
 	 * instead of probing tmux again, so a whole `AgentAttentionMonitor` tick
-	 * costs exactly one tmux subprocess, not one per agent (P0 mandate).
+	 * costs exactly one tmux subprocess, not one per agent (P0 mandate). A
+	 * sweep that was attempted and failed (`status: "unknown"`) is passed
+	 * through as-is rather than collapsed to "not supplied" — the resolver
+	 * must not fall back to its own per-agent probe on a failed sweep (that
+	 * would turn one tmux error into O(N) retries).
 	 */
 	async getAgentsAsync(
 		featureId: string,
-		knownTmuxPanes?: ReadonlyMap<string, TmuxPaneObservation>,
+		knownTmuxPanes?: TmuxPanesObservation,
 	): Promise<Agent[]> {
 		const agents = this.loadAgents(featureId);
 		const pending = this.loadReviewInbox(featureId);
 		return Promise.all(
 			agents.map(async (agent) => {
-				const sessionName =
-					agent.tmuxSession ?? this.tmux.sessionName(agent.featureId, agent.id);
-				const pane = knownTmuxPanes?.get(sessionName);
-				const knownAlive = knownTmuxPanes
-					? Boolean(pane && !pane.dead)
-					: undefined;
-				const knownPane = knownTmuxPanes ? (pane ?? null) : undefined;
 				const attention = await this.attentionResolver.resolveAsync(
 					agent,
 					undefined,
-					knownAlive,
-					knownPane,
+					knownTmuxPanes,
 				);
 				this.commitAttention(agent, attention);
 				return this.withPendingReview(
@@ -239,9 +235,13 @@ export class AgentManager {
 		await Promise.all(
 			agents.map(async (agent) => {
 				try {
-					const known = knownTmuxAlive?.get(agent.id);
-					const knownAlive =
-						known?.status === "known" ? known.value : undefined;
+					// Passed through as-is (not collapsed to a plain boolean): a
+					// failed sweep (`status: "unknown"`) must resolve lifecycle to
+					// unknown without probing tmux again — collapsing it to
+					// `undefined` here would look identical to "no sweep supplied"
+					// and let resolveLifecycleAsync fall back to its own per-agent
+					// probe, turning one failed global sweep into O(N) retries.
+					const knownAlive = knownTmuxAlive?.get(agent.id);
 					// Attention is never recomputed here — AgentAttentionMonitor
 					// is the sole prober (see AgentObservationResolver.resolveAsync);
 					// this preserves whatever it last committed via commitAttention.
