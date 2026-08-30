@@ -144,6 +144,30 @@ export class TmuxIntegration {
 		}
 	}
 
+	/**
+	 * Revert one session to the ordinary "session dies with its pane" behavior
+	 * once startup diagnostics for it are no longer needed. A CLI that crashes
+	 * later, mid-conversation, must still make the whole session disappear so
+	 * the existing close detection (the VS Code terminal's `tmux attach`
+	 * exiting, firing `onDidCloseTerminal`) keeps working — a dead pane that
+	 * lingers forever under the server-wide default would silently stop that.
+	 */
+	clearRemainOnExitForSession(sessionName: string): void {
+		try {
+			exec(`tmux set-option -t "${sessionName}" remain-on-exit off`);
+		} catch {
+			// Session may not exist
+		}
+	}
+
+	async clearRemainOnExitForSessionAsync(sessionName: string): Promise<void> {
+		try {
+			await execAsync(`tmux set-option -t "${sessionName}" remain-on-exit off`);
+		} catch {
+			// Session may not exist
+		}
+	}
+
 	configureSession(sessionName: string): void {
 		try {
 			exec(`tmux set-option -t "${sessionName}" status off`);
@@ -297,8 +321,18 @@ export class TmuxIntegration {
 		}
 	}
 
+	/**
+	 * Create the session and mark its own pane `remain-on-exit` in the same
+	 * tmux invocation, chained with `\;` so the server processes both as one
+	 * client request. That keeps a pane whose command crashes almost
+	 * immediately (e.g. the CLI binary is missing) around as a dead pane
+	 * instead of tearing the session down before anything could read its exit
+	 * code or output — without ever touching the server-wide `-g` default,
+	 * which would otherwise change `remain-on-exit` for every tmux session on
+	 * the machine, including ones outside Agent Space.
+	 */
 	createCommand(sessionName: string, innerCommand: string): string {
-		return `tmux new-session -d -s "${sessionName}" "${innerCommand}"`;
+		return `tmux new-session -d -s "${sessionName}" "${innerCommand}" \\; set-option -t "${sessionName}" remain-on-exit on`;
 	}
 
 	/**
@@ -380,6 +414,22 @@ export class TmuxIntegration {
 			return exec(
 				`tmux capture-pane -t "${sessionName}" -p -S -${lines}`,
 			).trimEnd();
+		} catch {
+			return null;
+		}
+	}
+
+	/** Non-blocking twin of {@link capturePane}. */
+	async capturePaneAsync(
+		sessionName: string,
+		lines = 50,
+	): Promise<string | null> {
+		try {
+			return (
+				await execAsync(`tmux capture-pane -t "${sessionName}" -p -S -${lines}`)
+			)
+				.toString()
+				.trimEnd();
 		} catch {
 			return null;
 		}

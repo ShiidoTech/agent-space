@@ -176,10 +176,12 @@ const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
 		resumeArgs: (sessionId) => (sessionId ? ["--resume", sessionId] : []),
 	},
 	codex: {
-		// PR4: the thread is created by app-server before the TUI starts. A
-		// session id on a fresh launch is therefore an exact thread receipt, not
-		// a discovery hint.
-		launchArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
+		// A fresh launch never has a proven session id to resume: Codex writes
+		// no rollout file until the CLI actually runs a turn, so there is
+		// nothing on disk yet for `codex resume` to find. Always launch plain;
+		// the file-backed discovery path in SessionBinder binds the agent once
+		// its rollout appears, matching the strict `resumeArgs` path below.
+		launchArgs: () => [],
 		resumeArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 	},
 	opencode: {
@@ -268,10 +270,10 @@ function providerForTool(
 		family === "claude"
 			? (sessionId?: string | null) =>
 					sessionId ? ["--session-id", sessionId] : []
-			: family === "codex"
-				? (sessionId?: string | null) =>
-						sessionId ? ["resume", sessionId] : []
-				: () => [];
+			: // Codex (including wrapped/custom profiles) never has a proven
+				// resumable session id on a fresh launch — see the built-in codex
+				// provider override for why. Always launch plain.
+				() => [];
 	const resumeArgs =
 		family === "claude"
 			? (sessionId?: string | null) =>

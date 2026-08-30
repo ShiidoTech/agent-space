@@ -253,6 +253,39 @@ export class AgentManager {
 		this.saveAgents(featureId, agents);
 	}
 
+	/**
+	 * Advance startup to the given step: every step before it is marked
+	 * `completed` (its phase provably finished, whether or not this method was
+	 * ever called for it) and the step itself is marked `running`. Steps after
+	 * it are untouched.
+	 *
+	 * Without this, a step left `running` from `beginAgentStartup` (e.g.
+	 * "worktree" when `waitingForWorktree` was true) is still the one
+	 * `recordAgentFailure` blames for a failure that actually happened in a
+	 * later phase — the worktree gets reported as failed when it was the
+	 * provider that crashed after the worktree and terminal both succeeded.
+	 */
+	advanceStartupStep(
+		agentId: string,
+		featureId: string,
+		stepId: "worktree" | "terminal" | "provider",
+	): void {
+		const agents = this.loadAgents(featureId);
+		const agent = agents.find((candidate) => candidate.id === agentId);
+		if (!agent?.startup) return;
+		const index = agent.startup.steps.findIndex((step) => step.id === stepId);
+		if (index === -1) return;
+		for (let i = 0; i < index; i++) {
+			if (agent.startup.steps[i].status !== "failed") {
+				agent.startup.steps[i].status = "completed";
+			}
+		}
+		if (agent.startup.steps[index].status !== "failed") {
+			agent.startup.steps[index].status = "running";
+		}
+		this.saveAgents(featureId, agents);
+	}
+
 	renameAgent(agentId: string, featureId: string, name: string): void {
 		const agents = this.loadAgents(featureId);
 		const agent = agents.find((a) => a.id === agentId);

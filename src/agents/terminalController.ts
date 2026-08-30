@@ -182,9 +182,13 @@ export class TerminalController implements vscode.Disposable {
 		}
 
 		let justLaunched = false;
+		let launchDiagnostics:
+			| { exitCode?: number; output?: string | null }
+			| undefined;
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 			const shouldResume = resume && agent.hasStarted === true;
+			this.advanceStartupStep(feature.id, agent.id, "terminal");
 			let baseCommand: string;
 			if (shouldResume) {
 				if (tool.family === "hermes") {
@@ -253,6 +257,24 @@ export class TerminalController implements vscode.Disposable {
 				exec(this.tmux.createCommand(sessionName, launchCommand), { cwd });
 				this.tmux.configureSession(sessionName);
 				sessionReady = this.tmux.isSessionAlive(sessionName);
+				if (sessionReady) {
+					// The terminal itself is up; a failure from here on is the
+					// provider process inside it, not the terminal.
+					this.advanceStartupStep(feature.id, agent.id, "provider");
+					// See the async twin for why the session can still be alive with a
+					// dead pane (remain-on-exit) after an almost-instant crash.
+					const paneStatus = this.tmux.getPaneStatus(sessionName);
+					if (paneStatus?.dead) {
+						launchDiagnostics = {
+							exitCode: paneStatus.exitCode,
+							output: this.tmux.capturePane(sessionName),
+						};
+						this.tmux.killSession(sessionName);
+						sessionReady = false;
+					} else {
+						this.tmux.clearRemainOnExitForSession(sessionName);
+					}
+				}
 				justLaunched = sessionReady;
 			} catch (err) {
 				console.warn(`[TerminalController] tmux session create failed: ${err}`);
@@ -271,8 +293,14 @@ export class TerminalController implements vscode.Disposable {
 				agent.name,
 				tool.name,
 				cwd,
+				launchDiagnostics,
 			);
-			this.recordAgentFailure(feature.id, agent.id, message);
+			this.recordAgentFailure(
+				feature.id,
+				agent.id,
+				message,
+				launchDiagnostics?.exitCode,
+			);
 			void vscode.window.showErrorMessage(message);
 			return undefined;
 		}
@@ -454,9 +482,13 @@ export class TerminalController implements vscode.Disposable {
 			: await this.tmux.adoptSessionAsync(sessionName, legacySessionName);
 
 		let justLaunched = false;
+		let launchDiagnostics:
+			| { exitCode?: number; output?: string | null }
+			| undefined;
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 			const shouldResume = resume && agent.hasStarted === true;
+			this.advanceStartupStep(feature.id, agent.id, "terminal");
 			try {
 				this.beforeLaunchCallback?.(feature, agent, cwd);
 				await this.beforeLaunchAsyncCallback?.(
@@ -540,6 +572,30 @@ export class TerminalController implements vscode.Disposable {
 				});
 				this.tmux.configureSession(sessionName);
 				sessionReady = await this.tmux.isSessionAliveAsync(sessionName);
+				if (sessionReady) {
+					// The terminal itself is up; a failure from here on is the
+					// provider process inside it, not the terminal.
+					this.advanceStartupStep(feature.id, agent.id, "provider");
+					// The tmux session can outlive an almost-instant crash of the
+					// process inside it (remain-on-exit) — check the pane, not just
+					// the session, so a CLI that started and immediately exited is
+					// reported as a real failure with its actual output, not a
+					// silent "ready" terminal attached to a dead pane.
+					const paneStatus = await this.tmux.getPaneStatusAsync(sessionName);
+					if (paneStatus?.dead) {
+						launchDiagnostics = {
+							exitCode: paneStatus.exitCode,
+							output: await this.tmux.capturePaneAsync(sessionName),
+						};
+						this.tmux.killSession(sessionName);
+						sessionReady = false;
+					} else {
+						// Alive and running: revert to the ordinary "session dies with
+						// its pane" behavior so a later, mid-conversation crash is still
+						// detected the existing way (see clearRemainOnExitForSession).
+						await this.tmux.clearRemainOnExitForSessionAsync(sessionName);
+					}
+				}
 				justLaunched = sessionReady;
 			} catch (err) {
 				console.warn(`[TerminalController] tmux session create failed: ${err}`);
@@ -562,8 +618,14 @@ export class TerminalController implements vscode.Disposable {
 				agent.name,
 				tool.name,
 				cwd,
+				launchDiagnostics,
 			);
-			this.recordAgentFailure(feature.id, agent.id, message);
+			this.recordAgentFailure(
+				feature.id,
+				agent.id,
+				message,
+				launchDiagnostics?.exitCode,
+			);
 			void vscode.window.showErrorMessage(message);
 			return undefined;
 		}
@@ -858,7 +920,19 @@ export class TerminalController implements vscode.Disposable {
 		agentName: string,
 		toolName: string,
 		cwd: string,
+		diagnostics?: { exitCode?: number; output?: string | null },
 	): string {
+		const output = diagnostics?.output?.trim();
+		if (diagnostics?.exitCode !== undefined || output) {
+			const exitPart =
+				diagnostics?.exitCode !== undefined
+					? ` (exit code ${diagnostics.exitCode})`
+					: "";
+			// The CLI process demonstrably started and exited — never blame a
+			// missing binary or a bad cwd for a process that actually ran.
+			const outputPart = output ? ` Last output:\n${output.slice(-2000)}` : "";
+			return `${toolName} exited during startup${exitPart} for ${agentName}.${outputPart}`;
+		}
 		return `Failed to start ${agentName} with ${toolName}. Check that the CLI is installed and launches from ${cwd}.`;
 	}
 
@@ -981,6 +1055,20 @@ export class TerminalController implements vscode.Disposable {
 
 		ctx.agentManager.recordAgentFailure(agentId, featureId, message, exitCode);
 		this.projectManager.notifyChange({ featureId, structural: false });
+	}
+
+	/**
+	 * Mark startup progress so a later failure is blamed on the phase that
+	 * actually failed. See `AgentManager.advanceStartupStep`.
+	 */
+	private advanceStartupStep(
+		featureId: string,
+		agentId: string,
+		stepId: "worktree" | "terminal" | "provider",
+	): void {
+		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		if (!ctx) return;
+		ctx.agentManager.advanceStartupStep(agentId, featureId, stepId);
 	}
 
 	private markAgentTerminalReady(metadata: TerminalMetadata): void {

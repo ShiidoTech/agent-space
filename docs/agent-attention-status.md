@@ -51,12 +51,16 @@ A generic permission prompt is not guessed from terminal text. If Claude does no
 
 ### Codex
 
-For PR4, the primary source is the controlled `codex app-server --stdio`
-connection, keyed by the persisted exact thread id. The native TUI is a
-separate process, and the cross-process smoke did not prove that this external
-server receives its live events. Codex attention is therefore advertised as
+The primary source is the controlled `codex app-server --stdio` connection,
+keyed by thread id, but it only observes threads the app-server itself
+drives. The interactive agent Agent Space launches is a separate native TUI
+process spawned in tmux, not driven through this connection, so it produces
+none of these events. Codex attention is therefore advertised as
 `unsupported` for now. Rollout JSONL remains a diagnostic fallback and never
-establishes ownership.
+establishes ownership. (See `docs/providers/codex-app-server.md` for why
+Agent Space no longer acquires a pre-launch thread id for Codex either —
+`thread/start` returns an id before its rollout exists, and #125 treated that
+as a false ownership guarantee.)
 
 Strong signals include:
 

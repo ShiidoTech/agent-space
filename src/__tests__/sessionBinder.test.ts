@@ -1009,4 +1009,148 @@ describe("SessionBinder", () => {
 			"just-before-launch",
 		);
 	});
+
+	describe("Codex (#125 regression, real CodexSessionProvider)", () => {
+		function writeCodexRollout(
+			sessionsDir: string,
+			sessionId: string,
+			cwd: string,
+			createdAt: string,
+		): void {
+			const filePath = path.join(sessionsDir, `rollout-${sessionId}.jsonl`);
+			fs.writeFileSync(
+				filePath,
+				JSON.stringify({
+					type: "session_meta",
+					payload: { id: sessionId, cwd, timestamp: createdAt },
+				}),
+			);
+		}
+
+		// Cas B: acquireConversation acquires nothing for Codex — a fresh launch
+		// never depends on an app-server thread/start receipt that Codex 0.151.0
+		// cannot actually resume yet (no rollout file exists until a turn runs).
+		it("Cas B: never acquires a pre-launch identity, so a fresh Codex launch is unbound", async () => {
+			const sessionsDir = tempDir("codex-binder-sessions-");
+			const { CodexSessionProvider } = await import(
+				"../agents/sessionProviders/codexSessionProvider"
+			);
+			const codexAdapter = new CodexSessionProvider(sessionsDir);
+			const { projectManager, ctx } = setup([feature()]);
+			const agent = agentFixture({ toolId: "codex", sessionId: null });
+			ctx.store.saveAgents("f1", [agent]);
+
+			const binder = new SessionBinder(registry(codexAdapter), tmux());
+			binder.start(projectManager, 0);
+
+			const receipt = await binder.acquireConversation(
+				ctx,
+				"f1",
+				agent,
+				WORKTREE,
+				false,
+			);
+			expect(receipt).toBeUndefined();
+			expect(ctx.store.loadAgents("f1")[0].sessionId).toBeNull();
+		});
+
+		// Cas D: two Codex agents in the same worktree must never cross-adopt
+		// each other's rollout, in either order of who actually talked first.
+		it.each([
+			["a1 talks first", "ses-for-a1", "ses-for-a2"],
+			["a2 talks first", "ses-for-a2", "ses-for-a1"],
+		])("Cas D: no cross-adoption when %s", async (_label, firstId, secondId) => {
+			const sessionsDir = tempDir("codex-binder-sessions-");
+			const { CodexSessionProvider } = await import(
+				"../agents/sessionProviders/codexSessionProvider"
+			);
+			const codexAdapter = new CodexSessionProvider(sessionsDir);
+			const { projectManager, ctx } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({
+					id: "a1",
+					toolId: "codex",
+					tmuxSession: "agent-space-f1-a1",
+					launchedAt: "2026-08-09T07:51:00.000Z",
+				}),
+				agentFixture({
+					id: "a2",
+					toolId: "codex",
+					tmuxSession: "agent-space-f1-a2",
+					launchedAt: "2026-08-09T07:52:00.000Z",
+				}),
+			]);
+
+			// Both rollouts materialize after both agents have launched — real
+			// Codex has no ordering relationship between launch and first prompt.
+			writeCodexRollout(
+				sessionsDir,
+				firstId,
+				WORKTREE,
+				"2026-08-09T07:55:00.000Z",
+			);
+			writeCodexRollout(
+				sessionsDir,
+				secondId,
+				WORKTREE,
+				"2026-08-09T07:56:00.000Z",
+			);
+
+			const binder = new SessionBinder(registry(codexAdapter), tmux());
+			binder.start(projectManager, 0);
+			binder.reconcileAll();
+
+			const stored = ctx.store.loadAgents("f1");
+			for (const id of ["a1", "a2"]) {
+				const stored_agent = stored.find((a) => a.id === id);
+				expect(stored_agent?.sessionId).toBeNull();
+				expect(stored_agent?.sessionBinding?.state).toBe("ambiguous");
+			}
+		});
+
+		// Cas G: a *single* fresh Codex agent whose rollout materializes is not
+		// auto-bound either. CodexSessionProvider implements no
+		// correlateOwnedSession, so SessionBinder.resolveClaim has no
+		// provider-specific ownership proof and treats a lone discovered
+		// candidate exactly like an ambiguous one — the same fail-closed
+		// posture as OpenCode, not Claude's auto-bind. This locks in the
+		// corrected docs/providers/codex-app-server.md claim: earlier drafts of
+		// this PR incorrectly said file-backed discovery binds Codex "the same
+		// way the Claude family is bound", which this test would have caught.
+		it("Cas G: a single fresh Codex candidate stays ambiguous, not auto-bound (no correlateOwnedSession)", async () => {
+			const sessionsDir = tempDir("codex-binder-sessions-");
+			const { CodexSessionProvider } = await import(
+				"../agents/sessionProviders/codexSessionProvider"
+			);
+			const codexAdapter = new CodexSessionProvider(sessionsDir);
+			expect(
+				(codexAdapter as unknown as { correlateOwnedSession?: unknown })
+					.correlateOwnedSession,
+			).toBeUndefined();
+			const { projectManager, ctx } = setup([feature()]);
+			ctx.store.saveAgents("f1", [
+				agentFixture({
+					id: "a1",
+					toolId: "codex",
+					tmuxSession: "agent-space-f1-a1",
+					launchedAt: "2026-08-09T07:51:00.000Z",
+				}),
+			]);
+
+			writeCodexRollout(
+				sessionsDir,
+				"ses-for-a1",
+				WORKTREE,
+				"2026-08-09T07:55:00.000Z",
+			);
+
+			const binder = new SessionBinder(registry(codexAdapter), tmux());
+			binder.start(projectManager, 0);
+			binder.reconcileAll();
+
+			const stored = ctx.store.loadAgents("f1")[0];
+			expect(stored.sessionId).toBeNull();
+			expect(stored.sessionBinding?.state).toBe("ambiguous");
+		});
+	});
 });

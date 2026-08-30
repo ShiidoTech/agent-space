@@ -79,48 +79,68 @@ describe("CodexSessionProvider", () => {
 	}
 
 	describe("controlled app-server identity and events", () => {
-		it("persists and observes the exact thread returned by thread/start", async () => {
+		// Regression coverage for #125: on Codex CLI 0.151.0, `thread/start`
+		// returns a thread id before any rollout file exists on disk — the
+		// rollout only materializes once a turn actually runs (verified against
+		// a real `codex app-server --stdio` process). Treating that id as an
+		// exact, immediately-resumable identity is what made every fresh Codex
+		// launch try `codex resume <id>` against a session that did not exist
+		// yet ("No saved session found").
+		it("does not acquire a pre-launch identity from thread/start", () => {
 			const fake = appServerFake(["thread-a"]);
 			const provider = new CodexSessionProvider(
 				tmpDir,
 				sessionIndexPath,
 				fake.transport,
 			);
-			const receipt = await provider.acquireConversation({
-				agentId: "agent-a",
-				featureId: "feature-a",
-				cwd: "/tmp/project",
-				knownSessionIds: new Set(),
-			});
-
-			expect(receipt).toEqual({
-				sessionId: "thread-a",
-				proof: "codex.app-server.thread/start",
-			});
-			fake.emit({
-				method: "turn/started",
-				params: { threadId: "thread-a", turn: { id: "turn-a" } },
-			});
-			expect(provider.readAttention("thread-a")?.status).toBe("working");
+			expect(
+				(provider as unknown as { acquireConversation?: unknown })
+					.acquireConversation,
+			).toBeUndefined();
 		});
 
-		it("keeps two same-worktree threads isolated, including reversed prompt order", async () => {
-			const fake = appServerFake(["thread-a", "thread-b"]);
+		it("Cas A: refuses to resume a thread/start id with no materialized rollout", async () => {
+			// thread/start succeeded and the app-server would happily "resume"
+			// its own in-memory thread, but no rollout file was ever written for
+			// it — exactly the gap between an app-server thread and a session the
+			// native TUI can actually open. resumeConversation must fail closed.
+			const fake = appServerFake(["thread-a"]);
 			const provider = new CodexSessionProvider(
 				tmpDir,
 				sessionIndexPath,
 				fake.transport,
 			);
-			const context = {
-				cwd: "/tmp/shared",
-				knownSessionIds: new Set<string>(),
-			};
-			const [a, b] = await Promise.all([
-				provider.acquireConversation({ ...context, agentId: "a" }),
-				provider.acquireConversation({ ...context, agentId: "b" }),
-			]);
-			expect(new Set([a?.sessionId, b?.sessionId])).toEqual(
-				new Set(["thread-a", "thread-b"]),
+			expect(await provider.resumeConversation("thread-a")).toBe(false);
+			// The disk check must short-circuit before ever asking the app-server —
+			// no request should be made for an id nothing has ever persisted.
+			expect(fake.transport.request).not.toHaveBeenCalled();
+		});
+
+		it("Cas B2: async.hasSession answers from disk only, never falls through to a sync resume", async () => {
+			// async.hasSession used to be
+			// `findSessionFileAsync || resumeConversation`, and resumeConversation
+			// starts with the *synchronous* hasSession/findSessionFile walk of the
+			// store. A periodic async pass polling for an id with no rollout yet
+			// would therefore silently run a sync filesystem scan on the
+			// Extension Host — exactly what the async surface exists to avoid.
+			const fake = appServerFake([]);
+			const provider = new CodexSessionProvider(
+				tmpDir,
+				sessionIndexPath,
+				fake.transport,
+			);
+			const syncHasSession = vi.spyOn(provider, "hasSession");
+			expect(await provider.async.hasSession("missing-thread")).toBe(false);
+			expect(syncHasSession).not.toHaveBeenCalled();
+			expect(fake.transport.request).not.toHaveBeenCalled();
+		});
+
+		it("keeps two same-worktree threads' attention isolated, including reversed order", () => {
+			const fake = appServerFake([]);
+			const provider = new CodexSessionProvider(
+				tmpDir,
+				sessionIndexPath,
+				fake.transport,
 			);
 
 			fake.emit({ method: "turn/started", params: { threadId: "thread-b" } });
@@ -186,7 +206,12 @@ describe("CodexSessionProvider", () => {
 			expect(provider.readAttention("thread-failed")?.status).toBe("failed");
 		});
 
-		it("resumes only the persisted thread id", async () => {
+		it("Cas C: resumes a thread id whose rollout is genuinely persisted", async () => {
+			// A real rollout on disk is what proves the native TUI can open this
+			// session — that's the strict, exact resume path this must stay on.
+			writeSessionFile("2026/03/04/rollout-1000-thread-a.jsonl", [
+				sessionMeta("thread-a"),
+			]);
 			const fake = appServerFake([]);
 			const provider = new CodexSessionProvider(
 				tmpDir,

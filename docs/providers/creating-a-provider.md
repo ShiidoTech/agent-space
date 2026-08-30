@@ -41,16 +41,25 @@ Current provider identity findings:
 
 - Claude remains preassigned: Agent Space creates the UUID and passes it to
   `--session-id`.
-- Codex 0.150.1 exposes `thread/start` and `thread/resume` through its
-  experimental JSON-RPC app-server protocol. PR4 starts one shared
-  `codex app-server --stdio` connection per Codex adapter, creates the thread
-  before launching the UI, persists the returned `thread.id`, and launches
-  `codex resume <thread.id>`. `turn/started`, `turn/completed`, approval
-  requests, and `item/tool/requestUserInput` are consumed only when they carry
-  that exact thread id. A connection crash clears live structured evidence;
-  the next exact `thread/resume` is the only recovery path. Existing agents
-  without a verifiable id remain unresolved and are never adopted from a
-  recent rollout.
+- Codex 0.151.0 exposes `thread/start` and `thread/resume` through its
+  experimental JSON-RPC app-server protocol, but `thread/start` alone is not
+  a resumable identity: verified against a real app-server process, its
+  rollout file does not exist on disk until a turn actually runs, and
+  `codex resume <id>` against that id fails with "No saved session found"
+  (see `docs/providers/codex-app-server.md`, corrected after the #125
+  regression). Agent Space does not acquire a pre-launch identity for Codex;
+  a fresh agent launches plain `codex` and its rollout is discovered through
+  the same file-backed scan the Claude family uses, but Codex has no
+  `correlateOwnedSession` proof, so `SessionBinder` leaves even a single
+  freshly-appeared rollout `ambiguous` — like OpenCode, it stays fail-closed
+  until explicit `Attach Provider Session`, not auto-bound like Claude. A
+  previously bound resume stays strict: `resumeConversation`
+  checks the rollout exists on disk before confirming it with
+  `thread/resume`. `turn/started`, `turn/completed`, approval requests, and
+  `item/tool/requestUserInput` are consumed only when they carry an exact
+  thread id, but only fire for threads the app-server itself drives, not the
+  native TUI Agent Space spawns. Existing agents without a verifiable id
+  remain unresolved and are never adopted from a recent rollout.
 - OpenCode 1.18.17 exposes `--session` for resume and a session database, but
   no launch option or provider-native ownership receipt was found in the CLI
   contract. Directory and creation time remain insufficient, so OpenCode also
