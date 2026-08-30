@@ -1,5 +1,8 @@
 import type { Agent } from "../../types";
-import { AgentAttentionResolver } from "../attention/agentAttentionResolver";
+import {
+	AgentAttentionResolver,
+	type AgentAttentionSnapshot,
+} from "../attention/agentAttentionResolver";
 import type { CodingToolRegistry } from "../codingToolRegistry";
 import type { TmuxIntegration } from "../tmux";
 import type { AgentObservation } from "./types";
@@ -22,8 +25,51 @@ export class AgentObservationResolver {
 				? undefined
 				: lifecycle.state,
 		);
-		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
+		return this.assemble(agent, lifecycle, attention);
+	}
 
+	/**
+	 * Non-blocking twin of {@link resolve}: identical decision tree, but
+	 * lifecycle and attention are both probed through async helpers
+	 * (`isSessionAliveAsync`, `AgentAttentionResolver.resolveAsync`) so
+	 * background observers (runtime reconciliation, the attention monitor)
+	 * never block the Extension Host on a subprocess. Used to populate
+	 * `AgentManager`'s observation cache — never called from a render path.
+	 */
+	async resolveAsync(agent: Agent): Promise<AgentObservation> {
+		const lifecycle = await this.resolveLifecycleAsync(agent);
+		const attention = await this.attentionResolver.resolveAsync(
+			agent,
+			lifecycle.state === "starting" || lifecycle.state === "unknown"
+				? undefined
+				: lifecycle.state,
+		);
+		return this.assemble(agent, lifecycle, attention);
+	}
+
+	/**
+	 * Zero-I/O synthesis of an observation from persisted agent fields alone
+	 * — no tmux, no provider read. Used as the cache-miss default so a
+	 * render path that asks for an agent's observation before the async
+	 * cache has ever been populated still gets a well-formed, honestly
+	 * "unknown" result instead of blocking on a live probe.
+	 */
+	resolveReadModel(agent: Agent): AgentObservation {
+		const lifecycle = this.resolveLifecycleReadModel(agent);
+		const attention: AgentAttentionSnapshot = {
+			status: "unknown",
+			reason: "Not yet observed",
+			source: "fallback",
+		};
+		return this.assemble(agent, lifecycle, attention);
+	}
+
+	private assemble(
+		agent: Agent,
+		lifecycle: AgentObservation["lifecycle"],
+		attention: AgentAttentionSnapshot,
+	): AgentObservation {
+		const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
 		return {
 			identity: {
 				agentName: agent.name,
@@ -45,6 +91,64 @@ export class AgentObservationResolver {
 				pending: Boolean(agent.pendingReviewId),
 			},
 		};
+	}
+
+	/** Lifecycle facts derivable from the persisted agent alone — no tmux. */
+	private resolveLifecycleReadModel(
+		agent: Agent,
+	): AgentObservation["lifecycle"] {
+		if (agent.status === "errored") {
+			return { state: "errored", source: "agentspace" };
+		}
+		if (agent.status === "done") {
+			return { state: "done", source: "agentspace" };
+		}
+		if (agent.status === "stopped") {
+			return { state: "stopped", source: "agentspace" };
+		}
+		if (agent.hasStarted !== true) {
+			return { state: "starting", source: "agentspace" };
+		}
+		return {
+			state: "unknown",
+			source: "agentspace",
+			reason: "Not yet observed",
+		};
+	}
+
+	private async resolveLifecycleAsync(
+		agent: Agent,
+	): Promise<AgentObservation["lifecycle"]> {
+		if (agent.status === "errored") {
+			return { state: "errored", source: "agentspace" };
+		}
+		if (agent.status === "done") {
+			return { state: "done", source: "agentspace" };
+		}
+		if (agent.status === "stopped") {
+			return { state: "stopped", source: "agentspace" };
+		}
+		if (agent.hasStarted !== true) {
+			return { state: "starting", source: "agentspace" };
+		}
+
+		const sessionName =
+			agent.tmuxSession ?? this.tmux.sessionName(agent.featureId, agent.id);
+		try {
+			const alive = await this.tmux.isSessionAliveAsync?.(sessionName);
+			return alive === false
+				? { state: "stopped", source: "tmux" }
+				: { state: "running", source: "agentspace" };
+		} catch (error) {
+			return {
+				state: "unknown",
+				source: "tmux",
+				reason:
+					error instanceof Error
+						? `tmux observation failed: ${error.message}`
+						: "tmux observation failed",
+			};
+		}
 	}
 
 	private resolveLifecycle(agent: Agent): AgentObservation["lifecycle"] {

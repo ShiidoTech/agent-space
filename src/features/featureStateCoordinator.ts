@@ -703,6 +703,11 @@ export class FeatureStateCoordinator implements Disposable {
 					orphanIds.has(feature.id),
 				);
 				this.commitRuntime(gen, ctx.project.id, feature, runtime, gitOverride);
+				// Fire-and-forget: keeps the observation cache backing
+				// `agentManager.observeCached()` warm for sidebar/Home
+				// presentation without slowing down this presence tick. Async and
+				// off the render path — never awaited here (P0 zero-I/O UI).
+				void ctx.agentManager.refreshObservationCache?.(feature.id);
 			}
 		}
 	}

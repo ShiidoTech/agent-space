@@ -17,6 +17,7 @@ import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
 import { CodingToolRegistry } from "./codingToolRegistry";
 import { resolveCreationProfile } from "./hermesProfileResolver";
 import { AgentObservationResolver } from "./observation/agentObservationResolver";
+import type { AgentObservation } from "./observation/types";
 import type { TmuxIntegration } from "./tmux";
 
 export interface AgentWorktreeRemovalResult {
@@ -36,6 +37,14 @@ export class AgentManager {
 	 * (issue #120 PR2, review round 3).
 	 */
 	private lastKnownReviewInbox = new Map<string, Record<string, string>>();
+	/**
+	 * Last-known {@link AgentObservation} per agentId, refreshed asynchronously
+	 * by {@link refreshObservationCache} (called from background reconciliation,
+	 * never from a render path). Backs {@link observeCached}: a zero-I/O read
+	 * so sidebar/Home presentation never re-probes tmux/provider state on every
+	 * refresh (P0 zero-I/O UI mandate).
+	 */
+	private observationCache = new Map<string, AgentObservation>();
 	private cachedDefaultBranch: string | undefined;
 	private invalidateTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private readonly attentionResolver: AgentAttentionResolver;
@@ -157,6 +166,45 @@ export class AgentManager {
 
 	observe(agent: Agent) {
 		return this.observationResolver.resolve(agent);
+	}
+
+	/**
+	 * Zero-I/O read of the last-known observation for this agent: never tmux,
+	 * never a provider, never a subprocess. Falls back to a purely
+	 * persisted-field synthesis ({@link AgentObservationResolver.resolveReadModel})
+	 * when the cache hasn't been populated yet (e.g. before the first
+	 * background reconciliation tick). This is the read path presentation
+	 * (sidebar, Home) must use instead of {@link observe} (P0 zero-I/O UI
+	 * mandate).
+	 */
+	observeCached(agent: Agent): AgentObservation {
+		return (
+			this.observationCache.get(agent.id) ??
+			this.observationResolver.resolveReadModel(agent)
+		);
+	}
+
+	/**
+	 * Refresh the observation cache for every agent of a feature, using only
+	 * async, non-blocking probes. Intended to be called from background
+	 * reconciliation (e.g. `FeatureStateCoordinator.reconcilePresence`) —
+	 * never awaited on a render path. A single agent's probe failing does not
+	 * abort the others; that agent's cache entry is simply left stale.
+	 */
+	async refreshObservationCache(featureId: string): Promise<void> {
+		const agents = this.getAgentsReadModel(featureId);
+		await Promise.all(
+			agents.map(async (agent) => {
+				try {
+					const observation =
+						await this.observationResolver.resolveAsync(agent);
+					this.observationCache.set(agent.id, observation);
+				} catch {
+					// Leave the previous cache entry (or the read-model default) in
+					// place; a transient probe failure should not blank the card.
+				}
+			}),
+		);
 	}
 
 	createAgent(feature: Feature, toolId?: string): Agent {

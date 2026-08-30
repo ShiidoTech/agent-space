@@ -66,8 +66,9 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		session: { state: "ambiguous", detail: "Several candidates" },
 		review: { pending: false },
 	}));
-	const ctx = { agentManager: { getAgents, observe } };
+	const ctx = { agentManager: { getAgents, observe, observeCached: observe } };
 	const resolveFeature = vi.fn().mockReturnValue({ ctx, feature });
+	const findContextByFeatureId = vi.fn(() => ctx);
 
 	let receiveMessage: ReturnType<typeof vi.fn>;
 	let getTerminal: ReturnType<typeof vi.fn>;
@@ -114,7 +115,11 @@ describe("HomePanel.focusAgentTerminal (issue #69 hardened path)", () => {
 		// the panel directly rather than through the navigation lifecycle.
 		const p = new HomePanel(
 			webviewPanel as never,
-			{ resolveFeature, getContext: vi.fn(() => undefined) } as never,
+			{
+				resolveFeature,
+				getContext: vi.fn(() => undefined),
+				findContextByFeatureId,
+			} as never,
 			{
 				getSnapshot,
 				getProjectSnapshots,

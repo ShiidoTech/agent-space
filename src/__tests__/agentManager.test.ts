@@ -824,4 +824,63 @@ describe("AgentManager", () => {
 			attentionRead.mockRestore();
 		});
 	});
+
+	describe("observeCached / refreshObservationCache (P0 zero-I/O UI)", () => {
+		it("observeCached never touches tmux/subprocess before the cache is populated", () => {
+			const agent = manager.createAgent(feature, "copilot");
+			manager.markAgentStarted(agent.id, feature.id);
+
+			const observation = manager.observeCached(agent);
+
+			expect(observation.lifecycle.state).toBe("unknown");
+			expect(observation.attention.state).toBe("unknown");
+			expect(tmux.isSessionAlive).not.toHaveBeenCalled();
+			expect(tmux.getPaneStatus).not.toHaveBeenCalled();
+			expect(mockExecSync).not.toHaveBeenCalled();
+			expect(mockExecFile).not.toHaveBeenCalled();
+		});
+
+		it("refreshObservationCache populates the cache asynchronously without sync subprocess calls", async () => {
+			const asyncTmux = tmux as unknown as {
+				isSessionAliveAsync: ReturnType<typeof vi.fn>;
+				getPaneStatusAsync: ReturnType<typeof vi.fn>;
+			};
+			asyncTmux.isSessionAliveAsync = vi.fn(async () => true);
+			asyncTmux.getPaneStatusAsync = vi.fn(async () => null);
+
+			const agent = manager.createAgent(feature, "copilot");
+			manager.markAgentStarted(agent.id, feature.id);
+
+			await manager.refreshObservationCache(feature.id);
+
+			const observation = manager.observeCached(agent);
+			expect(observation.lifecycle.state).toBe("running");
+			expect(asyncTmux.isSessionAliveAsync).toHaveBeenCalled();
+			expect(tmux.isSessionAlive).not.toHaveBeenCalled();
+			expect(tmux.getPaneStatus).not.toHaveBeenCalled();
+			expect(mockExecSync).not.toHaveBeenCalled();
+			expect(mockExecFile).not.toHaveBeenCalled();
+		});
+
+		it("observeCached keeps returning the last-known observation after a refresh failure", async () => {
+			const asyncTmux = tmux as unknown as {
+				isSessionAliveAsync: ReturnType<typeof vi.fn>;
+			};
+			asyncTmux.isSessionAliveAsync = vi.fn(async () => {
+				throw new Error("boom");
+			});
+
+			const agent = manager.createAgent(feature, "copilot");
+			manager.markAgentStarted(agent.id, feature.id);
+
+			await expect(
+				manager.refreshObservationCache(feature.id),
+			).resolves.toBeUndefined();
+
+			// A probe failure falls back to the read-model default rather than
+			// throwing out of the sweep or leaving presentation with nothing.
+			const observation = manager.observeCached(agent);
+			expect(observation).toBeDefined();
+		});
+	});
 });

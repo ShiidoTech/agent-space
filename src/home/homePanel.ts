@@ -839,7 +839,7 @@ export class HomePanel {
 			type: "agentAttentionUpdate",
 			agents: agents.map((agent) => ({
 				cardPresentation: presentAgentCard(
-					resolved.ctx.agentManager.observe(agent),
+					resolved.ctx.agentManager.observeCached(agent),
 				),
 				id: agent.id,
 			})),
@@ -906,43 +906,15 @@ export class HomePanel {
 						.flatMap((ctx) =>
 							this.featureStateCoordinator.getProjectSnapshots(ctx.project.id),
 						);
-		const rollup = projectSnapshotFleetRollup(
-			snapshots,
-			(agent, snapshot) =>
-				this.projectManager
-					.findContextByFeatureId(snapshot.feature.id)
-					?.agentManager.observe(agent) ?? {
-					identity: { agentName: agent.name },
-					lifecycle: { state: agent.status, source: "agentspace" },
-					attention: {
-						state:
-							agent.attentionStatus === "done"
-								? "unknown"
-								: (agent.attentionStatus ?? "unknown"),
-					},
-					session: { state: agent.sessionBinding?.state ?? "pending" },
-					review: { pending: Boolean(agent.pendingReviewId) },
-				},
+		const rollup = projectSnapshotFleetRollup(snapshots, (agent, snapshot) =>
+			this.observeAgentCached(snapshot.feature.id, agent),
 		);
 		const agentUpdates = snapshots.flatMap((snapshot) =>
 			snapshot.runtime.agents.status === "known"
 				? snapshot.runtime.agents.value.map(({ agent }) => ({
 						id: agent.id,
 						cardPresentation: presentAgentCard(
-							this.projectManager
-								.findContextByFeatureId(snapshot.feature.id)
-								?.agentManager.observe(agent as Agent) ?? {
-								identity: { agentName: agent.name },
-								lifecycle: { state: agent.status, source: "agentspace" },
-								attention: {
-									state:
-										agent.attentionStatus === "done"
-											? "unknown"
-											: (agent.attentionStatus ?? "unknown"),
-								},
-								session: { state: agent.sessionBinding?.state ?? "pending" },
-								review: { pending: Boolean(agent.pendingReviewId) },
-							},
+							this.observeAgentCached(snapshot.feature.id, agent as Agent),
 						),
 					}))
 				: [],
@@ -1031,6 +1003,26 @@ export class HomePanel {
 			deletions: diff.deletions,
 			raw: diff.raw,
 		};
+	}
+
+	/** Zero-I/O observation read: cache hit, or a persisted-field-only default. */
+	private observeAgentCached(featureId: string, agent: Agent) {
+		return (
+			this.projectManager
+				.findContextByFeatureId(featureId)
+				?.agentManager.observeCached(agent) ?? {
+				identity: { agentName: agent.name },
+				lifecycle: { state: agent.status, source: "agentspace" as const },
+				attention: {
+					state:
+						agent.attentionStatus === "done"
+							? ("unknown" as const)
+							: (agent.attentionStatus ?? "unknown"),
+				},
+				session: { state: agent.sessionBinding?.state ?? "pending" },
+				review: { pending: Boolean(agent.pendingReviewId) },
+			}
+		);
 	}
 
 	private snapshotAgents(snapshot: FeatureSnapshot): Agent[] {
@@ -2267,25 +2259,7 @@ export class HomePanel {
 		const idx = allAgents.indexOf(agent);
 		const color = TERMINAL_COLOR_HEX[idx % TERMINAL_COLOR_HEX.length];
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
-		const observation = this.projectManager
-			.resolveFeature(feature.id)
-			?.ctx.agentManager.observe(agent);
-		const card = presentAgentCard(
-			observation ?? {
-				identity: {
-					agentName: agent.name,
-					sessionTitle: agent.sessionTitle,
-					providerId: agent.toolId,
-				},
-				lifecycle: { state: "unknown", source: "agentspace" },
-				attention: { state: "unknown" },
-				session: {
-					state: agent.sessionBinding?.state ?? "pending",
-					detail: agent.sessionBinding?.detail,
-				},
-				review: { pending: Boolean(agent.pendingReviewId) },
-			},
-		);
+		const card = presentAgentCard(this.observeAgentCached(feature.id, agent));
 		const presented = card.primaryState;
 		const isDone = agent.status === "done";
 		const isErrored = agent.status === "errored";
@@ -2507,23 +2481,8 @@ export class HomePanel {
 	private renderFleetRollupForSnapshots(
 		snapshots: readonly FeatureSnapshot[],
 	): string {
-		const rollup = projectSnapshotFleetRollup(
-			snapshots,
-			(agent, snapshot) =>
-				this.projectManager
-					.findContextByFeatureId(snapshot.feature.id)
-					?.agentManager.observe(agent) ?? {
-					identity: { agentName: agent.name },
-					lifecycle: { state: agent.status, source: "agentspace" },
-					attention: {
-						state:
-							agent.attentionStatus === "done"
-								? "unknown"
-								: (agent.attentionStatus ?? "unknown"),
-					},
-					session: { state: agent.sessionBinding?.state ?? "pending" },
-					review: { pending: Boolean(agent.pendingReviewId) },
-				},
+		const rollup = projectSnapshotFleetRollup(snapshots, (agent, snapshot) =>
+			this.observeAgentCached(snapshot.feature.id, agent),
 		);
 		return this.renderFleetRollup(rollup);
 	}
