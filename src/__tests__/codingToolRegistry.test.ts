@@ -511,6 +511,13 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildLaunchCommand(tool, null)).toBe("codex");
 		});
 
+		it("launches OpenCode directly in the native TUI on fresh launch", () => {
+			const tool = registry.resolveAgentTool("opencode");
+			expect(
+				registry.buildLaunchCommand(tool, "stale-session", "/repo/worktree"),
+			).toBe("opencode");
+		});
+
 		// Cas C: a resume that targets an id genuinely believed to be a
 		// persisted session stays the strict `codex resume <id>` path.
 		it("Cas C: resume still targets the exact persisted Codex session id", () => {

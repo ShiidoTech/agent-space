@@ -58,6 +58,7 @@ export class TerminalController implements vscode.Disposable {
 		agent: Agent,
 		cwd: string,
 	) => void;
+	private beforeLaunchFastCallback?: (feature: Feature, agent: Agent) => void;
 	private beforeLaunchAsyncCallback?: (
 		feature: Feature,
 		agent: Agent,
@@ -110,6 +111,13 @@ export class TerminalController implements vscode.Disposable {
 		callback: (feature: Feature, agent: Agent, cwd: string) => void,
 	): void {
 		this.beforeLaunchCallback = callback;
+	}
+
+	/** Cheap fresh-launch hook; implementations must not inspect provider state. */
+	onBeforeAgentLaunchFast(
+		callback: (feature: Feature, agent: Agent) => void,
+	): void {
+		this.beforeLaunchFastCallback = callback;
 	}
 
 	/** Called once the CLI has been started in a live tmux session. */
@@ -242,13 +250,10 @@ export class TerminalController implements vscode.Disposable {
 			// Fresh launches get the project's operational knowledge note so
 			// the agent's launch context shows which instructions/runbooks
 			// were made available. Resume/attach launches stay quiet.
-			const launchContextNote = shouldResume
-				? undefined
-				: this.buildAgentLaunchNote(feature);
-			const launchCommand = this.withLaunchContextNote(
-				baseCommand,
-				launchContextNote,
-			);
+			// Launch notes are useful enrichment, but discovering project knowledge
+			// can perform filesystem I/O. Keep it out of the fresh-start critical
+			// path; the provider owns the terminal first.
+			const launchCommand = baseCommand;
 			try {
 				// Snapshot the provider's existing sessions for this directory
 				// before the CLI starts, so a session created by THIS launch is the
@@ -405,20 +410,7 @@ export class TerminalController implements vscode.Disposable {
 			existing.show();
 			return existing;
 		}
-		const inFlight = this.terminalReconciliations.get(agent.id);
-		if (inFlight) {
-			return inFlight;
-		}
-		const reconciliation = this.createTerminalAsync(
-			feature,
-			agent,
-			agentIndex,
-			resume,
-		).finally(() => {
-			this.terminalReconciliations.delete(agent.id);
-		});
-		this.terminalReconciliations.set(agent.id, reconciliation);
-		return reconciliation;
+		return this.createTerminalAsync(feature, agent, agentIndex, resume);
 	}
 
 	/**
@@ -435,7 +427,33 @@ export class TerminalController implements vscode.Disposable {
 	 * synchronous `configureSession` and `discoverProjectKnowledge`. Do not
 	 * read this method as a general "never block" promise.
 	 */
-	async createTerminalAsync(
+	createTerminalAsync(
+		feature: Feature,
+		agent: Agent,
+		agentIndex: number,
+		resume = false,
+		attachExisting = false,
+	): Promise<vscode.Terminal | undefined> {
+		const existing = this.terminalReconciliations.get(agent.id);
+		if (existing) return existing;
+		const creation = this.createTerminalAsyncLocked(
+			feature,
+			agent,
+			agentIndex,
+			resume,
+			attachExisting,
+		);
+		this.terminalReconciliations.set(agent.id, creation);
+		const clear = () => {
+			if (this.terminalReconciliations.get(agent.id) === creation) {
+				this.terminalReconciliations.delete(agent.id);
+			}
+		};
+		void creation.then(clear, clear);
+		return creation;
+	}
+
+	private async createTerminalAsyncLocked(
 		feature: Feature,
 		agent: Agent,
 		agentIndex: number,
@@ -490,13 +508,12 @@ export class TerminalController implements vscode.Disposable {
 			const shouldResume = resume && agent.hasStarted === true;
 			this.advanceStartupStep(feature.id, agent.id, "terminal");
 			try {
-				this.beforeLaunchCallback?.(feature, agent, cwd);
-				await this.beforeLaunchAsyncCallback?.(
-					feature,
-					agent,
-					cwd,
-					shouldResume,
-				);
+				if (shouldResume) {
+					this.beforeLaunchCallback?.(feature, agent, cwd);
+					await this.beforeLaunchAsyncCallback?.(feature, agent, cwd, true);
+				} else {
+					this.beforeLaunchFastCallback?.(feature, agent);
+				}
 			} catch (error) {
 				const message =
 					error instanceof Error
@@ -602,7 +619,12 @@ export class TerminalController implements vscode.Disposable {
 				sessionReady = false;
 			}
 		}
-		if (sessionReady && agent.sessionId && this.beforeLaunchAsyncCallback) {
+		if (
+			sessionReady &&
+			resume &&
+			agent.sessionId &&
+			this.beforeLaunchAsyncCallback
+		) {
 			try {
 				await this.beforeLaunchAsyncCallback(feature, agent, cwd, true);
 			} catch (error) {

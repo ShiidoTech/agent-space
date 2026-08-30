@@ -268,6 +268,14 @@ export class SessionBinder {
 		});
 	}
 
+	/** Mark a fresh launch without reading the provider store. */
+	recordLaunchFast(ctx: ProjectContext, featureId: string, agent: Agent): void {
+		ctx.agentManager.recordAgentLaunch(agent.id, featureId, {
+			baseline: [],
+			launchedAt: new Date().toISOString(),
+		});
+	}
+
 	/**
 	 * Acquire a provider-assigned identity before launching its UI. The receipt
 	 * is persisted immediately; no later scan is allowed to replace it.

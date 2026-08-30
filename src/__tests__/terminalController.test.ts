@@ -281,6 +281,67 @@ describe("TerminalController", () => {
 		controller.dispose();
 	});
 
+	it("keeps provider acquisition out of the async fresh-launch path", async () => {
+		const beforeLaunch = vi.fn();
+		const beforeLaunchAsync = vi.fn().mockResolvedValue(undefined);
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSessionAsync: vi.fn().mockResolvedValue(false),
+				isSessionAliveAsync: vi.fn().mockResolvedValue(true),
+				createCommand,
+				configureSession,
+				getPaneStatusAsync: vi.fn().mockResolvedValue(null),
+				capturePaneAsync,
+				clearRemainOnExitForSessionAsync,
+			} as never,
+			{
+				resolveAgentToolForAgent,
+				buildLaunchCommand,
+				buildStrictResumeLaunchCommand,
+			} as never,
+		);
+		controller.onBeforeAgentLaunchFast(beforeLaunch);
+		controller.onBeforeAgentLaunchAsync(beforeLaunchAsync);
+
+		await controller.createTerminalAsync(
+			feature,
+			{ ...agent, sessionId: null },
+			0,
+		);
+
+		expect(beforeLaunch).toHaveBeenCalledOnce();
+		expect(beforeLaunchAsync).not.toHaveBeenCalled();
+		expect(execAsync).toHaveBeenCalledOnce();
+	});
+
+	it("coalesces Add Agent and focus into one runtime creation", async () => {
+		const controller = new TerminalController(
+			{ findContextByFeatureId, notifyChange } as never,
+			{
+				sessionName: vi.fn().mockReturnValue("agent-space-f1-a1"),
+				legacySessionName: vi.fn().mockReturnValue("companion-f1-a1"),
+				adoptSessionAsync: vi.fn().mockResolvedValue(false),
+				isSessionAliveAsync: vi.fn().mockResolvedValue(true),
+				createCommand,
+				configureSession,
+				getPaneStatusAsync: vi.fn().mockResolvedValue(null),
+				capturePaneAsync,
+				clearRemainOnExitForSessionAsync,
+			} as never,
+			{ resolveAgentToolForAgent, buildLaunchCommand } as never,
+		);
+
+		const first = controller.createTerminalAsync(feature, agent, 0);
+		const second = controller.createTerminalAsync(feature, agent, 0);
+
+		expect(second).toBe(first);
+		await Promise.all([first, second]);
+		expect(execAsync).toHaveBeenCalledOnce();
+	});
+
 	it("attaches an existing session without adoption or process creation", () => {
 		const controller = new TerminalController(
 			{ findContextByFeatureId, notifyChange } as never,

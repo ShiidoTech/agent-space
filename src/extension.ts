@@ -441,6 +441,10 @@ export async function activate(
 		const ctx = projectManager.findContextByFeatureId(feature.id);
 		if (ctx) sessionBinder.recordLaunch(ctx, feature.id, agent, cwd);
 	});
+	terminalController.onBeforeAgentLaunchFast((feature, agent) => {
+		const ctx = projectManager.findContextByFeatureId(feature.id);
+		if (ctx) sessionBinder.recordLaunchFast(ctx, feature.id, agent);
+	});
 	terminalController.onBeforeAgentLaunchAsync(
 		async (feature, agent, cwd, resume) => {
 			const ctx = projectManager.findContextByFeatureId(feature.id);
@@ -459,12 +463,12 @@ export async function activate(
 		},
 	);
 	terminalController.onAgentLaunched(() => {
-		// Cheap first attempt; the periodic pass covers the usual slower case.
-		if (
-			sessionBinder.reconcileAll().some((outcome) => outcome.boundSessionId)
-		) {
-			projectManager.notifyChange();
-		}
+		// Binding is enrichment; never scan a provider store on terminal readiness.
+		void sessionBinder.reconcileAllAsync().then((outcomes) => {
+			if (outcomes.some((outcome) => outcome.boundSessionId)) {
+				projectManager.notifyChange();
+			}
+		});
 	});
 	sessionBinder.onBound(() => {
 		projectManager.notifyChange();

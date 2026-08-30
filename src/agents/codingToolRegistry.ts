@@ -185,20 +185,9 @@ const providerOverrides: Record<string, Partial<CodingAgentProvider>> = {
 		resumeArgs: (sessionId) => (sessionId ? ["resume", sessionId] : []),
 	},
 	opencode: {
-		// PR5: controlled backend — `opencode attach` connects to the running
-		// server and opens the exact session. Fail-closed: no serverUrl = no launch.
-		launchArgs: (sessionId, cwd) => {
-			if (!cwd || !sessionId) return [];
-			const handle = openCodeBackendManager.get(cwd);
-			const serverUrl = handle?.baseUrl;
-			if (serverUrl) {
-				const args = ["attach", serverUrl, "--session", sessionId];
-				args.push("--dir", cwd);
-				return args;
-			}
-			// Fail-closed: controlled path only. No standalone fallback.
-			return [];
-		},
+		// Fresh launches belong to the native TUI. Controlled backends remain
+		// available to the explicit resume/reconnect path below.
+		launchArgs: () => [],
 		resumeArgs: (sessionId, cwd) => {
 			if (!cwd || !sessionId) return [];
 			const handle = openCodeBackendManager.get(cwd);
