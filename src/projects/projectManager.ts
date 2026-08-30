@@ -380,6 +380,29 @@ export class ProjectManager {
 		return { ctx, feature };
 	}
 
+	/**
+	 * Zero-I/O twin of {@link resolveFeature}: uses
+	 * {@link FeatureManager.getFeatureCached} instead of `getFeature()`, so it
+	 * never triggers a synchronous Git branch-link reconciliation. For
+	 * render/navigation paths (P0 zero-I/O UI mandate) that only need feature
+	 * identity, not up-to-the-moment checkout state.
+	 */
+	resolveFeatureCached(
+		featureId: string,
+	): { ctx: ProjectContext; feature: Feature } | undefined {
+		const ctx = this.findContextByFeatureId(featureId);
+		if (!ctx) return undefined;
+
+		if (featureId.startsWith("base:")) {
+			const feature = ctx.featureManager.getBaseFeature(ctx.project.id);
+			return { ctx, feature };
+		}
+
+		const feature = ctx.featureManager.getFeatureCached(featureId);
+		if (!feature) return undefined;
+		return { ctx, feature };
+	}
+
 	static isBaseFeatureId(featureId: string): boolean {
 		return featureId.startsWith("base:");
 	}

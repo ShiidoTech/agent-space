@@ -636,6 +636,16 @@ export class FeatureManager {
 		return feature;
 	}
 
+	/**
+	 * Zero-I/O twin of {@link getFeature}: the in-memory record only, no
+	 * branch-link reconciliation (no synchronous `git symbolic-ref`/`git
+	 * rev-parse`). For render/navigation paths that only need identity
+	 * (id, name, branch) — not up-to-the-moment checkout/link state.
+	 */
+	getFeatureCached(id: string): Feature | undefined {
+		return this.features.find((f) => f.id === id);
+	}
+
 	/** Observe linked branches without conflating checkout and delivery identity. */
 	getFeatureBranchState(id: string): FeatureBranchState | undefined {
 		const feature = this.features.find((candidate) => candidate.id === id);

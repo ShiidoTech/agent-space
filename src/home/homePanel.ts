@@ -246,7 +246,10 @@ export class HomePanel {
 		this.showingProblems = false;
 		this.problemsProjectFilter = undefined;
 		this.globalStore.setPreference("lastActiveFeatureId", featureId);
-		const resolved = this.projectManager.resolveFeature(featureId);
+		// Zero-I/O: navigation happens before first paint, so this must not
+		// trigger a synchronous Git branch reconciliation (P0 zero-I/O UI
+		// mandate §7). The panel title only needs feature identity.
+		const resolved = this.projectManager.resolveFeatureCached(featureId);
 		this.panel.title = resolved
 			? `Agent Space: ${resolved.feature.branch}`
 			: "Agent Space";
@@ -837,18 +840,25 @@ export class HomePanel {
 	 */
 	private async sendRuntimeUpdateAsync(): Promise<void> {
 		if (!this.currentFeatureId) return;
-		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
+		// Zero-I/O: findContextByFeatureId is an in-memory lookup, unlike
+		// resolveFeature() — which resolves through FeatureManager.getFeature()
+		// and can trigger a synchronous Git branch reconciliation. This patch
+		// path only ever needs the project context, never the resolved
+		// Feature record itself (P0 zero-I/O UI mandate).
+		const ctx = this.projectManager.findContextByFeatureId(
+			this.currentFeatureId,
+		);
 		const snapshot = this.featureStateCoordinator.getSnapshot(
 			this.currentFeatureId,
 		);
-		if (!resolved || !snapshot) return;
+		if (!ctx || !snapshot) return;
 
 		const agents = this.snapshotAgents(snapshot);
 		this.panel.webview.postMessage({
 			type: "agentAttentionUpdate",
 			agents: agents.map((agent) => ({
 				cardPresentation: presentAgentCard(
-					resolved.ctx.agentManager.observeCached(agent),
+					ctx.agentManager.observeCached(agent),
 				),
 				id: agent.id,
 			})),
@@ -1481,7 +1491,10 @@ export class HomePanel {
 	}
 
 	private getFeatureHtml(featureId: string): string {
-		const resolved = this.projectManager.resolveFeature(featureId);
+		// Zero-I/O: this renders the Feature page's first paint — must not
+		// block on a synchronous Git branch reconciliation (P0 zero-I/O UI
+		// mandate §7).
+		const resolved = this.projectManager.resolveFeatureCached(featureId);
 		if (!resolved) return this.emptyHtml("Feature not found");
 
 		const snapshot = this.featureStateCoordinator.getSnapshot(featureId);
