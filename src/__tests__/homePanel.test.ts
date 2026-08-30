@@ -1299,3 +1299,89 @@ describe("Home problems view (portfolio-wide attention list)", () => {
 		expect(renderProblems()).not.toContain("Project: Agent Space");
 	});
 });
+
+describe("HomePanel navigation (P0 zero-I/O UI)", () => {
+	const feature: Feature = {
+		id: "f1",
+		name: "Feature One",
+		branch: "feat/one",
+		worktreePath: "/repo/feature-one",
+		status: "active",
+		color: "terminal.ansiBlue",
+		isolation: "shared",
+		createdAt: "2026-03-06T00:00:00Z",
+	};
+
+	const observe = vi.fn(() => ({
+		identity: { agentName: "Agent 1" },
+		lifecycle: { state: "running", source: "tmux" },
+		attention: { state: "unknown", reason: "Provider activity unavailable" },
+		session: { state: "ambiguous", detail: "Several candidates" },
+		review: { pending: false },
+	}));
+	const ctx = {
+		project: { id: "p1", name: "Project One" },
+		agentManager: { getAgents: vi.fn(() => []), observeCached: observe },
+	};
+
+	function buildPanel(): {
+		panel: HomePanel;
+		resolveFeature: ReturnType<typeof vi.fn>;
+		resolveFeatureCached: ReturnType<typeof vi.fn>;
+	} {
+		const webviewPanel = {
+			visible: false,
+			title: "",
+			webview: {
+				onDidReceiveMessage: vi.fn(),
+				asWebviewUri: vi.fn(() => ({})),
+				postMessage: vi.fn(),
+			},
+			onDidChangeViewState: vi.fn(() => ({ dispose: vi.fn() })),
+			onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+			reveal: vi.fn(),
+		};
+		const resolveFeature = vi.fn(() => {
+			throw new Error(
+				"resolveFeature() must not be called from navigation — it can trigger a synchronous Git read (P0 zero-I/O UI mandate). Use resolveFeatureCached().",
+			);
+		});
+		const resolveFeatureCached = vi.fn(() => ({ ctx, feature }));
+		// @ts-expect-error HomePanel's constructor is private.
+		const panel = new HomePanel(
+			webviewPanel as never,
+			{
+				resolveFeature,
+				resolveFeatureCached,
+				getContext: vi.fn(() => undefined),
+				findContextByFeatureId: vi.fn(() => ctx),
+			} as never,
+			{
+				getSnapshot: vi.fn(() => undefined),
+				getProjectReferenceHealth: vi.fn(() => undefined),
+				isFeatureStale: vi.fn(() => false),
+				reconcileFeature: vi.fn(() => Promise.resolve()),
+			} as never,
+			{} as never,
+			{ resolveAgentTool: vi.fn(() => ({ name: "Codex CLI" })) } as never,
+			{} as never,
+			{ setPreference: vi.fn() } as never,
+			undefined,
+			feature.id,
+		);
+		return { panel, resolveFeature, resolveFeatureCached };
+	}
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("showFeature resolves feature identity through the zero-I/O cached twin, never resolveFeature", () => {
+		const { panel, resolveFeature, resolveFeatureCached } = buildPanel();
+
+		expect(() => panel.showFeature("f1")).not.toThrow();
+
+		expect(resolveFeatureCached).toHaveBeenCalledWith("f1");
+		expect(resolveFeature).not.toHaveBeenCalled();
+	});
+});

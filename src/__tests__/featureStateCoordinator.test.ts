@@ -2067,6 +2067,30 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("invalidateFeature is non-cascading — an unrelated feature/project stays fresh (P0 zero-I/O UI mandate)", async () => {
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) =>
+				git(featureBranch === "main" ? feature("base:p1") : feature("f1")),
+			),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcileFeature("f1");
+		await coordinator.reconcileFeature("f2");
+		expect(coordinator.isFeatureStale("f1")).toBe(false);
+		expect(coordinator.isFeatureStale("f2")).toBe(false);
+
+		coordinator.invalidateFeature("f1");
+
+		expect(coordinator.isFeatureStale("f1")).toBe(true);
+		// A scoped invalidation must never mark an unrelated feature stale —
+		// that would force it to re-pay for a fresh Git observation the next
+		// time it's focused, for a change it had nothing to do with.
+		expect(coordinator.isFeatureStale("f2")).toBe(false);
+		coordinator.dispose();
+	});
+
 	it("a transient git failure does not regress a previously known field to unknown", async () => {
 		let attempt = 0;
 		const inspects = {
