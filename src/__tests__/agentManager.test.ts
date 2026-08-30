@@ -903,5 +903,51 @@ describe("AgentManager", () => {
 			const observation = manager.observeCached(agent);
 			expect(observation).toBeDefined();
 		});
+
+		it("getAgentsAsync commits freshly-probed attention into the observation cache", async () => {
+			const agent = manager.createAgent(feature, "copilot");
+			manager.markAgentStarted(agent.id, feature.id);
+
+			await manager.getAgentsAsync(feature.id);
+
+			const observation = manager.observeCached(agent);
+			expect(observation.attention.state).toBe("unknown");
+			expect(observation.attention.reason).toBe(
+				"No live tmux session is available",
+			);
+		});
+
+		it("refreshObservationCache preserves the last committed attention instead of recomputing it — AgentAttentionMonitor is the sole prober", async () => {
+			const asyncTmux = tmux as unknown as {
+				isSessionAliveAsync: ReturnType<typeof vi.fn>;
+				getPaneStatusAsync: ReturnType<typeof vi.fn>;
+			};
+			asyncTmux.isSessionAliveAsync = vi.fn(async () => true);
+			asyncTmux.getPaneStatusAsync = vi.fn(async () => null);
+
+			const agent = manager.createAgent(feature, "copilot");
+			manager.markAgentStarted(agent.id, feature.id);
+
+			// Simulate the attention monitor's own tick having already
+			// committed a value.
+			await manager.getAgentsAsync(feature.id);
+			const committed = manager.observeCached(agent).attention;
+			const paneProbesAfterMonitorTick =
+				asyncTmux.getPaneStatusAsync.mock.calls.length;
+			expect(paneProbesAfterMonitorTick).toBeGreaterThan(0);
+
+			await manager.refreshObservationCache(
+				feature.id,
+				new Map([[agent.id, { status: "known" as const, value: true }]]),
+			);
+
+			const observation = manager.observeCached(agent);
+			expect(observation.attention).toEqual(committed);
+			// The presence tick must not probe attention at all — no new
+			// getPaneStatusAsync call beyond what the monitor's own tick made.
+			expect(asyncTmux.getPaneStatusAsync.mock.calls.length).toBe(
+				paneProbesAfterMonitorTick,
+			);
+		});
 	});
 });

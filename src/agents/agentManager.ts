@@ -14,7 +14,10 @@ import type {
 	Feature,
 } from "../types";
 import { isWorktreePathSafe } from "../utils/worktreeGuard";
-import { AgentAttentionResolver } from "./attention/agentAttentionResolver";
+import {
+	AgentAttentionResolver,
+	type AgentAttentionSnapshot,
+} from "./attention/agentAttentionResolver";
 import { CodingToolRegistry } from "./codingToolRegistry";
 import { resolveCreationProfile } from "./hermesProfileResolver";
 import { AgentObservationResolver } from "./observation/agentObservationResolver";
@@ -99,6 +102,14 @@ export class AgentManager {
 	 * Non-blocking twin of {@link getAgents}: identical attention semantics,
 	 * but the tmux/provider probes run through the async helpers so callers
 	 * on background observation paths never block the Extension Host.
+	 *
+	 * This is Agent Space's single attention prober — only
+	 * `AgentAttentionMonitor` calls this (via `collectWatchedAgents`, on its
+	 * own poll cadence). Every freshly-probed attention value is committed
+	 * into the observation cache here via {@link commitAttention}, so
+	 * `reconcilePresence`'s much more frequent runtime tick never needs (and
+	 * must never run) its own attention probe — it just reads what was last
+	 * committed here (P0 mandate: one attention source, not two).
 	 */
 	async getAgentsAsync(featureId: string): Promise<Agent[]> {
 		const agents = this.loadAgents(featureId);
@@ -106,6 +117,7 @@ export class AgentManager {
 		return Promise.all(
 			agents.map(async (agent) => {
 				const attention = await this.attentionResolver.resolveAsync(agent);
+				this.commitAttention(agent, attention);
 				return this.withPendingReview(
 					{
 						...agent,
@@ -209,9 +221,21 @@ export class AgentManager {
 					const known = knownTmuxAlive?.get(agent.id);
 					const knownAlive =
 						known?.status === "known" ? known.value : undefined;
+					// Attention is never recomputed here — AgentAttentionMonitor
+					// is the sole prober (see AgentObservationResolver.resolveAsync);
+					// this preserves whatever it last committed via commitAttention.
+					const previousAttention = this.observationCache.get(
+						agent.id,
+					)?.attention;
 					const observation = await this.observationResolver.resolveAsync(
 						agent,
 						knownAlive,
+						previousAttention && {
+							status: previousAttention.state,
+							reason: previousAttention.reason ?? "",
+							observedAt: previousAttention.observedAt,
+							source: "fallback",
+						},
 					);
 					this.observationCache.set(agent.id, observation);
 				} catch {
@@ -220,6 +244,33 @@ export class AgentManager {
 				}
 			}),
 		);
+	}
+
+	/**
+	 * Commit freshly-probed attention into the observation cache, preserving
+	 * whatever lifecycle/session/identity/review state is already cached (or
+	 * synthesizing a zero-I/O baseline via `resolveReadModel` if this agent
+	 * has never been observed). This is the ONLY place attention is written
+	 * into the cache — called by `getAgentsAsync` (in turn called only by
+	 * `AgentAttentionMonitor`'s poll tick), never by `refreshObservationCache`
+	 * (P0 mandate: one attention source, not two independent probers racing
+	 * for the same tmux/provider evidence).
+	 */
+	private commitAttention(
+		agent: Agent,
+		attention: AgentAttentionSnapshot,
+	): void {
+		const existing =
+			this.observationCache.get(agent.id) ??
+			this.observationResolver.resolveReadModel(agent);
+		this.observationCache.set(agent.id, {
+			...existing,
+			attention: {
+				state: attention.status === "done" ? "unknown" : attention.status,
+				observedAt: attention.observedAt,
+				reason: attention.reason,
+			},
+		});
 	}
 
 	createAgent(feature: Feature, toolId?: string): Agent {

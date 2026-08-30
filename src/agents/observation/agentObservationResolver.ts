@@ -29,12 +29,21 @@ export class AgentObservationResolver {
 	}
 
 	/**
-	 * Non-blocking twin of {@link resolve}: identical decision tree, but
-	 * lifecycle and attention are both probed through async helpers
-	 * (`isSessionAliveAsync`, `AgentAttentionResolver.resolveAsync`) so
-	 * background observers (runtime reconciliation, the attention monitor)
-	 * never block the Extension Host on a subprocess. Used to populate
-	 * `AgentManager`'s observation cache — never called from a render path.
+	 * Non-blocking twin of {@link resolve}: identical lifecycle decision
+	 * tree, probed through the async tmux helper so background observers
+	 * (runtime reconciliation) never block the Extension Host on a
+	 * subprocess. Used to populate `AgentManager`'s observation cache —
+	 * never called from a render path.
+	 *
+	 * Attention is deliberately NOT recomputed here: `AgentAttentionMonitor`
+	 * is the single source of attention evidence (it commits fresh values via
+	 * `AgentManager.commitAttention`, on its own poll cadence, with its own
+	 * provider/tmux probes). Recomputing it again on every presence tick was
+	 * a second, independent prober racing the monitor for the same tmux
+	 * pane and provider reads — `previousAttention` (the last value the
+	 * monitor committed, read by the caller from the cache before calling
+	 * this) is preserved as-is instead (P0 mandate: one attention source,
+	 * not two).
 	 *
 	 * `knownAlive`, when given, is tmux liveness already resolved by the
 	 * caller's own single global sweep for this tick — lifecycle resolution
@@ -44,15 +53,14 @@ export class AgentObservationResolver {
 	async resolveAsync(
 		agent: Agent,
 		knownAlive?: boolean,
+		previousAttention?: AgentAttentionSnapshot,
 	): Promise<AgentObservation> {
 		const lifecycle = await this.resolveLifecycleAsync(agent, knownAlive);
-		const attention = await this.attentionResolver.resolveAsync(
-			agent,
-			lifecycle.state === "starting" || lifecycle.state === "unknown"
-				? undefined
-				: lifecycle.state,
-			knownAlive,
-		);
+		const attention: AgentAttentionSnapshot = previousAttention ?? {
+			status: "unknown",
+			reason: "Not yet observed",
+			source: "fallback",
+		};
 		return this.assemble(agent, lifecycle, attention);
 	}
 

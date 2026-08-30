@@ -11,7 +11,7 @@ vi.mock("../utils/platform", () => ({
 	execFileAsync: vi.fn(),
 }));
 
-import { commandExists, execFile } from "../utils/platform";
+import { commandExists, execFile, execFileAsync } from "../utils/platform";
 
 function agent(): Agent {
 	return {
@@ -63,6 +63,56 @@ describe("AgentObservationResolver", () => {
 		expect(resolver.resolve(agent()).lifecycle).toEqual({
 			state: "stopped",
 			source: "tmux",
+		});
+	});
+
+	describe("resolveAsync (P0 zero-I/O UI mandate: single attention source)", () => {
+		const toolRegistryStub = {
+			resolveAgentTool: vi.fn(() => ({ id: "generic", provider: undefined })),
+			resolveAgentToolForAgent: vi.fn(() => ({
+				id: "generic",
+				provider: undefined,
+			})),
+			getProvider: vi.fn(() => undefined),
+		} as never;
+
+		it("never recomputes attention — preserves previousAttention verbatim, no tmux/provider probe", async () => {
+			const resolver = new AgentObservationResolver(
+				new TmuxIntegration(),
+				toolRegistryStub,
+			);
+
+			const observation = await resolver.resolveAsync(agent(), true, {
+				status: "working",
+				reason: "Provider emitted working evidence",
+				source: "provider",
+				observedAt: "2026-01-01T00:00:00.000Z",
+			});
+
+			expect(observation.attention).toEqual({
+				state: "working",
+				reason: "Provider emitted working evidence",
+				observedAt: "2026-01-01T00:00:00.000Z",
+			});
+			// AgentAttentionMonitor is the sole attention prober — this method
+			// must not touch tmux/provider evidence to compute attention itself.
+			expect(execFileAsync).not.toHaveBeenCalled();
+		});
+
+		it("falls back to an honest 'not yet observed' when no previous attention was ever committed", async () => {
+			const resolver = new AgentObservationResolver(
+				new TmuxIntegration(),
+				toolRegistryStub,
+			);
+
+			const observation = await resolver.resolveAsync(agent(), true);
+
+			expect(observation.attention).toEqual({
+				state: "unknown",
+				reason: "Not yet observed",
+				observedAt: undefined,
+			});
+			expect(execFileAsync).not.toHaveBeenCalled();
 		});
 	});
 });
