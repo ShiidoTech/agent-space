@@ -1,5 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// P0 zero-I/O UI mandate: sidebar handlers must never shell out to a real
+// subprocess. Mocking node:child_process to throw turns any leaked sync exec
+// into a loud test failure instead of a silent real spawn.
+vi.mock("node:child_process", () => ({
+	execSync: vi.fn(() => {
+		throw new Error(
+			"execSync() must not be called from a sidebar handler (P0 zero-I/O UI mandate).",
+		);
+	}),
+	execFileSync: vi.fn(() => {
+		throw new Error(
+			"execFileSync() must not be called from a sidebar handler (P0 zero-I/O UI mandate).",
+		);
+	}),
+	execFile: vi.fn(() => {
+		throw new Error(
+			"execFile() must not be called from a sidebar handler (P0 zero-I/O UI mandate).",
+		);
+	}),
+}));
+
 vi.mock("vscode", () => ({
 	commands: { executeCommand: vi.fn(() => Promise.resolve()) },
 	window: { showInputBox: vi.fn(() => Promise.resolve("New Name")) },
@@ -317,8 +338,13 @@ describe("issue #120: non-structural notifyChange scope (zero-reload eligible)",
 				...overrides.agentManager,
 			},
 		};
+		const findContextByFeatureId = vi.fn(() => {
+			throw new Error(
+				"findContextByFeatureId() must not be called from the sidebar — it can lazily init a cold project context with disk reads (P0 zero-I/O UI mandate). Use peekWarmContext().",
+			);
+		});
 		const projectManager = {
-			findContextByFeatureId: vi.fn(() => ctx),
+			findContextByFeatureId,
 			peekWarmContext: vi.fn(() => ctx),
 			resolveFeature: vi.fn(() => ({ ctx, feature })),
 			notifyChange,
@@ -330,27 +356,35 @@ describe("issue #120: non-structural notifyChange scope (zero-reload eligible)",
 			undefined,
 			{} as never,
 		);
-		return { provider, notifyChange, ctx };
+		return { provider, notifyChange, ctx, findContextByFeatureId };
 	}
 
-	it("handleStopService still reports a structural (full-rebuild) change", () => {
-		const { provider, notifyChange } = buildProvider({});
+	it("handleStopService still reports a structural (full-rebuild) change, never through findContextByFeatureId", () => {
+		const { provider, notifyChange, findContextByFeatureId } = buildProvider(
+			{},
+		);
 		// biome-ignore lint/suspicious/noExplicitAny: invoking the private handler directly
 		(provider as any).handleStopService("f1", "s1");
 
 		expect(notifyChange).toHaveBeenCalledWith({ featureId: "f1" });
+		expect(findContextByFeatureId).not.toHaveBeenCalled();
 	});
 
-	it("handleRestartService still reports a structural (full-rebuild) change", () => {
-		const { provider, notifyChange } = buildProvider({});
+	it("handleRestartService still reports a structural (full-rebuild) change, never through findContextByFeatureId", () => {
+		const { provider, notifyChange, findContextByFeatureId } = buildProvider(
+			{},
+		);
 		// biome-ignore lint/suspicious/noExplicitAny: invoking the private handler directly
 		(provider as any).handleRestartService("f1", "s1");
 
 		expect(notifyChange).toHaveBeenCalledWith({ featureId: "f1" });
+		expect(findContextByFeatureId).not.toHaveBeenCalled();
 	});
 
-	it("handleRenameAgent reports a non-structural, feature-scoped change", async () => {
-		const { provider, notifyChange } = buildProvider({});
+	it("handleRenameAgent reports a non-structural, feature-scoped change, never through findContextByFeatureId", async () => {
+		const { provider, notifyChange, findContextByFeatureId } = buildProvider(
+			{},
+		);
 		// biome-ignore lint/suspicious/noExplicitAny: invoking the private handler directly
 		await (provider as any).handleRenameAgent("f1", "a1");
 
@@ -358,5 +392,6 @@ describe("issue #120: non-structural notifyChange scope (zero-reload eligible)",
 			featureId: "f1",
 			structural: false,
 		});
+		expect(findContextByFeatureId).not.toHaveBeenCalled();
 	});
 });

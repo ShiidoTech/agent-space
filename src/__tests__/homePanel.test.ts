@@ -1,5 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// P0 zero-I/O UI mandate: navigation/render paths must never shell out to a
+// real subprocess. Mocking node:child_process to throw turns any leaked sync
+// exec into a loud test failure instead of a silent real spawn.
+vi.mock("node:child_process", () => ({
+	execSync: vi.fn(() => {
+		throw new Error(
+			"execSync() must not be called from a navigation/render path (P0 zero-I/O UI mandate).",
+		);
+	}),
+	execFileSync: vi.fn(() => {
+		throw new Error(
+			"execFileSync() must not be called from a navigation/render path (P0 zero-I/O UI mandate).",
+		);
+	}),
+	execFile: vi.fn(() => {
+		throw new Error(
+			"execFile() must not be called from a navigation/render path (P0 zero-I/O UI mandate).",
+		);
+	}),
+}));
+
 vi.mock("vscode", () => ({
 	window: { createWebviewPanel: vi.fn() },
 	commands: { executeCommand: vi.fn(() => Promise.resolve()) },
@@ -1330,6 +1351,8 @@ describe("HomePanel navigation (P0 zero-I/O UI)", () => {
 		panel: HomePanel;
 		resolveFeature: ReturnType<typeof vi.fn>;
 		resolveFeatureCached: ReturnType<typeof vi.fn>;
+		findContextByFeatureId: ReturnType<typeof vi.fn>;
+		getContext: ReturnType<typeof vi.fn>;
 	} {
 		const webviewPanel = {
 			visible: false,
@@ -1349,14 +1372,24 @@ describe("HomePanel navigation (P0 zero-I/O UI)", () => {
 			);
 		});
 		const resolveFeatureCached = vi.fn(() => ({ ctx, feature }));
+		const findContextByFeatureId = vi.fn(() => {
+			throw new Error(
+				"findContextByFeatureId() must not be called from navigation/render — it can lazily init a cold project context with disk reads (P0 zero-I/O UI mandate). Use peekWarmContext()/resolveFeatureCached().",
+			);
+		});
+		const getContext = vi.fn(() => {
+			throw new Error(
+				"getContext() must not be called from navigation/render (P0 zero-I/O UI mandate).",
+			);
+		});
 		// @ts-expect-error HomePanel's constructor is private.
 		const panel = new HomePanel(
 			webviewPanel as never,
 			{
 				resolveFeature,
 				resolveFeatureCached,
-				getContext: vi.fn(() => undefined),
-				findContextByFeatureId: vi.fn(() => ctx),
+				getContext,
+				findContextByFeatureId,
 				peekWarmContext: vi.fn(() => ctx),
 			} as never,
 			{
@@ -1372,19 +1405,33 @@ describe("HomePanel navigation (P0 zero-I/O UI)", () => {
 			undefined,
 			feature.id,
 		);
-		return { panel, resolveFeature, resolveFeatureCached };
+		return {
+			panel,
+			resolveFeature,
+			resolveFeatureCached,
+			findContextByFeatureId,
+			getContext,
+		};
 	}
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it("showFeature resolves feature identity through the zero-I/O cached twin, never resolveFeature", () => {
-		const { panel, resolveFeature, resolveFeatureCached } = buildPanel();
+	it("showFeature resolves feature identity through the zero-I/O cached twin, never resolveFeature/findContextByFeatureId/getContext, and never shells out", () => {
+		const {
+			panel,
+			resolveFeature,
+			resolveFeatureCached,
+			findContextByFeatureId,
+			getContext,
+		} = buildPanel();
 
 		expect(() => panel.showFeature("f1")).not.toThrow();
 
 		expect(resolveFeatureCached).toHaveBeenCalledWith("f1");
 		expect(resolveFeature).not.toHaveBeenCalled();
+		expect(findContextByFeatureId).not.toHaveBeenCalled();
+		expect(getContext).not.toHaveBeenCalled();
 	});
 });
