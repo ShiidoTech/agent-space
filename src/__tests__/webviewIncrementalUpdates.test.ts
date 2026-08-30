@@ -402,10 +402,10 @@ describe("issue #120: zero full-document rebuild for non-structural transitions"
 
 		// f1's own open panel was patched incrementally — no rebuild.
 		expect(f1Html()).toBe(f1Before);
-		// f2 has no open panel: the portfolio singleton absorbs it, exactly
-		// once, and f1's unrelated panel is never touched by that fallback.
-		expect(instanceHtml()).toBe(instanceBefore + 1);
-		expect(getWebviewRebuildCounts()).toEqual({ sidebar: 0, home: 1 });
+		// f2 has no open panel: the portfolio singleton receives a live patch, and
+		// f1's unrelated panel is never touched by that fallback.
+		expect(instanceHtml()).toBe(instanceBefore);
+		expect(getWebviewRebuildCounts()).toEqual({ sidebar: 0, home: 0 });
 	});
 
 	// PR #121 third review: a runtime-kind change previously only patched the

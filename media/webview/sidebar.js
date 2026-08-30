@@ -277,6 +277,8 @@ window.addEventListener("message", function (event) {
 				needsFullRefresh = true;
 				continue;
 			}
+			var featureFleet = card.querySelector('[data-fleet-feature="' + feat.id + '"]');
+			if (featureFleet && typeof feat.fleetLabel === "string") featureFleet.textContent = feat.fleetLabel;
 
 			// Update the same human-facing Feature summary used by the full page.
 			if (!feat.isBase && feat.statusLabel && feat.statusTone) {
@@ -423,6 +425,8 @@ window.addEventListener("message", function (event) {
 							: "";
 			}
 		}
+		var projectFleet = document.querySelector('[data-fleet-project="' + proj.id + '"]');
+		if (projectFleet && typeof proj.fleetLabel === "string") projectFleet.textContent = proj.fleetLabel;
 	}
 	document.querySelectorAll("[data-feature-id]").forEach(function (card) {
 		if (!observedFeatureIds[card.getAttribute("data-feature-id")]) {

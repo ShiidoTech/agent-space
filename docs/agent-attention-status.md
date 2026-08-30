@@ -91,7 +91,7 @@ New provider adapters can be added without changing the provider-neutral UI cont
 
 ## UI refresh
 
-The sidebar and feature Home view recompute attention periodically while visible. A status badge is an informational projection only; clicking the agent still opens/focuses the native terminal where the actual interaction happens.
+Portfolio, Project, Feature and Sidebar consume the same Fleet rollup. Its order is `Needs you`, failed/runtime-lost/binding-degraded, `Ready for review`, `Working`, then unknown/unsupported. Ordinary runtime, rename and acknowledgement changes are DOM patches; document replacement is reserved for initial mount or structural changes. Clicking an item still opens/focuses the native terminal where the actual interaction happens.
 
 ## Non-goals
 

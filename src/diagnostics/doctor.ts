@@ -61,6 +61,12 @@ export interface DoctorAgentProbe {
 	attentionState?: string;
 	attentionSupported?: boolean;
 	attentionEvidence?: string;
+	attentionObservedAt?: string;
+	attentionCapabilities?: string[];
+	providerOwnership?: string;
+	sessionNamingSupported?: boolean;
+	tmuxSession?: string;
+	remediation?: string;
 	/** Persisted Hermes profile for this agent, when applicable. */
 	hermesProfile?: string;
 }
@@ -348,8 +354,15 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 			facts.push(`sessions ${redactHome(probe.sessionsDir, homeDir)}`);
 		}
 		facts.push(
-			`session ${probe.sessionId ? `\`${probe.sessionId}\`` : "none"}`,
+			`session ${probe.sessionId ? `\`${probe.sessionId.slice(0, 12)}…\`` : "none"}`,
 		);
+		if (probe.providerOwnership)
+			facts.push(`ownership ${probe.providerOwnership}`);
+		if (probe.sessionNamingSupported !== undefined)
+			facts.push(
+				`naming ${probe.sessionNamingSupported ? "supported" : "unsupported"}`,
+			);
+		if (probe.tmuxSession) facts.push(`tmux ${probe.tmuxSession}`);
 		if (probe.sessionResolved !== null) {
 			facts.push(
 				probe.sessionResolved ? "found in store" : "not found in store",
@@ -364,6 +377,10 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 		}
 		if (probe.attentionEvidence)
 			facts.push(`evidence ${probe.attentionEvidence}`);
+		if (probe.attentionObservedAt)
+			facts.push(`last provider observation ${probe.attentionObservedAt}`);
+		if (probe.attentionCapabilities?.length)
+			facts.push(`capabilities ${probe.attentionCapabilities.join(", ")}`);
 		if (probe.bindingDetail) facts.push(probe.bindingDetail.toLowerCase());
 
 		let level: DoctorLevel;
@@ -395,7 +412,13 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 				"The provider has not exposed a session yet. Claude-family can bind its preassigned id when it appears; other providers remain fail-closed until explicit attachment or provider ownership correlation.";
 		}
 
-		add(checks, level, label, facts.join("; "), remediation);
+		add(
+			checks,
+			level,
+			label,
+			facts.join("; "),
+			probe.remediation ?? remediation,
+		);
 	}
 
 	const expected = agents.length - unsupported;

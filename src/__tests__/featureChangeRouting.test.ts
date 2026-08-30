@@ -44,7 +44,7 @@ describe("createFeatureChangeFlusher (issue #120 real event routing)", () => {
 		};
 	}
 
-	it("a lone runtime-kind event on an open Feature panel patches it, no instance/full rebuild", () => {
+	it("a lone runtime-kind event patches the Feature and singleton without a full rebuild", () => {
 		const deps = build(["f1"]);
 		deps.flush(snapshot("f1"), "runtime");
 		deps.runScheduled();
@@ -52,7 +52,7 @@ describe("createFeatureChangeFlusher (issue #120 real event routing)", () => {
 		expect(deps.refreshSidebarState).toHaveBeenCalledTimes(1);
 		expect(deps.refreshHomeAll).not.toHaveBeenCalled();
 		expect(deps.patchHomeFeature).toHaveBeenCalledWith("f1");
-		expect(deps.refreshHomeInstance).not.toHaveBeenCalled();
+		expect(deps.refreshHomeInstance).toHaveBeenCalledTimes(1);
 		expect(deps.nudgeAttention).toHaveBeenCalledTimes(1);
 	});
 
@@ -97,8 +97,8 @@ describe("createFeatureChangeFlusher (issue #120 real event routing)", () => {
 		expect(deps.patchHomeFeature).toHaveBeenCalledWith("f1");
 		expect(deps.patchHomeFeature).toHaveBeenCalledWith("f2");
 		expect(deps.patchHomeFeature).toHaveBeenCalledTimes(2);
-		// f2 has no open panel — this must cost at most one instance refresh
-		// for the whole flush, not one full rebuild per unopened Feature.
+		// The singleton is refreshed once so aggregate project/portfolio totals
+		// stay current even while an unrelated Feature panel is open.
 		expect(deps.refreshHomeInstance).toHaveBeenCalledTimes(1);
 	});
 
@@ -135,6 +135,6 @@ describe("createFeatureChangeFlusher (issue #120 real event routing)", () => {
 
 		expect(deps.refreshHomeAll).toHaveBeenCalledTimes(1);
 		expect(deps.patchHomeFeature).toHaveBeenCalledWith("f1");
-		expect(deps.refreshHomeInstance).not.toHaveBeenCalled();
+		expect(deps.refreshHomeInstance).toHaveBeenCalledTimes(1);
 	});
 });

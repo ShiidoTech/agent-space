@@ -1,6 +1,10 @@
 import * as vscode from "vscode";
 import type { AgentFocusService } from "../agents/agentFocusService";
 import type { CodingToolRegistry } from "../agents/codingToolRegistry";
+import {
+	formatFleetRollup,
+	projectSnapshotFleetRollup,
+} from "../agents/fleetRollup";
 import { presentAgentCard } from "../agents/observation/presentAgentCard";
 import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
@@ -327,8 +331,8 @@ export class HomePanel {
 	 * the affected agents/services already exist in this panel's DOM.
 	 */
 	public refreshLiveState(): void {
-		if (!this.currentFeatureId) return;
-		this.sendRuntimeUpdateAsync().catch(() => {});
+		if (this.currentFeatureId) this.sendRuntimeUpdateAsync().catch(() => {});
+		this.sendFleetUpdateAsync().catch(() => {});
 	}
 
 	/**
@@ -351,7 +355,7 @@ export class HomePanel {
 	 * fallback for a runtime change on a Feature with no open panel.
 	 */
 	public static refreshInstance(): void {
-		HomePanel.instance?.refresh();
+		HomePanel.instance?.refreshLiveState();
 	}
 
 	/**
@@ -365,7 +369,9 @@ export class HomePanel {
 		structural?: boolean;
 	}): void {
 		if (scope?.structural === false && scope.featureId) {
-			if (HomePanel.patchLiveFeature(scope.featureId)) return;
+			HomePanel.patchLiveFeature(scope.featureId);
+			// A Feature panel and the singleton Project/Portfolio panel can be
+			// open at the same time; both projections must receive the same tick.
 			HomePanel.refreshInstance();
 			return;
 		}
@@ -883,6 +889,139 @@ export class HomePanel {
 		});
 	}
 
+	/** Patch portfolio/project/feature fleet state without replacing the document. */
+	private async sendFleetUpdateAsync(): Promise<void> {
+		const snapshots = this.currentFeatureId
+			? [
+					this.featureStateCoordinator.getSnapshot(this.currentFeatureId),
+				].filter(
+					(snapshot): snapshot is FeatureSnapshot => snapshot !== undefined,
+				)
+			: this.currentProjectId
+				? this.featureStateCoordinator.getProjectSnapshots(
+						this.currentProjectId,
+					)
+				: this.projectManager
+						.getAllContexts()
+						.flatMap((ctx) =>
+							this.featureStateCoordinator.getProjectSnapshots(ctx.project.id),
+						);
+		const rollup = projectSnapshotFleetRollup(
+			snapshots,
+			(agent, snapshot) =>
+				this.projectManager
+					.findContextByFeatureId(snapshot.feature.id)
+					?.agentManager.observe(agent) ?? {
+					identity: { agentName: agent.name },
+					lifecycle: { state: agent.status, source: "agentspace" },
+					attention: {
+						state:
+							agent.attentionStatus === "done"
+								? "unknown"
+								: (agent.attentionStatus ?? "unknown"),
+					},
+					session: { state: agent.sessionBinding?.state ?? "pending" },
+					review: { pending: Boolean(agent.pendingReviewId) },
+				},
+		);
+		const agentUpdates = snapshots.flatMap((snapshot) =>
+			snapshot.runtime.agents.status === "known"
+				? snapshot.runtime.agents.value.map(({ agent }) => ({
+						id: agent.id,
+						cardPresentation: presentAgentCard(
+							this.projectManager
+								.findContextByFeatureId(snapshot.feature.id)
+								?.agentManager.observe(agent as Agent) ?? {
+								identity: { agentName: agent.name },
+								lifecycle: { state: agent.status, source: "agentspace" },
+								attention: {
+									state:
+										agent.attentionStatus === "done"
+											? "unknown"
+											: (agent.attentionStatus ?? "unknown"),
+								},
+								session: { state: agent.sessionBinding?.state ?? "pending" },
+								review: { pending: Boolean(agent.pendingReviewId) },
+							},
+						),
+					}))
+				: [],
+		);
+		const featureUpdates = snapshots.map((snapshot) => {
+			const agents =
+				snapshot.runtime.agents.status === "known"
+					? snapshot.runtime.agents.value
+					: [];
+			const services =
+				snapshot.runtime.services.status === "known"
+					? snapshot.runtime.services.value
+					: [];
+			const summary = snapshot.feature.id.startsWith("base:")
+				? undefined
+				: presentFeatureCockpit(
+						snapshot,
+						this.featureStateCoordinator.getProjectReferenceHealth(
+							snapshot.projectId,
+						),
+					).summary;
+			return {
+				id: snapshot.feature.id,
+				statusLabel: summary?.label,
+				statusTone: summary?.tone,
+				statusDetail: summary?.detail,
+				activeAgents: agents.filter(({ agent }) => agent.status !== "done")
+					.length,
+				runningServices: services.filter(
+					({ service }) => service.status === "running",
+				).length,
+			};
+		});
+		const projectUpdates = [
+			...new Set(snapshots.map((snapshot) => snapshot.projectId)),
+		].map((projectId) => ({
+			id: projectId,
+			...this.runtimeTotals(
+				snapshots.filter((snapshot) => snapshot.projectId === projectId),
+			),
+		}));
+		this.panel.webview.postMessage({
+			type: "fleetUpdate",
+			target: this.currentFeatureId
+				? `feature-${this.currentFeatureId}`
+				: this.currentProjectId
+					? `project-${this.currentProjectId}`
+					: "portfolio",
+			label: formatFleetRollup(rollup),
+			html: this.renderFleetRollup(rollup),
+			htmlKey: this.contentKey(this.renderFleetRollup(rollup)),
+			rollup,
+			agents: agentUpdates,
+			features: featureUpdates,
+			projects: projectUpdates,
+			totals: this.runtimeTotals(snapshots),
+		});
+	}
+
+	private runtimeTotals(snapshots: readonly FeatureSnapshot[]) {
+		let agents = 0;
+		let scripts = 0;
+		let attention = 0;
+		let activeFeatures = 0;
+		for (const snapshot of snapshots) {
+			if (
+				!snapshot.feature.id.startsWith("base:") &&
+				snapshot.feature.status !== "done"
+			)
+				activeFeatures += 1;
+			if (snapshot.runtime.agents.status === "known")
+				agents += snapshot.runtime.agents.value.length;
+			if (snapshot.runtime.services.status === "known")
+				scripts += snapshot.runtime.services.value.length;
+			attention += snapshot.attention.length;
+		}
+		return { activeFeatures, agents, scripts, attention };
+	}
+
 	private snapshotGitStats(snapshot: FeatureSnapshot): GitStats | null {
 		if (snapshot.git.featureDiff.status === "unknown") return null;
 		const diff = snapshot.git.featureDiff.value;
@@ -1177,12 +1316,10 @@ export class HomePanel {
 			);
 			const totalsChips = [
 				`<span class="portfolio-total-chip"><strong>${contexts.length}</strong> project${contexts.length === 1 ? "" : "s"}</span>`,
-				`<span class="portfolio-total-chip"><strong>${totals.activeFeatures}</strong> active feature${totals.activeFeatures === 1 ? "" : "s"}</span>`,
-				`<span class="portfolio-total-chip"><strong>${totals.agents}</strong> agent${totals.agents === 1 ? "" : "s"}</span>`,
-				`<span class="portfolio-total-chip"><strong>${totals.scripts}</strong> script${totals.scripts === 1 ? "" : "s"}</span>`,
-				totals.attention > 0
-					? `<span class="portfolio-total-chip attention clickable" role="button" title="List every attention item" onclick="showProblems()"><strong>${totals.attention}</strong> need${totals.attention === 1 ? "s" : ""} attention</span>`
-					: "",
+				`<span class="portfolio-total-chip" data-portfolio-total="activeFeatures"><strong>${totals.activeFeatures}</strong> active feature${totals.activeFeatures === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip" data-portfolio-total="agents"><strong>${totals.agents}</strong> agent${totals.agents === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip" data-portfolio-total="scripts"><strong>${totals.scripts}</strong> script${totals.scripts === 1 ? "" : "s"}</span>`,
+				`<span class="portfolio-total-chip attention clickable" data-portfolio-total="attention" role="button" title="List every attention item" onclick="showProblems()" style="display: ${totals.attention > 0 ? "" : "none"}"><strong>${totals.attention}</strong> need${totals.attention === 1 ? "s" : ""} attention</span>`,
 			].join("");
 
 			// For "New Feature" button, use first project if only one
@@ -1194,6 +1331,7 @@ export class HomePanel {
 					<div class="welcome-title">${ICON_BRAND} Agent Space</div>
 					<div class="welcome-subtitle">Portfolio at a glance</div>
 				</div>
+				<div id="fleet-rollup-portfolio" class="fleet-rollup">${this.renderFleetRollupForSnapshots(contexts.flatMap((ctx) => this.featureStateCoordinator.getProjectSnapshots(ctx.project.id)))}</div>
 				<div class="portfolio-totals">${totalsChips}</div>
 				<div class="quick-actions-row">
 					<button class="action-btn" onclick="newFeature('${newFeatureProjectId}')">
@@ -1403,6 +1541,7 @@ export class HomePanel {
 			</div>
 		</div>
 			<div class="workspace-content">
+				<div id="fleet-rollup-feature-${feature.id}" class="fleet-rollup">${this.renderFleetRollupForSnapshots([snapshot])}</div>
 					${this.renderFeatureProvisioning(
 						feature,
 						ctx.featureManager?.isProvisioningActive?.(feature.id) ?? false,
@@ -1790,7 +1929,7 @@ export class HomePanel {
 									),
 								).summary;
 						const statusBadge = summary
-							? `<span class="project-status-badge status-${summary.tone}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>`
+							? `<span class="project-status-badge status-${summary.tone}" data-project-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>`
 							: '<span class="project-base-label">base</span>';
 						const agentCount = agents.filter((a) => a.status !== "done").length;
 						const serviceCount = services.filter(
@@ -1818,7 +1957,7 @@ export class HomePanel {
 								<span class="project-feature-branch">${this.escapeHtml(feature.branch)}</span>
 								${statusBadge}
 								${this.renderReusedBranchChip(feature)}
-								<span class="project-feature-counts">${counts}</span>
+								<span class="project-feature-counts" data-project-feature-counts="${feature.id}">${counts}</span>
 								<button class="project-feature-delete" onclick="event.stopPropagation(); deleteFeature('${feature.id}')" title="Finish Feature">&times;</button>
 							</div>
 							<div class="project-feature-card-body" id="pf-body-${feature.id}">
@@ -1877,11 +2016,12 @@ export class HomePanel {
 			</div>
 			<div class="project-health-card">
 				<div class="section-label">Project overview</div>
+				<div id="fleet-rollup-project-${projectId}" class="fleet-rollup">${this.renderFleetRollupForSnapshots(snapshots)}</div>
 				<div class="project-overview-grid">
 					<div><strong>${featureSnapshots.length}</strong><span>Features</span></div>
-					<div><strong>${featureSnapshots.filter((snapshot) => snapshot.feature.status === "active").length}</strong><span>Active</span></div>
-					<div><strong>${projectAgentCount ?? "?"}</strong><span>Agents</span></div>
-					<div><strong>${projectServiceCount ?? "?"}</strong><span>Scripts</span></div>
+					<div data-project-overview-total="${projectId}:activeFeatures"><strong>${featureSnapshots.filter((snapshot) => snapshot.feature.status === "active").length}</strong><span>Active</span></div>
+					<div data-project-overview-total="${projectId}:agents"><strong>${projectAgentCount ?? "?"}</strong><span>Agents</span></div>
+					<div data-project-overview-total="${projectId}:scripts"><strong>${projectServiceCount ?? "?"}</strong><span>Scripts</span></div>
 				</div>
 				<p class="project-setting-source">${this.escapeHtml(context.project.repoPath)} · base branch <strong>${this.escapeHtml(effectiveBaseBranch)}</strong> ${baseCommitLabel ? `&middot; <span title="Observed base SHA">${this.escapeHtml(baseCommitLabel)}</span>` : ""}</p>
 				<div class="project-base-chips">${referenceHealthChip}${baseStateChips}${baseUpdateAction}</div>
@@ -2354,14 +2494,64 @@ export class HomePanel {
 			</div>
 			<div class="portfolio-card-stats">
 				<span class="portfolio-stat"><strong>${summary.activeFeatureCount}</strong>/${summary.featureCount} features</span>
-				<span class="portfolio-stat"><strong>${summary.agentsActive}</strong> agent${summary.agentsActive === 1 ? "" : "s"}</span>
-				<span class="portfolio-stat"><strong>${summary.servicesActive}</strong> script${summary.servicesActive === 1 ? "" : "s"}</span>
+				<span class="portfolio-stat" data-project-total="${projectId}:agents"><strong>${summary.agentsActive}</strong> agent${summary.agentsActive === 1 ? "" : "s"}</span>
+				<span class="portfolio-stat" data-project-total="${projectId}:scripts"><strong>${summary.servicesActive}</strong> script${summary.servicesActive === 1 ? "" : "s"}</span>
 			</div>
 			<div class="portfolio-features">${preview}</div>
 			<div class="portfolio-card-footer">
 				<button class="quick-action-btn primary" onclick="event.stopPropagation(); newFeature('${projectId}')">New Feature</button>
 			</div>
 		</div>`;
+	}
+
+	private renderFleetRollupForSnapshots(
+		snapshots: readonly FeatureSnapshot[],
+	): string {
+		const rollup = projectSnapshotFleetRollup(
+			snapshots,
+			(agent, snapshot) =>
+				this.projectManager
+					.findContextByFeatureId(snapshot.feature.id)
+					?.agentManager.observe(agent) ?? {
+					identity: { agentName: agent.name },
+					lifecycle: { state: agent.status, source: "agentspace" },
+					attention: {
+						state:
+							agent.attentionStatus === "done"
+								? "unknown"
+								: (agent.attentionStatus ?? "unknown"),
+					},
+					session: { state: agent.sessionBinding?.state ?? "pending" },
+					review: { pending: Boolean(agent.pendingReviewId) },
+				},
+		);
+		return this.renderFleetRollup(rollup);
+	}
+
+	private renderFleetRollup(
+		rollup: import("../agents/fleetRollup").FleetRollup,
+	): string {
+		const labels: Record<string, string> = {
+			needsYou: "need you",
+			failed: "failed",
+			readyForReview: "ready for review",
+			working: "working",
+			unknown: "unknown",
+		};
+		const controls = (
+			["needsYou", "failed", "readyForReview", "working", "unknown"] as const
+		)
+			.filter((bucket) => rollup[bucket] > 0)
+			.map((bucket) => {
+				const item = rollup.items.find(
+					(candidate) => candidate.bucket === bucket,
+				);
+				return item
+					? `<button class="fleet-rollup-item" data-fleet-item="${this.escapeHtml(item.featureId)}:${this.escapeHtml(item.agentId)}" onclick="event.stopPropagation(); focusFleetItem('${this.escapeHtml(item.featureId)}', '${this.escapeHtml(item.agentId)}')"><strong>${rollup[bucket]}</strong> ${labels[bucket]}</button>`
+					: `<span class="fleet-rollup-item"><strong>${rollup[bucket]}</strong> ${labels[bucket]}</span>`;
+			})
+			.join(" · ");
+		return `<div class="fleet-rollup-label" title="Agent attention rollup">${controls || "No active agents"}</div>`;
 	}
 
 	private renderFeatureTmuxSection(snapshot: FeatureSnapshot): string {

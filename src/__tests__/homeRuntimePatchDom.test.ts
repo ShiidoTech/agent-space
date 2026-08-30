@@ -15,9 +15,14 @@ import { describe, expect, it } from "vitest";
  * same way VS Code's webview host does.
  */
 function loadHomeJs() {
+	type SelectorElement = {
+		textContent?: string;
+		querySelector?: (selector: string) => SelectorElement | null;
+	};
 	// biome-ignore lint/suspicious/noExplicitAny: minimal DOM stand-in for a vm sandbox
 	function makeElement(): any {
-		return {
+		// biome-ignore lint/suspicious/noExplicitAny: minimal DOM stand-in
+		const element: any = {
 			_innerHTML: "",
 			innerHTMLSetCount: 0,
 			textContent: "",
@@ -31,6 +36,9 @@ function loadHomeJs() {
 				this.innerHTMLSetCount += 1;
 			},
 		};
+		element.querySelector = (selector: string) =>
+			selector === "strong" ? (element.strong ?? null) : null;
+		return element;
 	}
 
 	const registeredIds = [
@@ -54,6 +62,7 @@ function loadHomeJs() {
 		"captured pane output";
 
 	const requestedIds: string[] = [];
+	const selectorElements = new Map<string, SelectorElement>();
 	let messageListener: ((event: { data: unknown }) => void) | undefined;
 
 	const sandbox = {
@@ -64,6 +73,8 @@ function loadHomeJs() {
 				requestedIds.push(id);
 				return elements.get(id) ?? null;
 			},
+			querySelector: (selector: string) =>
+				selectorElements.get(selector) ?? null,
 		},
 		window: {
 			addEventListener: (type: string, listener: (e: unknown) => void) => {
@@ -91,6 +102,7 @@ function loadHomeJs() {
 			messageListener?.({ data: message });
 		},
 		elements,
+		selectorElements,
 		requestedIds,
 	};
 }
@@ -244,5 +256,38 @@ describe("home.js featureRuntimeUpdate DOM contract (issue #120, PR #121 fourth 
 		expect(diagnosticsContent.innerHTMLSetCount).toBe(2);
 		expect(primaryAction.innerHTMLSetCount).toBe(1);
 		expect(alerts.innerHTMLSetCount).toBe(1);
+	});
+
+	it("patches project and portfolio runtime totals from the fleet update", () => {
+		const { dispatch, selectorElements } = loadHomeJs();
+		const projectAgentsStrong = { textContent: "" };
+		const projectScriptsStrong = { textContent: "" };
+		const portfolioAgentsStrong = { textContent: "" };
+		const projectAgents = { querySelector: () => projectAgentsStrong };
+		const projectScripts = { querySelector: () => projectScriptsStrong };
+		selectorElements.set(
+			'[data-project-overview-total="p1:agents"]',
+			projectAgents,
+		);
+		selectorElements.set(
+			'[data-project-overview-total="p1:scripts"]',
+			projectScripts,
+		);
+		selectorElements.set(
+			'[data-portfolio-total="agents"] strong',
+			portfolioAgentsStrong,
+		);
+
+		dispatch({
+			type: "fleetUpdate",
+			target: "portfolio",
+			html: "",
+			projects: [{ id: "p1", activeFeatures: 2, agents: 3, scripts: 4 }],
+			totals: { activeFeatures: 2, agents: 3, scripts: 4 },
+		});
+
+		expect(projectAgentsStrong.textContent).toBe("3");
+		expect(projectScriptsStrong.textContent).toBe("4");
+		expect(portfolioAgentsStrong.textContent).toBe("3");
 	});
 });
