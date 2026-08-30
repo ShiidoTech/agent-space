@@ -22,6 +22,7 @@ import {
 	ICON_RESTART,
 	ICON_STOP,
 } from "../constants/icons";
+import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import { recordFullRebuild } from "../diagnostics/webviewRebuildDiagnostics";
 import type {
 	ProjectContext,
@@ -206,7 +207,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	/** Update live state without replacing the webview DOM or its local UI state. */
 	refreshState(): void {
-		this.sendUpdate().catch(() => {});
+		measurePerfAsync("sidebar.refreshState", () => this.sendUpdate()).catch(
+			() => {},
+		);
 	}
 
 	private async refreshAsync(): Promise<void> {
@@ -278,7 +281,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					const services = this.snapshotServices(snapshot);
 					const summary = this.presentSidebarSummary(snapshot);
 					const fleet = projectSnapshotFleetRollup([snapshot], (agent) =>
-						ctx.agentManager.observe(agent),
+						ctx.agentManager.observeCached(agent),
 					);
 					return {
 						id: snapshot.feature.id,
@@ -291,7 +294,9 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 						agentsKnown: snapshot.runtime.agents.status === "known",
 						servicesKnown: snapshot.runtime.services.status === "known",
 						agents: agents.map((a) => ({
-							cardPresentation: presentAgentCard(ctx.agentManager.observe(a)),
+							cardPresentation: presentAgentCard(
+								ctx.agentManager.observeCached(a),
+							),
 							id: a.id,
 							name: a.name,
 							sessionTitle: a.sessionTitle,
@@ -310,7 +315,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 				const projectRollup = projectSnapshotFleetRollup(
 					snapshots,
-					(agent, _snapshot) => ctx.agentManager.observe(agent),
+					(agent, _snapshot) => ctx.agentManager.observeCached(agent),
 				);
 				return {
 					id: ctx.project.id,
@@ -330,7 +335,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	}
 
 	private handleStopService(featureId: string, serviceId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 		const service = ctx.serviceManager
 			.getServices(featureId)
@@ -369,7 +374,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 		featureId: string,
 		agentId: string,
 	): Promise<void> {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 
 		const agents = ctx.agentManager.getAgentsReadModel(featureId);
@@ -528,7 +533,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			project.id,
 		);
 		const fleet = projectSnapshotFleetRollup(snapshots, (agent) =>
-			ctx.agentManager.observe(agent),
+			ctx.agentManager.observeCached(agent),
 		);
 		const baseSnapshot = snapshots.find((snapshot) =>
 			snapshot.feature.id.startsWith("base:"),
@@ -608,23 +613,8 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			services.filter((s) => s.status === "running").length;
 
 		const summary = this.presentSidebarSummary(snapshot);
-		const fleet = projectSnapshotFleetRollup(
-			[snapshot],
-			(agent) =>
-				this.projectManager
-					.findContextByFeatureId(feature.id)
-					?.agentManager.observe(agent) ?? {
-					identity: { agentName: agent.name },
-					lifecycle: { state: agent.status, source: "agentspace" },
-					attention: {
-						state:
-							agent.attentionStatus === "done"
-								? "unknown"
-								: (agent.attentionStatus ?? "unknown"),
-					},
-					session: { state: agent.sessionBinding?.state ?? "pending" },
-					review: { pending: Boolean(agent.pendingReviewId) },
-				},
+		const fleet = projectSnapshotFleetRollup([snapshot], (agent) =>
+			this.observeAgentCached(feature.id, agent),
 		);
 		const bodyHtml = this.renderSnapshotCardBody(snapshot, agents, services);
 		const count = this.snapshotRuntimeKnown(snapshot)
@@ -655,6 +645,30 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				</div>
 			</div>
 		</div>`;
+	}
+
+	/** Zero-I/O observation read: cache hit, or a persisted-field-only default. */
+	private observeAgentCached(featureId: string, agent: Agent) {
+		return (
+			this.projectManager
+				.peekWarmContext(featureId)
+				?.agentManager.observeCached(agent) ?? {
+				identity: { agentName: agent.name },
+				lifecycle: { state: agent.status, source: "agentspace" as const },
+				attention: {
+					state:
+						agent.attentionStatus === "done"
+							? ("unknown" as const)
+							: (agent.attentionStatus ?? "unknown"),
+					reason: agent.attentionReason,
+				},
+				session: {
+					state: agent.sessionBinding?.state ?? "pending",
+					detail: agent.sessionBinding?.detail,
+				},
+				review: { pending: Boolean(agent.pendingReviewId) },
+			}
+		);
 	}
 
 	private snapshotAgents(snapshot: FeatureSnapshot): Agent[] {
@@ -715,24 +729,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			const tool = this.toolRegistry.resolveAgentTool(a.toolId);
 			const toolLabel = ` &middot; ${this.escapeHtml(tool.name)}`;
 			const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
-			const observation = this.projectManager
-				.findContextByFeatureId(feature.id)
-				?.agentManager.observe(a) ?? {
-				identity: { agentName: a.name },
-				lifecycle: { state: a.status, source: "agentspace" },
-				attention: {
-					state:
-						a.attentionStatus === "done"
-							? "unknown"
-							: (a.attentionStatus ?? "unknown"),
-					reason: a.attentionReason,
-				},
-				session: {
-					state: a.sessionBinding?.state ?? "pending",
-					detail: a.sessionBinding?.detail,
-				},
-				review: { pending: Boolean(a.pendingReviewId) },
-			};
+			const observation = this.observeAgentCached(feature.id, a);
 			const card = presentAgentCard(observation);
 			const presented = card.primaryState;
 			const errorNote = a.lastError
@@ -769,15 +766,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					const i = agents.indexOf(a);
 					const agentColor = TERMINAL_COLOR_HEX[i % TERMINAL_COLOR_HEX.length];
 					const presented = presentAgentCard(
-						this.projectManager
-							.findContextByFeatureId(feature.id)
-							?.agentManager.observe(a) ?? {
-							identity: { agentName: a.name },
-							lifecycle: { state: a.status, source: "agentspace" },
-							attention: { state: "unknown" },
-							session: { state: "pending" },
-							review: { pending: Boolean(a.pendingReviewId) },
-						},
+						this.observeAgentCached(feature.id, a),
 					).primaryState;
 					return `
 		<div class="agent-card done" data-agent-id="${a.id}" oncontextmenu="showAgentMenu(event, '${feature.id}', '${a.id}')">

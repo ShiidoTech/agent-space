@@ -5,6 +5,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectManager } from "../projects/projectManager";
 import { GlobalStore } from "../storage/globalStore";
 
+// P0 zero-I/O UI mandate: navigation/render paths (resolveFeatureCached())
+// must never shell out. Mocking node:child_process to throw turns any leaked
+// sync exec into a loud test failure instead of a silent real git spawn.
+vi.mock("node:child_process", () => ({
+	execSync: vi.fn(() => {
+		throw new Error(
+			"execSync() must not be called from resolveFeatureCached() (P0 zero-I/O UI mandate).",
+		);
+	}),
+	execFileSync: vi.fn(() => {
+		throw new Error(
+			"execFileSync() must not be called from resolveFeatureCached() (P0 zero-I/O UI mandate).",
+		);
+	}),
+	execFile: vi.fn(() => {
+		throw new Error(
+			"execFile() must not be called from resolveFeatureCached() (P0 zero-I/O UI mandate).",
+		);
+	}),
+}));
+
 vi.mock("vscode", () => ({
 	workspace: {
 		getConfiguration: vi.fn(() => ({
@@ -433,6 +454,22 @@ describe("ProjectManager", () => {
 				"features.json",
 			);
 			expect(fs.existsSync(oldFile)).toBe(false);
+		});
+	});
+
+	// PR #133 review, blocker 1: the base card is clickable via
+	// showFeature("base:<projectId>"), so resolveFeatureCached() must resolve
+	// its identity without ever shelling out to Git — even when no
+	// `baseBranch` is configured and the branch has never been detected yet.
+	describe("resolveFeatureCached (P0 zero-I/O UI mandate: base feature)", () => {
+		it("resolves base:<projectId> without ever calling execSync, falling back to the unknown-base placeholder", () => {
+			const project = manager.addProject(tmpDir);
+			manager.getContext(project.id); // warms peekWarmContext's cache
+
+			const resolved = manager.resolveFeatureCached(`base:${project.id}`);
+
+			expect(resolved?.feature.id).toBe(`base:${project.id}`);
+			expect(resolved?.feature.branch).toBe("(unknown base)");
 		});
 	});
 });

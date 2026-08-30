@@ -266,6 +266,11 @@
 					"default": true,
 					"description": "Show a notification when a coding agent fails."
 				},
+				"agentSpace.diagnostics.perfProfiler": {
+					"type": "boolean",
+					"default": false,
+					"description": "Log duration and subprocess counts (tmux/git/provider) for sidebar/Home/runtime hot paths to the Agent Space Diagnostics output channel. Part of the zero-I/O UI performance work."
+				},
 				"agentSpace.enablePerAgentIsolation": {
 					"type": "boolean",
 					"default": false,

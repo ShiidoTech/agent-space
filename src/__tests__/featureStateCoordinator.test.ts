@@ -166,7 +166,10 @@ function setup(
 			getAgents: vi.fn(() => []),
 			getAgentsReadModel: vi.fn(() => []),
 		},
-		serviceManager: { getServices: vi.fn(() => []) },
+		serviceManager: {
+			getServices: vi.fn(() => []),
+			getServicesAsync: vi.fn(async () => []),
+		},
 	} as unknown as ProjectContext;
 	let currentContext = context;
 	const manager = {
@@ -178,6 +181,10 @@ function setup(
 		observeTmuxSessions: vi.fn(() => ({
 			status: "known" as const,
 			sessions: [] as string[],
+		})),
+		observeTmuxPanesAsync: vi.fn(async () => ({
+			status: "known" as const,
+			panes: new Map(),
 		})),
 		agentTmuxSessionName: vi.fn(
 			(featureId: string, agentId: string, persisted?: string) =>
@@ -1604,7 +1611,10 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 				getAgents: vi.fn(() => []),
 				getAgentsReadModel: vi.fn(() => []),
 			},
-			serviceManager: { getServices: vi.fn(() => []) },
+			serviceManager: {
+				getServices: vi.fn(() => []),
+				getServicesAsync: vi.fn(async () => []),
+			},
 		} as unknown as ProjectContext;
 	}
 	const contexts: Record<string, ProjectContext> = {
@@ -1618,6 +1628,10 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 		observeTmuxSessions: vi.fn(() => ({
 			status: "known" as const,
 			sessions: [] as string[],
+		})),
+		observeTmuxPanesAsync: vi.fn(async () => ({
+			status: "known" as const,
+			panes: new Map(),
 		})),
 		agentTmuxSessionName: vi.fn(
 			(featureId: string, agentId: string, persisted?: string) =>
@@ -2053,6 +2067,30 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
+	it("invalidateFeature is non-cascading — an unrelated feature/project stays fresh (P0 zero-I/O UI mandate)", async () => {
+		const inspects = {
+			p1: vi.fn(async ({ featureBranch }: { featureBranch: string }) =>
+				git(featureBranch === "main" ? feature("base:p1") : feature("f1")),
+			),
+			p2: vi.fn(async () => git(feature("f2"))),
+		};
+		const fixture = setupTwoProjects(inspects);
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+		await coordinator.reconcileFeature("f1");
+		await coordinator.reconcileFeature("f2");
+		expect(coordinator.isFeatureStale("f1")).toBe(false);
+		expect(coordinator.isFeatureStale("f2")).toBe(false);
+
+		coordinator.invalidateFeature("f1");
+
+		expect(coordinator.isFeatureStale("f1")).toBe(true);
+		// A scoped invalidation must never mark an unrelated feature stale —
+		// that would force it to re-pay for a fresh Git observation the next
+		// time it's focused, for a change it had nothing to do with.
+		expect(coordinator.isFeatureStale("f2")).toBe(false);
+		coordinator.dispose();
+	});
+
 	it("a transient git failure does not regress a previously known field to unknown", async () => {
 		let attempt = 0;
 		const inspects = {
@@ -2101,6 +2139,28 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		expect(coordinator.getSnapshot("f1")?.git.repository.status).toBe(
 			"unknown",
 		);
+		coordinator.dispose();
+	});
+
+	it("reconcilePresence reads services through the async, non-blocking twin — never the sync getServices", async () => {
+		const fixture = setup();
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcilePresence();
+
+		expect(fixture.context.serviceManager.getServicesAsync).toHaveBeenCalled();
+		expect(fixture.context.serviceManager.getServices).not.toHaveBeenCalled();
+		coordinator.dispose();
+	});
+
+	it("reconcilePresence sweeps tmux through the canonical async panes twin — never the sync observeTmuxSessions", async () => {
+		const fixture = setup();
+		const coordinator = new FeatureStateCoordinator(fixture.manager);
+
+		await coordinator.reconcilePresence();
+
+		expect(fixture.manager.observeTmuxPanesAsync).toHaveBeenCalled();
+		expect(fixture.manager.observeTmuxSessions).not.toHaveBeenCalled();
 		coordinator.dispose();
 	});
 
@@ -2397,7 +2457,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				getAgents: vi.fn(() => []),
 				getAgentsReadModel: vi.fn(() => []),
 			},
-			serviceManager: { getServices: vi.fn(() => []) },
+			serviceManager: {
+				getServices: vi.fn(() => []),
+				getServicesAsync: vi.fn(async () => []),
+			},
 		} as unknown as ProjectContext;
 	}
 
@@ -2408,6 +2471,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 			observeTmuxSessions: vi.fn(() => ({
 				status: "known" as const,
 				sessions: [] as string[],
+			})),
+			observeTmuxPanesAsync: vi.fn(async () => ({
+				status: "known" as const,
+				panes: new Map(),
 			})),
 			agentTmuxSessionName: vi.fn(() => undefined),
 			findContextByFeatureId: vi.fn(() => ctx),
@@ -2507,7 +2574,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -2518,6 +2588,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				observeTmuxSessions: vi.fn(() => ({
 					status: "known" as const,
 					sessions: [] as string[],
+				})),
+				observeTmuxPanesAsync: vi.fn(async () => ({
+					status: "known" as const,
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(featureId: string, agentId: string, persisted?: string) =>
@@ -2695,7 +2769,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -2706,6 +2783,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				observeTmuxSessions: vi.fn(() => ({
 					status: "known" as const,
 					sessions: [] as string[],
+				})),
+				observeTmuxPanesAsync: vi.fn(async () => ({
+					status: "known" as const,
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
@@ -2864,7 +2945,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -2875,6 +2959,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				observeTmuxSessions: vi.fn(() => ({
 					status: "known" as const,
 					sessions: [] as string[],
+				})),
+				observeTmuxPanesAsync: vi.fn(async () => ({
+					status: "known" as const,
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
@@ -3022,7 +3110,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -3033,6 +3124,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				observeTmuxSessions: vi.fn(() => ({
 					status: "known" as const,
 					sessions: [] as string[],
+				})),
+				observeTmuxPanesAsync: vi.fn(async () => ({
+					status: "known" as const,
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
@@ -3172,7 +3267,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					getAgents: vi.fn(() => []),
 					getAgentsReadModel: vi.fn(() => []),
 				},
-				serviceManager: { getServices: vi.fn(() => []) },
+				serviceManager: {
+					getServices: vi.fn(() => []),
+					getServicesAsync: vi.fn(async () => []),
+				},
 			} as unknown as ProjectContext;
 			const manager = {
 				getAllContexts: vi.fn(() => [context]),
@@ -3183,6 +3281,10 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				observeTmuxSessions: vi.fn(() => ({
 					status: "known" as const,
 					sessions: [] as string[],
+				})),
+				observeTmuxPanesAsync: vi.fn(async () => ({
+					status: "known" as const,
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>

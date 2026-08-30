@@ -11,6 +11,7 @@ import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_BRAND } from "../constants/icons";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
+import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import { recordFullRebuild } from "../diagnostics/webviewRebuildDiagnostics";
 import {
 	type FeatureCockpitPresentation,
@@ -245,12 +246,17 @@ export class HomePanel {
 		this.showingProblems = false;
 		this.problemsProjectFilter = undefined;
 		this.globalStore.setPreference("lastActiveFeatureId", featureId);
-		const resolved = this.projectManager.resolveFeature(featureId);
+		// Zero-I/O: navigation happens before first paint, so this must not
+		// trigger a synchronous Git branch reconciliation (P0 zero-I/O UI
+		// mandate §7). The panel title only needs feature identity.
+		const resolved = this.projectManager.resolveFeatureCached(featureId);
 		this.panel.title = resolved
 			? `Agent Space: ${resolved.feature.branch}`
 			: "Agent Space";
 		this.panel.reveal(vscode.ViewColumn.One, true);
-		this.sendRuntimeUpdateAsync().catch(() => {});
+		measurePerfAsync("Home.refreshLive", () =>
+			this.sendRuntimeUpdateAsync(),
+		).catch(() => {});
 		this.panel.webview.html = this.getFeatureHtml(featureId);
 		agentSpaceDiagnostic(
 			`focus feature:${featureId} local-render ${Date.now() - startedAt}ms`,
@@ -331,8 +337,14 @@ export class HomePanel {
 	 * the affected agents/services already exist in this panel's DOM.
 	 */
 	public refreshLiveState(): void {
-		if (this.currentFeatureId) this.sendRuntimeUpdateAsync().catch(() => {});
-		this.sendFleetUpdateAsync().catch(() => {});
+		if (this.currentFeatureId) {
+			measurePerfAsync("Home.refreshLive", () =>
+				this.sendRuntimeUpdateAsync(),
+			).catch(() => {});
+		}
+		measurePerfAsync("Home.refreshLive.fleet", () =>
+			this.sendFleetUpdateAsync(),
+		).catch(() => {});
 	}
 
 	/**
@@ -609,7 +621,7 @@ export class HomePanel {
 
 	// -- Service actions ------------------------------------------
 	private handleStopService(featureId: string, serviceId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 		const service = ctx.serviceManager
 			.getServices(featureId)
@@ -677,7 +689,7 @@ export class HomePanel {
 	}
 
 	private handleKillAgentSession(featureId: string, agentId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 		this.terminalController?.killAgentTerminal(agentId, featureId);
 		ctx.agentManager.closeAgent(agentId, featureId);
@@ -685,7 +697,7 @@ export class HomePanel {
 	}
 
 	private handleKillServiceSession(featureId: string, serviceId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 		const service = ctx.serviceManager
 			.getServices(featureId)
@@ -700,7 +712,7 @@ export class HomePanel {
 	}
 
 	private handleKillFeatureSessions(featureId: string): void {
-		const ctx = this.projectManager.findContextByFeatureId(featureId);
+		const ctx = this.projectManager.peekWarmContext(featureId);
 		if (!ctx) return;
 
 		this.terminalController?.killFeatureTerminals(featureId);
@@ -732,9 +744,7 @@ export class HomePanel {
 	// -- Activity polling -----------------------------------------
 	private sendActivityForAgent(agentId: string): void {
 		if (!this.currentFeatureId) return;
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		if (!ctx) return;
 		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		const agent = agents.find((a) => a.id === agentId);
@@ -753,9 +763,7 @@ export class HomePanel {
 
 	private sendActivityForAgents(agentIds: string[]): void {
 		if (!this.currentFeatureId || agentIds.length === 0) return;
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		if (!ctx) return;
 		const agents = ctx.agentManager.getAgentsReadModel(this.currentFeatureId);
 		for (const agentId of agentIds) {
@@ -775,9 +783,7 @@ export class HomePanel {
 
 	private sendActivityForService(serviceId: string): void {
 		if (!this.currentFeatureId) return;
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		if (!ctx) return;
 		const services = ctx.serviceManager.getServices(this.currentFeatureId);
 		const service = services.find((s) => s.id === serviceId);
@@ -793,9 +799,7 @@ export class HomePanel {
 
 	private sendActivityForServices(serviceIds: string[]): void {
 		if (!this.currentFeatureId || serviceIds.length === 0) return;
-		const ctx = this.projectManager.findContextByFeatureId(
-			this.currentFeatureId,
-		);
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		if (!ctx) return;
 		const services = ctx.serviceManager.getServices(this.currentFeatureId);
 		for (const serviceId of serviceIds) {
@@ -828,18 +832,24 @@ export class HomePanel {
 	 */
 	private async sendRuntimeUpdateAsync(): Promise<void> {
 		if (!this.currentFeatureId) return;
-		const resolved = this.projectManager.resolveFeature(this.currentFeatureId);
+		// Zero-I/O: peekWarmContext is a strictly cache-only, in-memory lookup
+		// — unlike resolveFeature()/findContextByFeatureId(), which can lazily
+		// init a cold project context (disk reads) or trigger a synchronous
+		// Git branch reconciliation. This patch path only ever needs the
+		// project context, never the resolved Feature record itself (P0
+		// zero-I/O UI mandate).
+		const ctx = this.projectManager.peekWarmContext(this.currentFeatureId);
 		const snapshot = this.featureStateCoordinator.getSnapshot(
 			this.currentFeatureId,
 		);
-		if (!resolved || !snapshot) return;
+		if (!ctx || !snapshot) return;
 
 		const agents = this.snapshotAgents(snapshot);
 		this.panel.webview.postMessage({
 			type: "agentAttentionUpdate",
 			agents: agents.map((agent) => ({
 				cardPresentation: presentAgentCard(
-					resolved.ctx.agentManager.observe(agent),
+					ctx.agentManager.observeCached(agent),
 				),
 				id: agent.id,
 			})),
@@ -906,43 +916,15 @@ export class HomePanel {
 						.flatMap((ctx) =>
 							this.featureStateCoordinator.getProjectSnapshots(ctx.project.id),
 						);
-		const rollup = projectSnapshotFleetRollup(
-			snapshots,
-			(agent, snapshot) =>
-				this.projectManager
-					.findContextByFeatureId(snapshot.feature.id)
-					?.agentManager.observe(agent) ?? {
-					identity: { agentName: agent.name },
-					lifecycle: { state: agent.status, source: "agentspace" },
-					attention: {
-						state:
-							agent.attentionStatus === "done"
-								? "unknown"
-								: (agent.attentionStatus ?? "unknown"),
-					},
-					session: { state: agent.sessionBinding?.state ?? "pending" },
-					review: { pending: Boolean(agent.pendingReviewId) },
-				},
+		const rollup = projectSnapshotFleetRollup(snapshots, (agent, snapshot) =>
+			this.observeAgentCached(snapshot.feature.id, agent),
 		);
 		const agentUpdates = snapshots.flatMap((snapshot) =>
 			snapshot.runtime.agents.status === "known"
 				? snapshot.runtime.agents.value.map(({ agent }) => ({
 						id: agent.id,
 						cardPresentation: presentAgentCard(
-							this.projectManager
-								.findContextByFeatureId(snapshot.feature.id)
-								?.agentManager.observe(agent as Agent) ?? {
-								identity: { agentName: agent.name },
-								lifecycle: { state: agent.status, source: "agentspace" },
-								attention: {
-									state:
-										agent.attentionStatus === "done"
-											? "unknown"
-											: (agent.attentionStatus ?? "unknown"),
-								},
-								session: { state: agent.sessionBinding?.state ?? "pending" },
-								review: { pending: Boolean(agent.pendingReviewId) },
-							},
+							this.observeAgentCached(snapshot.feature.id, agent as Agent),
 						),
 					}))
 				: [],
@@ -1031,6 +1013,26 @@ export class HomePanel {
 			deletions: diff.deletions,
 			raw: diff.raw,
 		};
+	}
+
+	/** Zero-I/O observation read: cache hit, or a persisted-field-only default. */
+	private observeAgentCached(featureId: string, agent: Agent) {
+		return (
+			this.projectManager
+				.peekWarmContext(featureId)
+				?.agentManager.observeCached(agent) ?? {
+				identity: { agentName: agent.name },
+				lifecycle: { state: agent.status, source: "agentspace" as const },
+				attention: {
+					state:
+						agent.attentionStatus === "done"
+							? ("unknown" as const)
+							: (agent.attentionStatus ?? "unknown"),
+				},
+				session: { state: agent.sessionBinding?.state ?? "pending" },
+				review: { pending: Boolean(agent.pendingReviewId) },
+			}
+		);
 	}
 
 	private snapshotAgents(snapshot: FeatureSnapshot): Agent[] {
@@ -1480,7 +1482,10 @@ export class HomePanel {
 	}
 
 	private getFeatureHtml(featureId: string): string {
-		const resolved = this.projectManager.resolveFeature(featureId);
+		// Zero-I/O: this renders the Feature page's first paint — must not
+		// block on a synchronous Git branch reconciliation (P0 zero-I/O UI
+		// mandate §7).
+		const resolved = this.projectManager.resolveFeatureCached(featureId);
 		if (!resolved) return this.emptyHtml("Feature not found");
 
 		const snapshot = this.featureStateCoordinator.getSnapshot(featureId);
@@ -2267,25 +2272,7 @@ export class HomePanel {
 		const idx = allAgents.indexOf(agent);
 		const color = TERMINAL_COLOR_HEX[idx % TERMINAL_COLOR_HEX.length];
 		const tool = this.toolRegistry.resolveAgentTool(agent.toolId);
-		const observation = this.projectManager
-			.resolveFeature(feature.id)
-			?.ctx.agentManager.observe(agent);
-		const card = presentAgentCard(
-			observation ?? {
-				identity: {
-					agentName: agent.name,
-					sessionTitle: agent.sessionTitle,
-					providerId: agent.toolId,
-				},
-				lifecycle: { state: "unknown", source: "agentspace" },
-				attention: { state: "unknown" },
-				session: {
-					state: agent.sessionBinding?.state ?? "pending",
-					detail: agent.sessionBinding?.detail,
-				},
-				review: { pending: Boolean(agent.pendingReviewId) },
-			},
-		);
+		const card = presentAgentCard(this.observeAgentCached(feature.id, agent));
 		const presented = card.primaryState;
 		const isDone = agent.status === "done";
 		const isErrored = agent.status === "errored";
@@ -2507,23 +2494,8 @@ export class HomePanel {
 	private renderFleetRollupForSnapshots(
 		snapshots: readonly FeatureSnapshot[],
 	): string {
-		const rollup = projectSnapshotFleetRollup(
-			snapshots,
-			(agent, snapshot) =>
-				this.projectManager
-					.findContextByFeatureId(snapshot.feature.id)
-					?.agentManager.observe(agent) ?? {
-					identity: { agentName: agent.name },
-					lifecycle: { state: agent.status, source: "agentspace" },
-					attention: {
-						state:
-							agent.attentionStatus === "done"
-								? "unknown"
-								: (agent.attentionStatus ?? "unknown"),
-					},
-					session: { state: agent.sessionBinding?.state ?? "pending" },
-					review: { pending: Boolean(agent.pendingReviewId) },
-				},
+		const rollup = projectSnapshotFleetRollup(snapshots, (agent, snapshot) =>
+			this.observeAgentCached(snapshot.feature.id, agent),
 		);
 		return this.renderFleetRollup(rollup);
 	}

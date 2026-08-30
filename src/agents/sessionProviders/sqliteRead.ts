@@ -1,6 +1,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promisify } from "node:util";
+import { recordSubprocessCall } from "../../diagnostics/subprocessCounter";
 
 const execFileAsync = promisify(execFile);
 
@@ -288,6 +289,7 @@ export function resolveOpenCodeDbPath(
 		return undefined;
 	}
 	try {
+		recordSubprocessCall("provider");
 		const raw = execFn("opencode", ["db", "path"], {
 			encoding: "utf-8",
 			timeout: 5_000,
@@ -312,6 +314,7 @@ export function resolveOpenCodeDbPath(
 export function openCodeCliFallback(): SqliteCliFallback {
 	return {
 		execSync: (sql) => {
+			recordSubprocessCall("provider");
 			const raw = execFileSync("opencode", ["db", sql, "--format", "json"], {
 				encoding: "utf8",
 				timeout: 5_000,
@@ -322,6 +325,7 @@ export function openCodeCliFallback(): SqliteCliFallback {
 			return Array.isArray(rows) ? rows : [];
 		},
 		execAsync: async (sql) => {
+			recordSubprocessCall("provider");
 			const { stdout } = await execFileAsync(
 				"opencode",
 				["db", sql, "--format", "json"],

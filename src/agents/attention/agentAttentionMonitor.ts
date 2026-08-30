@@ -1,3 +1,4 @@
+import { measurePerfAsync } from "../../diagnostics/perfProfiler";
 import type {
 	AgentOperationalTransition,
 	AttentionWatchedAgent,
@@ -87,7 +88,9 @@ export class AgentAttentionMonitor {
 		if (this.disposed || this.scanning) return;
 		this.scanning = true;
 		try {
-			const watched = await this.deps.collect();
+			const watched = await measurePerfAsync("attention.reconcile", () =>
+				this.deps.collect(),
+			);
 			if (this.disposed) return;
 			try {
 				for (const transition of this.detector.scan(watched)) {

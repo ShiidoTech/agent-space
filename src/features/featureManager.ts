@@ -140,6 +140,31 @@ export class FeatureManager {
 		};
 	}
 
+	/**
+	 * Zero-I/O twin of {@link getBaseFeature}: never runs Git. Uses the
+	 * configured `baseBranch` or whatever `getBaseBranch()` has already
+	 * cached from a prior call — never a fresh `git rev-parse` — and falls
+	 * back to the explicit "(unknown base)" placeholder otherwise. For
+	 * render/navigation paths (P0 zero-I/O UI mandate) that only need the
+	 * base card's identity, not an up-to-the-moment detected branch.
+	 */
+	getBaseFeatureCached(projectId: string): Feature {
+		const branch =
+			this.cachedBaseBranch ||
+			this.config.baseBranch?.trim() ||
+			"(unknown base)";
+		return {
+			id: `base:${projectId}`,
+			name: branch,
+			branch,
+			worktreePath: this.repoRoot,
+			status: "active",
+			color: "terminal.ansiBlue",
+			isolation: "shared",
+			createdAt: new Date(0).toISOString(),
+		};
+	}
+
 	/** The effective base branch (configured, or checked-out as a fallback). */
 	getBaseBranchName(): string {
 		return this.getBaseBranch();
@@ -634,6 +659,16 @@ export class FeatureManager {
 		const feature = this.features.find((f) => f.id === id);
 		if (feature) this.reconcileFeatureBranches(feature);
 		return feature;
+	}
+
+	/**
+	 * Zero-I/O twin of {@link getFeature}: the in-memory record only, no
+	 * branch-link reconciliation (no synchronous `git symbolic-ref`/`git
+	 * rev-parse`). For render/navigation paths that only need identity
+	 * (id, name, branch) — not up-to-the-moment checkout/link state.
+	 */
+	getFeatureCached(id: string): Feature | undefined {
+		return this.features.find((f) => f.id === id);
 	}
 
 	/** Observe linked branches without conflating checkout and delivery identity. */

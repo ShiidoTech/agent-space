@@ -70,6 +70,10 @@ function buildFixture() {
 			status: "known" as const,
 			sessions: [] as string[],
 		})),
+		observeTmuxPanesAsync: vi.fn(async () => ({
+			status: "known" as const,
+			panes: new Map(),
+		})),
 		agentTmuxSessionName: vi.fn(() => undefined),
 		findContextByFeatureId: vi.fn(() => context),
 	} as unknown as ProjectManager;

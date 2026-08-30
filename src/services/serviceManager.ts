@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import * as crypto from "node:crypto";
-import type { TmuxIntegration } from "../agents/tmux";
+import type { TmuxIntegration, TmuxPanesObservation } from "../agents/tmux";
 import type { Store } from "../storage/store";
 import type { Service, ServiceStatus } from "../types";
 import { exec } from "../utils/platform";
@@ -24,6 +24,33 @@ export class ServiceManager {
 
 	getServices(featureId: string): Service[] {
 		this.refreshStatuses(featureId);
+		return [...this.loadServices(featureId)];
+	}
+
+	/**
+	 * Non-blocking twin of {@link getServices}: identical TTL-guarded refresh
+	 * semantics, but background reconciliation
+	 * (`FeatureStateCoordinator.reconcilePresence`) never blocks the
+	 * Extension Host on a subprocess — and, when `knownTmuxPanes` is given
+	 * (that tick's single canonical `list-panes -a` sweep), never makes a
+	 * tmux call of its own at all, whether the sweep succeeded or failed
+	 * (`status: "unknown"` is a fail-closed "don't retry", not "not
+	 * supplied" — see {@link refreshStatusesAsync}).
+	 */
+	async getServicesAsync(
+		featureId: string,
+		knownTmuxPanes?: TmuxPanesObservation,
+	): Promise<Service[]> {
+		await this.refreshStatusesAsync(featureId, knownTmuxPanes);
+		return [...this.loadServices(featureId)];
+	}
+
+	/**
+	 * Read the persisted service model without probing tmux at all — zero
+	 * I/O. For a caller that only needs the read model (a UI path that must
+	 * never touch tmux) rather than a freshly reconciled status.
+	 */
+	getServicesReadModel(featureId: string): Service[] {
 		return [...this.loadServices(featureId)];
 	}
 
@@ -125,6 +152,78 @@ export class ServiceManager {
 				changed = true;
 			}
 		}
+		if (changed) {
+			this.saveServices(featureId, services);
+		}
+	}
+
+	/**
+	 * Non-blocking twin of {@link refreshStatuses}: identical TTL-guarded
+	 * decision tree, but probes run through `isSessionAliveAsync` /
+	 * `getPaneStatusAsync` so a caller on a background reconciliation path
+	 * never blocks the Extension Host on a subprocess.
+	 */
+	private async refreshStatusesAsync(
+		featureId: string,
+		knownTmuxPanes?: TmuxPanesObservation,
+	): Promise<void> {
+		const lastRefresh = this.lastRefreshTime.get(featureId);
+		if (
+			lastRefresh &&
+			Date.now() - lastRefresh < ServiceManager.REFRESH_TTL_MS
+		) {
+			return;
+		}
+		this.lastRefreshTime.set(featureId, Date.now());
+
+		const services = this.loadServices(featureId);
+		let changed = false;
+		await Promise.all(
+			services.map(async (service) => {
+				if (service.status === "stopped" || service.status === "errored") {
+					return;
+				}
+
+				// The caller's own canonical sweep for this tick — trust it
+				// exclusively, no tmux call of our own (P0 mandate: one tmux
+				// subprocess per tick, not one per service). A sweep that was
+				// attempted and failed (`status: "unknown"`) must NOT fall
+				// through to the per-service probe below — that would turn one
+				// failed global sweep into an O(N) retry storm. Leave the
+				// service's last-known status untouched instead.
+				if (knownTmuxPanes) {
+					if (knownTmuxPanes.status === "unknown") {
+						return;
+					}
+					const pane = knownTmuxPanes.panes.get(service.tmuxSession);
+					if (!pane) {
+						service.status = "stopped";
+						changed = true;
+						return;
+					}
+					if (pane.dead) {
+						service.status = pane.exitCode === 0 ? "stopped" : "errored";
+						changed = true;
+					}
+					return;
+				}
+
+				const alive =
+					(await this.tmux.isSessionAliveAsync?.(service.tmuxSession)) ?? false;
+				if (!alive) {
+					service.status = "stopped";
+					changed = true;
+					return;
+				}
+
+				const pane =
+					(await this.tmux.getPaneStatusAsync?.(service.tmuxSession)) ?? null;
+				if (pane?.dead) {
+					service.status = pane.exitCode === 0 ? "stopped" : "errored";
+					changed = true;
+				}
+			}),
+		);
 		if (changed) {
 			this.saveServices(featureId, services);
 		}

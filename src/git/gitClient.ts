@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
+import { recordSubprocessCall } from "../diagnostics/subprocessCounter";
 
 const execFileAsync = promisify(execFile);
 
@@ -34,6 +35,7 @@ export class GitClient implements GitReader {
 	constructor(private readonly executable = "git") {}
 
 	readSync(argv: readonly string[], options: GitReadOptions): GitReadResult {
+		recordSubprocessCall("git");
 		const args = [...argv];
 		const startedAt = Date.now();
 		const result = spawnSync(this.executable, args, {
@@ -62,6 +64,7 @@ export class GitClient implements GitReader {
 		argv: readonly string[],
 		options: GitReadOptions,
 	): Promise<GitReadResult> {
+		recordSubprocessCall("git");
 		const args = [...argv];
 		const startedAt = Date.now();
 		try {

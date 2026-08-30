@@ -4,6 +4,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { recordSubprocessCall } from "../../diagnostics/subprocessCounter";
 import type {
 	ProviderAttentionSignal,
 	ProviderSessionAdapter,
@@ -515,6 +516,7 @@ function toTitleMap(rows: unknown[]): Map<string, string> {
 
 function hermesDryRunHasSession(sessionId: string): boolean {
 	try {
+		recordSubprocessCall("provider");
 		const output = execFileSync(
 			"hermes",
 			[
@@ -539,6 +541,7 @@ async function hermesDryRunHasSessionAsync(
 	sessionId: string,
 ): Promise<boolean> {
 	try {
+		recordSubprocessCall("provider");
 		const { stdout } = await execFileAsync(
 			"hermes",
 			[
@@ -561,6 +564,7 @@ async function hermesDryRunHasSessionAsync(
 
 function hermesExportTitle(sessionId: string): string | null {
 	try {
+		recordSubprocessCall("provider");
 		const raw = execFileSync(
 			"hermes",
 			[
@@ -584,6 +588,7 @@ async function hermesExportTitleAsync(
 	sessionId: string,
 ): Promise<string | null> {
 	try {
+		recordSubprocessCall("provider");
 		const { stdout } = await execFileAsync(
 			"hermes",
 			[
