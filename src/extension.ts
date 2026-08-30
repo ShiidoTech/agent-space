@@ -7,11 +7,7 @@ import { collectWatchedAgents } from "./agents/attention/agentAttentionCollector
 import { AgentAttentionMonitor } from "./agents/attention/agentAttentionMonitor";
 import { presentOperationalNotification } from "./agents/attention/agentOperationalNotificationPolicy";
 import type { AgentOperationalTransition } from "./agents/attention/agentOperationalTransitions";
-import {
-	CodingToolRegistry,
-	openCodeBackendManager,
-} from "./agents/codingToolRegistry";
-import { OpenCodeRuntimeReconciler } from "./agents/openCodeRuntimeReconciler";
+import { CodingToolRegistry } from "./agents/codingToolRegistry";
 import { restoreAgentRuntimes } from "./agents/runtimeRestorer";
 import { SessionBinder } from "./agents/sessionBinder";
 import { SessionNameSyncer } from "./agents/sessionNameSyncer";
@@ -148,9 +144,6 @@ export async function activate(
 		.get<string>("worktreeBasePath", ".worktrees");
 
 	const toolRegistry = new CodingToolRegistry();
-	context.subscriptions.push({
-		dispose: () => openCodeBackendManager.dispose(),
-	});
 
 	const projectManager = new ProjectManager(
 		globalStore,
@@ -160,20 +153,6 @@ export async function activate(
 		toolRegistry,
 	);
 	const featureStateCoordinator = new FeatureStateCoordinator(projectManager);
-
-	// Mid-session recovery for OpenCode: if `opencode serve` dies while VS
-	// Code stays open, reconnect every surviving OpenCode tmux pane for that
-	// worktree to the freshly-ensured replacement backend. Complements
-	// `restoreAgentRuntimes` below, which only runs once at activation.
-	const openCodeRuntimeReconciler = new OpenCodeRuntimeReconciler({
-		projectManager,
-		tmux,
-		toolRegistry,
-	});
-	openCodeRuntimeReconciler.start();
-	context.subscriptions.push({
-		dispose: () => openCodeRuntimeReconciler.dispose(),
-	});
 
 	const gitViewHandoffAction = getGitViewHandoffAction(
 		globalStore.getPreference(PENDING_GIT_VIEW_HANDOFF_PREF),
@@ -441,6 +420,10 @@ export async function activate(
 		const ctx = projectManager.findContextByFeatureId(feature.id);
 		if (ctx) sessionBinder.recordLaunch(ctx, feature.id, agent, cwd);
 	});
+	terminalController.onBeforeAgentLaunchFast((feature, agent) => {
+		const ctx = projectManager.findContextByFeatureId(feature.id);
+		if (ctx) sessionBinder.recordLaunchFast(ctx, feature.id, agent);
+	});
 	terminalController.onBeforeAgentLaunchAsync(
 		async (feature, agent, cwd, resume) => {
 			const ctx = projectManager.findContextByFeatureId(feature.id);
@@ -459,12 +442,12 @@ export async function activate(
 		},
 	);
 	terminalController.onAgentLaunched(() => {
-		// Cheap first attempt; the periodic pass covers the usual slower case.
-		if (
-			sessionBinder.reconcileAll().some((outcome) => outcome.boundSessionId)
-		) {
-			projectManager.notifyChange();
-		}
+		// Binding is enrichment; never scan a provider store on terminal readiness.
+		void sessionBinder.reconcileAllAsync().then((outcomes) => {
+			if (outcomes.some((outcome) => outcome.boundSessionId)) {
+				projectManager.notifyChange();
+			}
+		});
 	});
 	sessionBinder.onBound(() => {
 		projectManager.notifyChange();
@@ -1525,8 +1508,6 @@ export async function activate(
 								{ forceNewWindow: true },
 							);
 						},
-						shutdownBackend: (worktreePath) =>
-							openCodeBackendManager.shutdown(worktreePath),
 						removeWorktreeResidue: async (worktreePath) => {
 							const result =
 								await ctx.featureManager.removeWorktreeResidue(worktreePath);
@@ -2377,9 +2358,7 @@ export async function activate(
 	);
 }
 
-export function deactivate(): void {
-	openCodeBackendManager.dispose();
-}
+export function deactivate(): void {}
 
 async function isGitRepoAsync(cwd: string): Promise<boolean> {
 	return execAsyncSilent("git rev-parse --is-inside-work-tree", { cwd });

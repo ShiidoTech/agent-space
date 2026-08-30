@@ -511,6 +511,13 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildLaunchCommand(tool, null)).toBe("codex");
 		});
 
+		it("launches OpenCode directly in the native TUI on fresh launch", () => {
+			const tool = registry.resolveAgentTool("opencode");
+			expect(
+				registry.buildLaunchCommand(tool, "stale-session", "/repo/worktree"),
+			).toBe("opencode");
+		});
+
 		// Cas C: a resume that targets an id genuinely believed to be a
 		// persisted session stays the strict `codex resume <id>` path.
 		it("Cas C: resume still targets the exact persisted Codex session id", () => {
@@ -616,11 +623,10 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildResumeLaunchCommand(tool, null)).toBe("opencode");
 		});
 
-		it("resumes the exact opencode session by id when one is known", () => {
+		it("resumes the exact opencode session by id with the native TUI", () => {
 			const tool = registry.resolveAgentTool("opencode");
-			// Fail-closed: no controlled backend = no resume args
 			expect(registry.buildResumeLaunchCommand(tool, "sess-456")).toBe(
-				"opencode",
+				"opencode --session sess-456",
 			);
 		});
 

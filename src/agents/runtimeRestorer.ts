@@ -5,8 +5,6 @@ import type {
 import type { Agent, CodingTool, Feature } from "../types";
 import { execAsync } from "../utils/platform";
 import type { CodingToolRegistry } from "./codingToolRegistry";
-import { openCodeBackendManager } from "./codingToolRegistry";
-import { reconnectOpenCodeAgent } from "./openCodeReattach";
 import {
 	RuntimeOwnershipGuard,
 	runtimeOwnershipKey,
@@ -142,36 +140,6 @@ async function restoreAgentRuntimeUnlocked(
 		// Case A: the runtime survived (VS Code reload with a live tmux), or a
 		// previous restore pass already recreated it.
 		//
-		// For every other provider, tmux-alive genuinely implies a working
-		// runtime and nothing else is needed. OpenCode is different: the tmux
-		// pane only ever runs `opencode attach <backend-url> ...`, and the
-		// `opencode serve` backend it points at is a child of the Extension
-		// Host, not of tmux — it does not survive a reload, and can also die
-		// independently while VS Code stays open. A live pane therefore does
-		// NOT imply a live session here, so an agent is only ever considered
-		// `reattached` once its attach client is proven wired to the
-		// worktree's current, healthy backend.
-		if (tool.id === "opencode") {
-			const cwd = agent.worktreePath ?? feature.worktreePath;
-			const result = await reconnectOpenCodeAgent(
-				agent,
-				tool,
-				cwd,
-				sessionName,
-				deps,
-			);
-			if (result.kind === "blocked") {
-				return persistBlocked(ctx, agent, result.reason, outcome);
-			}
-			// "reconnected" (freshly respawned onto the current backend) and
-			// "skipped" (already pointed at it) both mean the agent is reattached.
-			ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, feature.id, {
-				state: "reattached",
-				at: new Date().toISOString(),
-			});
-			return outcome("reattached");
-		}
-
 		ctx.agentManager.recordRestoreOutcomeReadModel(agent.id, feature.id, {
 			state: "reattached",
 			at: new Date().toISOString(),
@@ -198,24 +166,6 @@ async function restoreAgentRuntimeUnlocked(
 	}
 
 	const cwd = agent.worktreePath ?? feature.worktreePath;
-
-	// For OpenCode controlled backend, ensure the backend is running so
-	// buildStrictResumeLaunchCommand can construct the correct attach command.
-	if (tool.id === "opencode") {
-		try {
-			await openCodeBackendManager.ensure(cwd);
-		} catch (error) {
-			console.warn(
-				`[RuntimeRestorer] OpenCode backend ensure failed for ${cwd}: ${error}`,
-			);
-			return persistBlocked(
-				ctx,
-				agent,
-				"OpenCode backend could not be started; agent runtime not recreated",
-				outcome,
-			);
-		}
-	}
 
 	const resumeCommand = deps.toolRegistry.buildStrictResumeLaunchCommand(
 		tool,
