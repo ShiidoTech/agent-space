@@ -561,41 +561,53 @@ describe("TmuxIntegration", () => {
 		});
 	});
 
-	describe("observeSessionsAsync", () => {
-		it("lists sessions using only the async exec path", async () => {
-			mockExecFileAsync
-				.mockResolvedValueOnce({ stdout: "", stderr: "" }) // isAvailableAsync's `tmux -V`
-				.mockResolvedValueOnce({
-					stdout: "agent-space-f1-a1\nagent-space-f2-a1\n",
-					stderr: "",
-				});
-			await expect(tmux.observeSessionsAsync()).resolves.toEqual({
-				status: "known",
-				sessions: ["agent-space-f1-a1", "agent-space-f2-a1"],
+	describe("observePanesAsync", () => {
+		it("lists every session's liveness, dead status, exit code and tty from a single call", async () => {
+			mockExecFileAsync.mockResolvedValueOnce({
+				stdout:
+					"agent-space-f1-a1 0 0 /dev/pts/3\nagent-space-f2-a1 1 1 /dev/pts/5\n",
+				stderr: "",
 			});
+			await expect(tmux.observePanesAsync()).resolves.toEqual({
+				status: "known",
+				panes: new Map([
+					[
+						"agent-space-f1-a1",
+						{ dead: false, exitCode: 0, tty: "/dev/pts/3" },
+					],
+					["agent-space-f2-a1", { dead: true, exitCode: 1, tty: "/dev/pts/5" }],
+				]),
+			});
+			// Exactly one tmux subprocess: no `tmux -V` precheck, no
+			// per-session has-session/display-message.
+			expect(mockExecFileAsync).toHaveBeenCalledTimes(1);
+			expect(mockExecFileAsync).toHaveBeenCalledWith("tmux", [
+				"list-panes",
+				"-a",
+				"-F",
+				"#{session_name} #{pane_dead} #{pane_dead_status} #{pane_tty}",
+			]);
 			expect(mockExecFile).not.toHaveBeenCalled();
 			expect(mockExec).not.toHaveBeenCalled();
 			expect(mockCommandExists).not.toHaveBeenCalled();
 		});
 
-		it("reports empty sessions rather than unknown when tmux has no server running", async () => {
-			mockExecFileAsync
-				.mockResolvedValueOnce({ stdout: "", stderr: "" })
-				.mockRejectedValueOnce(
-					Object.assign(new Error("no server running on ..."), {
-						status: 1,
-						stderr: "no server running on /tmp/tmux-1000/default",
-					}),
-				);
-			await expect(tmux.observeSessionsAsync()).resolves.toEqual({
+		it("reports an empty pane map rather than unknown when tmux has no server running", async () => {
+			mockExecFileAsync.mockRejectedValueOnce(
+				Object.assign(new Error("no server running on ..."), {
+					status: 1,
+					stderr: "no server running on /tmp/tmux-1000/default",
+				}),
+			);
+			await expect(tmux.observePanesAsync()).resolves.toEqual({
 				status: "known",
-				sessions: [],
+				panes: new Map(),
 			});
 		});
 
 		it("returns unknown without touching sync exec when tmux itself is unavailable", async () => {
 			mockExecFileAsync.mockRejectedValueOnce(new Error("not found"));
-			await expect(tmux.observeSessionsAsync()).resolves.toMatchObject({
+			await expect(tmux.observePanesAsync()).resolves.toMatchObject({
 				status: "unknown",
 			});
 			expect(mockExecFile).not.toHaveBeenCalled();

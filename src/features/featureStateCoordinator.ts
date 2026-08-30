@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { Disposable } from "vscode";
+import type { TmuxPaneObservation } from "../agents/tmux";
 import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
@@ -660,8 +661,13 @@ export class FeatureStateCoordinator implements Disposable {
 		if (!manager || this.disposed) return;
 		// Non-blocking: this is the global tmux sweep behind the cheap
 		// presence tier that keeps the sidebar/Home live — it must never run
-		// a synchronous `tmux list-sessions` (P0 zero-I/O UI mandate).
-		const tmuxSessions = await this.observeTmuxRuntimeAsync(manager);
+		// a synchronous tmux call, and it must be the ONLY tmux subprocess in
+		// this whole tick (P0 zero-I/O UI mandate). Every downstream
+		// agent/service liveness check below reads from this single Map —
+		// none of them probes tmux again.
+		const tmuxPanesRuntime = await this.observeTmuxPanesRuntimeAsync(manager);
+		const tmuxPanes =
+			tmuxPanesRuntime.status === "known" ? tmuxPanesRuntime.value : undefined;
 		const contexts = scopeProjectId
 			? [manager.getContext(scopeProjectId)].filter(
 					(ctx): ctx is ProjectContext => ctx !== undefined,
@@ -689,22 +695,25 @@ export class FeatureStateCoordinator implements Disposable {
 					ctx.agentManager.getAgentsReadModel(feature.id),
 				);
 				const services = await readRuntimeAsync<Service[]>(() =>
-					ctx.serviceManager.getServicesAsync(feature.id),
+					ctx.serviceManager.getServicesAsync(feature.id, tmuxPanes),
 				);
-				const agentTmux = runtimeMap(agents, tmuxSessions, (agent) =>
-					this.projectManager?.agentTmuxSessionName(
-						feature.id,
-						agent.id,
-						agent.tmuxSession,
-					),
+				const agentTmux = runtimeMapFromPanes(
+					agents,
+					tmuxPanesRuntime,
+					(agent) =>
+						this.projectManager?.agentTmuxSessionName(
+							feature.id,
+							agent.id,
+							agent.tmuxSession,
+						),
 				);
 				const runtime = observeFeatureRuntime({
 					agents,
 					services,
 					agentTmux,
-					serviceTmux: runtimeMap(
+					serviceTmux: runtimeMapFromPanes(
 						services,
-						tmuxSessions,
+						tmuxPanesRuntime,
 						(service) => service.tmuxSession,
 					),
 				});
@@ -762,13 +771,21 @@ export class FeatureStateCoordinator implements Disposable {
 			: unknownRuntime("read_failed", observation.detail);
 	}
 
-	/** Non-blocking twin of {@link observeTmuxRuntime}, for `reconcilePresenceInner`. */
-	private async observeTmuxRuntimeAsync(
+	/**
+	 * Canonical non-blocking tmux sweep for `reconcilePresenceInner`: one
+	 * `list-panes -a` call yields liveness AND pane-dead/exit-code/tty for
+	 * every session, keyed by session name. Shared as-is with
+	 * `AgentManager.refreshObservationCache` (agent liveness) and
+	 * `ServiceManager.getServicesAsync` (service liveness + dead-pane
+	 * status) — neither makes its own tmux call in this tick (P0 mandate:
+	 * one tmux subprocess per tick, not one per agent/service).
+	 */
+	private async observeTmuxPanesRuntimeAsync(
 		manager: ProjectManager,
-	): Promise<RuntimeObservation<readonly string[]>> {
-		const observation = await manager.observeTmuxSessionsAsync();
+	): Promise<RuntimeObservation<ReadonlyMap<string, TmuxPaneObservation>>> {
+		const observation = await manager.observeTmuxPanesAsync();
 		return observation.status === "known"
-			? knownRuntime(observation.sessions)
+			? knownRuntime(observation.panes)
 			: unknownRuntime("read_failed", observation.detail);
 	}
 
@@ -1820,6 +1837,31 @@ function runtimeMap<T extends { id: string }>(
 			result.set(item.id, sessions);
 		} else {
 			result.set(item.id, knownRuntime(sessions.value.includes(name)));
+		}
+	}
+	return result;
+}
+
+/**
+ * {@link runtimeMap}'s twin for the canonical `list-panes -a` sweep used by
+ * `reconcilePresenceInner` — a session's liveness is membership in the pane
+ * Map rather than an array-includes check.
+ */
+function runtimeMapFromPanes<T extends { id: string }>(
+	items: RuntimeObservation<readonly T[]>,
+	panes: RuntimeObservation<ReadonlyMap<string, TmuxPaneObservation>>,
+	sessionName: (item: T) => string | undefined,
+): ReadonlyMap<string, RuntimeObservation<boolean>> {
+	const result = new Map<string, RuntimeObservation<boolean>>();
+	if (items.status === "unknown") return result;
+	for (const item of items.value) {
+		const name = sessionName(item);
+		if (!name) {
+			result.set(item.id, unknownRuntime("not_observed"));
+		} else if (panes.status === "unknown") {
+			result.set(item.id, panes);
+		} else {
+			result.set(item.id, knownRuntime(panes.value.has(name)));
 		}
 	}
 	return result;

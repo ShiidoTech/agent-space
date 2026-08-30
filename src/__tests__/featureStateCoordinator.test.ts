@@ -182,9 +182,9 @@ function setup(
 			status: "known" as const,
 			sessions: [] as string[],
 		})),
-		observeTmuxSessionsAsync: vi.fn(async () => ({
+		observeTmuxPanesAsync: vi.fn(async () => ({
 			status: "known" as const,
-			sessions: [] as string[],
+			panes: new Map(),
 		})),
 		agentTmuxSessionName: vi.fn(
 			(featureId: string, agentId: string, persisted?: string) =>
@@ -1629,9 +1629,9 @@ function setupTwoProjects(inspects: Record<string, ReturnType<typeof vi.fn>>) {
 			status: "known" as const,
 			sessions: [] as string[],
 		})),
-		observeTmuxSessionsAsync: vi.fn(async () => ({
+		observeTmuxPanesAsync: vi.fn(async () => ({
 			status: "known" as const,
-			sessions: [] as string[],
+			panes: new Map(),
 		})),
 		agentTmuxSessionName: vi.fn(
 			(featureId: string, agentId: string, persisted?: string) =>
@@ -2153,13 +2153,13 @@ describe("FeatureStateCoordinator scoped observation (issue #97)", () => {
 		coordinator.dispose();
 	});
 
-	it("reconcilePresence sweeps tmux through the async, non-blocking twin — never the sync observeTmuxSessions", async () => {
+	it("reconcilePresence sweeps tmux through the canonical async panes twin — never the sync observeTmuxSessions", async () => {
 		const fixture = setup();
 		const coordinator = new FeatureStateCoordinator(fixture.manager);
 
 		await coordinator.reconcilePresence();
 
-		expect(fixture.manager.observeTmuxSessionsAsync).toHaveBeenCalled();
+		expect(fixture.manager.observeTmuxPanesAsync).toHaveBeenCalled();
 		expect(fixture.manager.observeTmuxSessions).not.toHaveBeenCalled();
 		coordinator.dispose();
 	});
@@ -2472,9 +2472,9 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 				status: "known" as const,
 				sessions: [] as string[],
 			})),
-			observeTmuxSessionsAsync: vi.fn(async () => ({
+			observeTmuxPanesAsync: vi.fn(async () => ({
 				status: "known" as const,
-				sessions: [] as string[],
+				panes: new Map(),
 			})),
 			agentTmuxSessionName: vi.fn(() => undefined),
 			findContextByFeatureId: vi.fn(() => ctx),
@@ -2589,9 +2589,9 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
-				observeTmuxSessionsAsync: vi.fn(async () => ({
+				observeTmuxPanesAsync: vi.fn(async () => ({
 					status: "known" as const,
-					sessions: [] as string[],
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(featureId: string, agentId: string, persisted?: string) =>
@@ -2784,9 +2784,9 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
-				observeTmuxSessionsAsync: vi.fn(async () => ({
+				observeTmuxPanesAsync: vi.fn(async () => ({
 					status: "known" as const,
-					sessions: [] as string[],
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
@@ -2960,9 +2960,9 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
-				observeTmuxSessionsAsync: vi.fn(async () => ({
+				observeTmuxPanesAsync: vi.fn(async () => ({
 					status: "known" as const,
-					sessions: [] as string[],
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
@@ -3125,9 +3125,9 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
-				observeTmuxSessionsAsync: vi.fn(async () => ({
+				observeTmuxPanesAsync: vi.fn(async () => ({
 					status: "known" as const,
-					sessions: [] as string[],
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>
@@ -3282,9 +3282,9 @@ describe("FeatureStateCoordinator presence lane against a real FeatureManager", 
 					status: "known" as const,
 					sessions: [] as string[],
 				})),
-				observeTmuxSessionsAsync: vi.fn(async () => ({
+				observeTmuxPanesAsync: vi.fn(async () => ({
 					status: "known" as const,
-					sessions: [] as string[],
+					panes: new Map(),
 				})),
 				agentTmuxSessionName: vi.fn(
 					(fId: string, aId: string, persisted?: string) =>

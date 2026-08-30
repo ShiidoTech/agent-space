@@ -264,9 +264,15 @@ export class ProjectManager {
 		return this.tmux.observeSessions();
 	}
 
-	/** Non-blocking twin of {@link observeTmuxSessions}, for hot reconciliation ticks. */
-	observeTmuxSessionsAsync() {
-		return this.tmux.observeSessionsAsync();
+	/**
+	 * Canonical non-blocking tmux sweep — one call yields liveness AND
+	 * pane-dead/exit-code/tty for every session. Used by the hot
+	 * `reconcilePresence` tick, shared by every downstream
+	 * AgentManager/ServiceManager refresh in that tick instead of each
+	 * re-probing tmux individually.
+	 */
+	observeTmuxPanesAsync() {
+		return this.tmux.observePanesAsync();
 	}
 
 	agentTmuxSessionName(

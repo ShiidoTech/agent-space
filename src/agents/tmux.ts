@@ -13,6 +13,20 @@ export type TmuxSessionsObservation =
 	| { readonly status: "known"; readonly sessions: readonly string[] }
 	| { readonly status: "unknown"; readonly detail: string };
 
+/** One session's pane state, as returned by the canonical `list-panes -a` sweep. */
+export interface TmuxPaneObservation {
+	readonly dead: boolean;
+	readonly exitCode: number;
+	readonly tty: string | null;
+}
+
+export type TmuxPanesObservation =
+	| {
+			readonly status: "known";
+			readonly panes: ReadonlyMap<string, TmuxPaneObservation>;
+	  }
+	| { readonly status: "unknown"; readonly detail: string };
+
 function noTmuxSessionsAreRunning(error: unknown): boolean {
 	if (typeof error !== "object" || error === null) return false;
 	const candidate = error as {
@@ -404,30 +418,50 @@ export class TmuxIntegration {
 	}
 
 	/**
-	 * Non-blocking twin of {@link observeSessions}. This is the single global
-	 * tmux sweep behind `FeatureStateCoordinator.reconcilePresence()` — the
-	 * cheap tier that runs frequently to keep the sidebar/Home live — so it
-	 * must never run a synchronous `tmux list-sessions` on that tick (P0
-	 * zero-I/O UI mandate).
+	 * Canonical non-blocking tmux sweep: a single `tmux list-panes -a` call
+	 * returns liveness AND pane-dead/exit-code/tty for every session in one
+	 * round trip — the O(1) replacement for the old observeSessionsAsync
+	 * (session list only) plus one getPaneStatusAsync/getPaneTtyAsync per
+	 * session. This is the single global probe behind
+	 * `FeatureStateCoordinator.reconcilePresence()` — the cheap tier that
+	 * runs frequently to keep the sidebar/Home live — so no other tmux call
+	 * may run inside that tick (P0 zero-I/O UI mandate: one tmux subprocess
+	 * per tick, not one per agent/service).
+	 *
+	 * A session absent from the returned map is not alive (a dead session
+	 * has no panes to list) — callers that only need liveness can test
+	 * `panes.has(sessionName)`. No `tmux -V` precheck: `list-panes` itself
+	 * fails distinguishably for "tmux binary missing" vs. "no server
+	 * running" (the latter handled the same way as `observeSessions`, via
+	 * {@link noTmuxSessionsAreRunning}).
+	 *
+	 * Sessions are expected to have exactly one pane (see `createCommand`) —
+	 * a session with more than one pane keeps only its last line's status.
 	 */
-	async observeSessionsAsync(): Promise<TmuxSessionsObservation> {
-		if (!(await this.isAvailableAsync())) {
-			return { status: "unknown", detail: "tmux is not available" };
-		}
+	async observePanesAsync(): Promise<TmuxPanesObservation> {
 		try {
 			const { stdout } = await execFileAsync("tmux", [
-				"list-sessions",
+				"list-panes",
+				"-a",
 				"-F",
-				"#{session_name}",
+				"#{session_name} #{pane_dead} #{pane_dead_status} #{pane_tty}",
 			]);
-			const sessions = stdout
-				.split("\n")
-				.map((line) => line.trim())
-				.filter(Boolean);
-			return { status: "known", sessions };
+			const panes = new Map<string, TmuxPaneObservation>();
+			for (const line of stdout.split("\n")) {
+				const trimmed = line.trim();
+				if (!trimmed) continue;
+				const [sessionName, deadStr, codeStr, tty] = trimmed.split(" ");
+				if (!sessionName) continue;
+				panes.set(sessionName, {
+					dead: deadStr === "1",
+					exitCode: Number.parseInt(codeStr ?? "0", 10),
+					tty: tty || null,
+				});
+			}
+			return { status: "known", panes };
 		} catch (error) {
 			if (noTmuxSessionsAreRunning(error)) {
-				return { status: "known", sessions: [] };
+				return { status: "known", panes: new Map() };
 			}
 			return {
 				status: "unknown",

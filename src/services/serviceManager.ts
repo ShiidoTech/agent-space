@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import * as crypto from "node:crypto";
-import type { TmuxIntegration } from "../agents/tmux";
+import type { TmuxIntegration, TmuxPaneObservation } from "../agents/tmux";
 import type { Store } from "../storage/store";
 import type { Service, ServiceStatus } from "../types";
 import { exec } from "../utils/platform";
@@ -29,13 +29,17 @@ export class ServiceManager {
 
 	/**
 	 * Non-blocking twin of {@link getServices}: identical TTL-guarded refresh
-	 * semantics, but the tmux probes run through the async helpers
-	 * (`isSessionAliveAsync` / `getPaneStatusAsync`) so background
-	 * reconciliation (`FeatureStateCoordinator.reconcilePresence`) never
-	 * blocks the Extension Host on a subprocess.
+	 * semantics, but background reconciliation
+	 * (`FeatureStateCoordinator.reconcilePresence`) never blocks the
+	 * Extension Host on a subprocess — and, when `knownTmuxPanes` is given
+	 * (that tick's single canonical `list-panes -a` sweep, keyed by session
+	 * name), never makes a tmux call of its own at all.
 	 */
-	async getServicesAsync(featureId: string): Promise<Service[]> {
-		await this.refreshStatusesAsync(featureId);
+	async getServicesAsync(
+		featureId: string,
+		knownTmuxPanes?: ReadonlyMap<string, TmuxPaneObservation>,
+	): Promise<Service[]> {
+		await this.refreshStatusesAsync(featureId, knownTmuxPanes);
 		return [...this.loadServices(featureId)];
 	}
 
@@ -157,7 +161,10 @@ export class ServiceManager {
 	 * `getPaneStatusAsync` so a caller on a background reconciliation path
 	 * never blocks the Extension Host on a subprocess.
 	 */
-	private async refreshStatusesAsync(featureId: string): Promise<void> {
+	private async refreshStatusesAsync(
+		featureId: string,
+		knownTmuxPanes?: ReadonlyMap<string, TmuxPaneObservation>,
+	): Promise<void> {
 		const lastRefresh = this.lastRefreshTime.get(featureId);
 		if (
 			lastRefresh &&
@@ -172,6 +179,23 @@ export class ServiceManager {
 		await Promise.all(
 			services.map(async (service) => {
 				if (service.status === "stopped" || service.status === "errored") {
+					return;
+				}
+
+				// The caller's own canonical sweep for this tick — trust it
+				// exclusively, no tmux call of our own (P0 mandate: one tmux
+				// subprocess per tick, not one per service).
+				if (knownTmuxPanes) {
+					const pane = knownTmuxPanes.get(service.tmuxSession);
+					if (!pane) {
+						service.status = "stopped";
+						changed = true;
+						return;
+					}
+					if (pane.dead) {
+						service.status = pane.exitCode === 0 ? "stopped" : "errored";
+						changed = true;
+					}
 					return;
 				}
 
