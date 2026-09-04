@@ -132,6 +132,15 @@ document.getElementById("menuRename").addEventListener("click", (e) => {
 	send("renameAgent", { featureId: _menuFeatureId, agentId: _menuAgentId });
 });
 
+document.getElementById("menuAttachSession").addEventListener("click", (e) => {
+	e.stopPropagation();
+	_agentMenu.classList.remove("visible");
+	send("attachProviderSession", {
+		featureId: _menuFeatureId,
+		agentId: _menuAgentId,
+	});
+});
+
 document.getElementById("menuMarkDone").addEventListener("click", (e) => {
 	e.stopPropagation();
 	_agentMenu.classList.remove("visible");

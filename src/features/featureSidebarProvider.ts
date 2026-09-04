@@ -513,6 +513,7 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 	${body}
 	<div id="agentContextMenu" class="context-menu">
 		<button class="context-menu-item" id="menuRename">Rename Agent</button>
+		<button class="context-menu-item" id="menuAttachSession">Attach Provider Session&hellip;</button>
         <div class="context-separator"></div>
 		<button class="context-menu-item" id="menuMarkDone">Mark as Done</button>
 		<button class="context-menu-item menu-danger" id="menuDeleteAgent">Delete Agent</button>

@@ -2312,8 +2312,18 @@ export class HomePanel {
 			actionButtons = `
 				<button class="agent-action-btn agent-action-btn-secondary" onclick="reopenAgent('${feature.id}', '${agent.id}')">Reopen agent</button>`;
 		} else {
+			const bindingState = agent.sessionBinding?.state;
+			// "pending" is the ordinary, transient "no candidate yet" state — no
+			// action helps there. "ambiguous"/"unverified" are the states where
+			// Agent Space explicitly refused to guess and a human decision is
+			// exactly what unblocks it.
+			const attachButton =
+				bindingState === "ambiguous" || bindingState === "unverified"
+					? `<button class="agent-action-btn agent-action-btn-secondary" onclick="attachProviderSession('${feature.id}', '${agent.id}')" title="${this.escapeHtml(agent.sessionBinding?.detail ?? "")}">Attach session&hellip;</button>`
+					: "";
 			actionButtons = `
 				<button class="agent-action-btn agent-terminal-action" onclick="focusAgent('${feature.id}', '${agent.id}')">Open terminal</button>
+				${attachButton}
 				<button class="agent-action-btn agent-action-btn-secondary" onclick="markAgentDone('${feature.id}', '${agent.id}')">Mark done</button>`;
 		}
 

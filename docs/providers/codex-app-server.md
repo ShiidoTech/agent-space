@@ -29,16 +29,26 @@ launches plain (`codex`, no args). Its session is discovered the same way the
 Claude family's file-backed discovery scans (`scanSessions`/
 `discoverSessionCandidates`), gated by the pre-launch baseline and worktree so
 no agent can adopt another's session — but Codex's `conversationIdentity.
-ownership` is `provider_assigned`, not `preassigned`, and `CodexSessionProvider`
-implements no `correlateOwnedSession`. `SessionBinder.resolveClaim` never binds
-a discovered candidate without provider-specific ownership proof, so a single
-freshly-appeared rollout is left `ambiguous`, exactly like two or more
-candidates — it is **not** auto-bound the way a Claude session is. This
-matches OpenCode's existing fail-closed posture: the agent needs the explicit
-`Agent Space: Attach Provider Session` action once its rollout exists. A
-genuine Codex `correlateOwnedSession` would need provider-native proof (e.g.
-app-server driving the turn itself); CWD/timing/uniqueness never qualify, so
-none is implemented here.
+ownership` is `provider_assigned`, not `preassigned`, so it cannot rely on a
+pre-assigned id the way Claude does.
+
+Neither Codex's rollout files nor OpenCode's SQLite session rows carry any
+pid, tty, or other process-level marker that would let Agent Space *prove*
+which launch created a given session — unlike Hermes, which drops a
+per-terminal breadcrumb keyed by the pane's tty
+(`HermesSessionProvider.correlateOwnedSession`). Both `CodexSessionProvider`
+and `OpenCodeSessionProvider` instead implement `correlateOwnedSession` using
+the strongest evidence actually available — `singleUnclaimedCandidate`
+(`src/agents/sessionProviders/candidateCorrelation.ts`): the one session that
+appeared in this agent's cwd after it launched and isn't already claimed by
+another agent. This restores the common-case behavior of Agent Space's
+original (pre-#120) Codex file watcher — which bound the first matching
+session in the same cwd with no ownership proof at all — while staying
+strictly safer: a genuine collision (two or more unclaimed candidates in the
+same worktree, or the same candidate claimed by two agents) still refuses to
+guess and leaves the binding `ambiguous`, resolved with the explicit
+`Agent Space: Attach Provider Session` action instead of a silent
+mis-attribution.
 
 For an existing agent, resume stays strict and exact: `resumeConversation`
 first checks that a rollout file for the id actually exists on disk

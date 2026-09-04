@@ -7,6 +7,7 @@ import type { Agent, AgentSessionBinding, Feature } from "../types";
 import type { CodingToolRegistry } from "./codingToolRegistry";
 import type { ProviderSessionAdapter } from "./providers/types";
 import { RuntimeOwnershipGuard } from "./runtimeOwnership";
+import { LAUNCH_SKEW_MS } from "./sessionProviders/candidateCorrelation";
 import type {
 	ProviderConversationReceipt,
 	SessionCorrelationContext,
@@ -15,12 +16,6 @@ import type {
 import type { TmuxIntegration } from "./tmux";
 
 const RECONCILE_INTERVAL_MS = 15_000;
-/**
- * Clock tolerance when comparing a provider's session timestamp with the launch
- * time Agent Space recorded. Providers and the extension can disagree by a
- * second or two; more than this and the session predates the launch.
- */
-const LAUNCH_SKEW_MS = 5_000;
 /**
  * How long a `bound` verdict is trusted before the provider store is consulted
  * again. Long enough that the common case costs nothing, short enough that a

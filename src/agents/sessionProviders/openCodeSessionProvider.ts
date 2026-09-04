@@ -1,3 +1,4 @@
+import { singleUnclaimedCandidate } from "./candidateCorrelation";
 import {
 	openCodeCliFallback,
 	resolveOpenCodeDbPath,
@@ -6,6 +7,7 @@ import {
 } from "./sqliteRead";
 import type {
 	AsyncSessionObservationAdapter,
+	SessionCorrelationContext,
 	SessionInfo,
 	SessionProvider,
 	SessionRenameAdapter,
@@ -71,13 +73,34 @@ export class OpenCodeSessionProvider
 		scanSessions: () => Promise<SessionInfo[]>;
 		readName: (sessionId: string) => Promise<string | null>;
 		hasSession: (sessionId: string) => Promise<boolean>;
+		correlateOwnedSession: (
+			context: SessionCorrelationContext,
+		) => Promise<string | undefined>;
 	} = {
 		scanSessions: async (): Promise<SessionInfo[]> => this.scanSessionsAsync(),
 		readName: async (sessionId: string): Promise<string | null> =>
 			this.readNameAsync(sessionId),
 		hasSession: async (sessionId: string): Promise<boolean> =>
 			this.hasSessionAsync(sessionId),
+		correlateOwnedSession: async (
+			context: SessionCorrelationContext,
+		): Promise<string | undefined> =>
+			singleUnclaimedCandidate(await this.scanSessionsAsync(), context),
 	};
+
+	/**
+	 * OpenCode's own session store has no pid, tty, or other process-level
+	 * marker to prove which launch created a given row — unlike Hermes, which
+	 * drops a per-terminal breadcrumb. This is the strongest evidence actually
+	 * available: the single session that appeared in this agent's cwd after it
+	 * launched and isn't already claimed. See `singleUnclaimedCandidate` for
+	 * why a second candidate is left ambiguous rather than guessed at.
+	 */
+	correlateOwnedSession(
+		context: SessionCorrelationContext,
+	): string | undefined {
+		return singleUnclaimedCandidate(this.scanSessions(), context);
+	}
 
 	scanSessions(): SessionInfo[] {
 		const rows = this.sqlite.querySync(

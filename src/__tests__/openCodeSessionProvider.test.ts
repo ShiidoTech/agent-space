@@ -497,4 +497,55 @@ describe("OpenCode candidate enumeration", () => {
 			),
 		).toEqual(["B"]);
 	});
+
+	it("auto-binds the single unclaimed session born after launch", () => {
+		const dbPath = makeMulti([{ id: "A", timeCreated: 2000 }]);
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		expect(
+			provider.correlateOwnedSession({
+				cwd: "/work",
+				knownSessionIds: new Set(),
+				launchedAtMs: 1000,
+			}),
+		).toBe("A");
+	});
+
+	it("refuses to guess when two unclaimed sessions could both be it", () => {
+		const dbPath = makeMulti([
+			{ id: "A", timeCreated: 2000 },
+			{ id: "B", timeCreated: 2100 },
+		]);
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		expect(
+			provider.correlateOwnedSession({
+				cwd: "/work",
+				knownSessionIds: new Set(),
+				launchedAtMs: 1000,
+			}),
+		).toBeUndefined();
+	});
+
+	it("ignores a session that predates the agent's launch", () => {
+		const dbPath = makeMulti([{ id: "A", timeCreated: 1 }]);
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		expect(
+			provider.correlateOwnedSession({
+				cwd: "/work",
+				knownSessionIds: new Set(),
+				launchedAtMs: 60_000,
+			}),
+		).toBeUndefined();
+	});
+
+	it("ignores a session already claimed by another agent", () => {
+		const dbPath = makeMulti([{ id: "A", timeCreated: 2000 }]);
+		const provider = new OpenCodeSessionProvider({ dbPath });
+		expect(
+			provider.correlateOwnedSession({
+				cwd: "/work",
+				knownSessionIds: new Set(["A"]),
+				launchedAtMs: 1000,
+			}),
+		).toBeUndefined();
+	});
 });

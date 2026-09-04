@@ -401,15 +401,15 @@ function buildAgentChecks(input: DoctorInput, homeDir: string): DoctorCheck[] {
 		} else if (probe.bindingState === "unverified") {
 			level = "error";
 			remediation =
-				"The stored session id does not exist in the provider store. Agent Space will not replace it with a best-effort candidate; check sessionsDir or explicitly attach the intended session.";
+				'The stored session id does not exist in the provider store. Agent Space will not replace it with a best-effort candidate; check sessionsDir or run "Agent Space: Attach Provider Session" to attach the intended session explicitly.';
 		} else if (probe.bindingState === "ambiguous") {
 			level = "warn";
 			remediation =
-				"Session candidate detected, but ownership cannot be proven. Agent Space refused to attach it automatically; use future explicit session attachment or a provider ownership correlator.";
+				'Multiple unclaimed sessions appeared in this worktree, or the provider ownership correlator did not resolve one; Agent Space refused to guess. Run "Agent Space: Attach Provider Session" to pick the right one explicitly.';
 		} else {
 			level = "warn";
 			remediation =
-				"The provider has not exposed a session yet. Claude-family can bind its preassigned id when it appears; other providers remain fail-closed until explicit attachment or provider ownership correlation.";
+				'The provider has not exposed a session yet. Claude-family can bind its preassigned id when it appears; Codex and OpenCode bind automatically once the sole unclaimed session appears in this worktree. If it stays unbound, run "Agent Space: Attach Provider Session" to attach it explicitly.';
 		}
 
 		add(
