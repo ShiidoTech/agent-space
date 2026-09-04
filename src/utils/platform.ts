@@ -5,6 +5,10 @@ import {
 	execSync,
 } from "node:child_process";
 import { existsSync } from "node:fs";
+import {
+	categorizeCommand,
+	recordSubprocessCall,
+} from "../diagnostics/subprocessCounter";
 
 /**
  * Cross-platform shell abstraction for Agent Space.
@@ -182,6 +186,7 @@ export function getExecOptions(cwd?: string): ExecSyncOptions {
 }
 
 export function exec(cmd: string, opts?: { cwd?: string }): string {
+	recordSubprocessCall(categorizeCommand(cmd));
 	return execSync(cmd, getExecOptions(opts?.cwd)) as string;
 }
 
@@ -190,6 +195,7 @@ export function execFile(
 	args: readonly string[],
 	opts?: { cwd?: string },
 ): string {
+	recordSubprocessCall(categorizeCommand(file));
 	const bashPath = isWindows() ? findGitBash() : null;
 	if (bashPath) {
 		return execFileSync(bashPath, ["-lc", 'exec "$0" "$@"', file, ...args], {
@@ -262,6 +268,7 @@ export function execAsync(
 	cmd: string,
 	opts?: { cwd?: string } & Record<string, unknown>,
 ): Promise<ExecAsyncResult> {
+	recordSubprocessCall(categorizeCommand(cmd));
 	const mergedOpts = { ...getExecAsyncOptions(opts?.cwd), ...opts };
 	return getExecPromise()(cmd, mergedOpts);
 }
@@ -304,6 +311,7 @@ export function execFileAsync(
 	args: readonly string[],
 	opts?: { cwd?: string },
 ): Promise<ExecAsyncResult> {
+	recordSubprocessCall(categorizeCommand(file));
 	const bashPath = isWindows() ? findGitBash() : null;
 	if (bashPath) {
 		return getExecFileAsync()(

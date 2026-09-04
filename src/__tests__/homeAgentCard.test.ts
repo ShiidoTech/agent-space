@@ -40,6 +40,12 @@ function renderAgent(observation: AgentObservation): string {
 				feature,
 				ctx: { agentManager: { observe: () => observation } },
 			}),
+			findContextByFeatureId: () => ({
+				agentManager: { observeCached: () => observation },
+			}),
+			peekWarmContext: () => ({
+				agentManager: { observeCached: () => observation },
+			}),
 		},
 	});
 

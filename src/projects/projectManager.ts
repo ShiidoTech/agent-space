@@ -264,6 +264,17 @@ export class ProjectManager {
 		return this.tmux.observeSessions();
 	}
 
+	/**
+	 * Canonical non-blocking tmux sweep — one call yields liveness AND
+	 * pane-dead/exit-code/tty for every session. Used by the hot
+	 * `reconcilePresence` tick, shared by every downstream
+	 * AgentManager/ServiceManager refresh in that tick instead of each
+	 * re-probing tmux individually.
+	 */
+	observeTmuxPanesAsync() {
+		return this.tmux.observePanesAsync();
+	}
+
 	agentTmuxSessionName(
 		featureId: string,
 		agentId: string,
@@ -376,6 +387,36 @@ export class ProjectManager {
 		}
 
 		const feature = ctx.featureManager.getFeature(featureId);
+		if (!feature) return undefined;
+		return { ctx, feature };
+	}
+
+	/**
+	 * Zero-I/O twin of {@link resolveFeature}: uses {@link peekWarmContext}
+	 * (strictly cache-only, never lazy-inits a project's Store/FeatureManager)
+	 * and {@link FeatureManager.getFeatureCached} (no Git branch-link
+	 * reconciliation). For render/navigation paths (P0 zero-I/O UI mandate)
+	 * that only need feature identity, not up-to-the-moment checkout state —
+	 * a cold cache returns `undefined` rather than paying to warm it.
+	 */
+	resolveFeatureCached(
+		featureId: string,
+	): { ctx: ProjectContext; feature: Feature } | undefined {
+		const ctx = this.peekWarmContext(featureId);
+		if (!ctx) return undefined;
+
+		if (featureId.startsWith("base:")) {
+			// Zero-I/O: getBaseFeatureCached() never runs Git — unlike
+			// getBaseFeature(), which can fall into a synchronous
+			// `git rev-parse --abbrev-ref HEAD` when baseBranch isn't configured
+			// or cached yet. The base card is clickable via showFeature("base:...")
+			// so this path must stay Git-free before first paint (P0 zero-I/O UI
+			// mandate).
+			const feature = ctx.featureManager.getBaseFeatureCached(ctx.project.id);
+			return { ctx, feature };
+		}
+
+		const feature = ctx.featureManager.getFeatureCached(featureId);
 		if (!feature) return undefined;
 		return { ctx, feature };
 	}

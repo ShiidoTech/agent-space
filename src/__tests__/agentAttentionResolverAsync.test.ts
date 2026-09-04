@@ -123,4 +123,111 @@ describe("AgentAttentionResolver.resolveAsync (non-blocking contract)", () => {
 		expect(tmux.isSessionAlive).not.toHaveBeenCalled();
 		expect(tmux.getPaneStatus).not.toHaveBeenCalled();
 	});
+
+	// PR #133 review, non-blocking semantic note: a session present in a
+	// canonical sweep with a dead pane (remain-on-exit keeps it around) must
+	// still reach exit-code classification — not be collapsed to "no live
+	// tmux session" before its exit code is ever read.
+	it("classifies a dead-but-present pane from a canonical sweep by its exit code, not as 'no live session'", async () => {
+		const tmux = {
+			sessionName: vi.fn(() => "agent-space-f1-a1"),
+			isSessionAlive: vi.fn(),
+			getPaneStatus: vi.fn(),
+			isSessionAliveAsync: vi.fn(),
+			getPaneStatusAsync: vi.fn(),
+		};
+		const toolRegistry = {
+			resolveAgentTool: vi.fn(() => tool),
+			resolveAgentToolForAgent: vi.fn(() => tool),
+			getProvider: vi.fn(() => provider),
+			getStructuredAttentionSignal: vi.fn(),
+			getStructuredAttentionSignalAsync: vi.fn(async () => undefined),
+		};
+		const resolver = new AgentAttentionResolver(
+			tmux as never,
+			toolRegistry as never,
+		);
+
+		const snapshot = await resolver.resolveAsync(agent, undefined, {
+			status: "known",
+			panes: new Map([
+				["agent-space-f1-a1", { dead: true, exitCode: 1, tty: null }],
+			]),
+		});
+
+		expect(snapshot.status).toBe("failed");
+		expect(snapshot.reason).toContain("exited with code 1");
+		// The shared sweep is used exclusively — no probe of its own.
+		expect(tmux.isSessionAliveAsync).not.toHaveBeenCalled();
+		expect(tmux.getPaneStatusAsync).not.toHaveBeenCalled();
+	});
+
+	it("reports a session absent from the canonical sweep as no live tmux session", async () => {
+		const tmux = {
+			sessionName: vi.fn(() => "agent-space-f1-a1"),
+			isSessionAlive: vi.fn(),
+			getPaneStatus: vi.fn(),
+			isSessionAliveAsync: vi.fn(),
+			getPaneStatusAsync: vi.fn(),
+		};
+		const toolRegistry = {
+			resolveAgentTool: vi.fn(() => tool),
+			resolveAgentToolForAgent: vi.fn(() => tool),
+			getProvider: vi.fn(() => provider),
+			getStructuredAttentionSignal: vi.fn(),
+			getStructuredAttentionSignalAsync: vi.fn(async () => undefined),
+		};
+		const resolver = new AgentAttentionResolver(
+			tmux as never,
+			toolRegistry as never,
+		);
+
+		const snapshot = await resolver.resolveAsync(agent, undefined, {
+			status: "known",
+			panes: new Map(),
+		});
+
+		expect(snapshot).toEqual({
+			status: "unknown",
+			reason: "No live tmux session is available",
+			source: "tmux",
+		});
+	});
+
+	// PR #133 review, fail-path blocker: a canonical sweep that was attempted
+	// and failed must resolve to unknown directly — never fall back to this
+	// resolver's own per-agent tmux probe.
+	it("resolves to unknown without probing when the canonical sweep failed", async () => {
+		const tmux = {
+			sessionName: vi.fn(() => "agent-space-f1-a1"),
+			isSessionAlive: vi.fn(),
+			getPaneStatus: vi.fn(),
+			isSessionAliveAsync: vi.fn(),
+			getPaneStatusAsync: vi.fn(),
+		};
+		const toolRegistry = {
+			resolveAgentTool: vi.fn(() => tool),
+			resolveAgentToolForAgent: vi.fn(() => tool),
+			getProvider: vi.fn(() => provider),
+			getStructuredAttentionSignal: vi.fn(),
+			getStructuredAttentionSignalAsync: vi.fn(async () => undefined),
+		};
+		const resolver = new AgentAttentionResolver(
+			tmux as never,
+			toolRegistry as never,
+		);
+
+		const snapshot = await resolver.resolveAsync(agent, undefined, {
+			status: "unknown",
+			detail: "tmux: unexpected transient failure",
+		});
+
+		expect(snapshot).toEqual({
+			status: "unknown",
+			reason: "tmux observation failed: tmux: unexpected transient failure",
+			source: "tmux",
+		});
+		expect(tmux.isSessionAliveAsync).not.toHaveBeenCalled();
+		expect(tmux.getPaneStatusAsync).not.toHaveBeenCalled();
+	});
 });

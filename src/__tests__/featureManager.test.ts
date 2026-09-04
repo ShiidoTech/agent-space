@@ -1084,6 +1084,58 @@ describe("FeatureManager", () => {
 		});
 	});
 
+	// PR #133 review, blocker 1: the base card is clickable via
+	// showFeature("base:<projectId>"), so its identity must never trigger a
+	// synchronous Git branch detection before first paint (P0 zero-I/O UI
+	// mandate) — unlike getBaseFeature(), which still runs (and merely
+	// catches) `git rev-parse --abbrev-ref HEAD` when baseBranch isn't
+	// configured or cached yet.
+	describe("getBaseFeatureCached (zero-I/O twin of getBaseFeature)", () => {
+		function unconfiguredManager() {
+			return new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+			);
+		}
+
+		it("never calls execSync, falling back to the explicit unknown-base placeholder", () => {
+			const manager = unconfiguredManager();
+
+			const base = manager.getBaseFeatureCached("p1");
+
+			expect(base.id).toBe("base:p1");
+			expect(base.branch).toBe("(unknown base)");
+			expect(mockExecSync).not.toHaveBeenCalled();
+		});
+
+		it("uses the configured base branch without touching Git", () => {
+			const manager = new FeatureManager(
+				store,
+				repoRoot,
+				path.join(repoRoot, ".worktrees"),
+				{ baseBranch: "v2_ia_first" },
+			);
+
+			const base = manager.getBaseFeatureCached("p1");
+
+			expect(base.branch).toBe("v2_ia_first");
+			expect(mockExecSync).not.toHaveBeenCalled();
+		});
+
+		it("reuses whatever getBaseBranch() already cached from a prior call, without probing again", () => {
+			mockExecSync.mockReturnValue("develop\n");
+			const manager = unconfiguredManager();
+			manager.getBaseFeature("p1"); // warms the cache with one real probe
+			mockExecSync.mockClear();
+
+			const base = manager.getBaseFeatureCached("p1");
+
+			expect(base.branch).toBe("develop");
+			expect(mockExecSync).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("updateFeatureIsolation", () => {
 		it("updates isolation and persists", () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));

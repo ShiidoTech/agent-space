@@ -17,6 +17,7 @@ import {
 	configureAgentSpaceDiagnostics,
 	configureSqliteFallbackDiagnostics,
 } from "./diagnostics/agentSpaceDiagnostics";
+import { setPerfProfilerEnabled } from "./diagnostics/perfProfiler";
 import {
 	classifyLiveTmuxSession,
 	findCleanupCandidates,
@@ -112,6 +113,19 @@ export async function activate(
 	context.subscriptions.push(diagnostics);
 	configureAgentSpaceDiagnostics((message) => diagnostics.appendLine(message));
 	configureSqliteFallbackDiagnostics();
+
+	const readPerfProfilerSetting = () =>
+		vscode.workspace
+			.getConfiguration("agentSpace")
+			.get<boolean>("diagnostics.perfProfiler", false);
+	setPerfProfilerEnabled(readPerfProfilerSetting());
+	context.subscriptions.push(
+		vscode.workspace.onDidChangeConfiguration((event) => {
+			if (event.affectsConfiguration("agentSpace.diagnostics.perfProfiler")) {
+				setPerfProfilerEnabled(readPerfProfilerSetting());
+			}
+		}),
+	);
 	const prerequisites = new PrerequisiteChecker();
 	const { ok, missing } = prerequisites.checkRequired();
 	if (!ok) {
@@ -683,7 +697,10 @@ export async function activate(
 	// only nudge the monitor — coalesced and off the change stack.
 	const attentionMonitor = new AgentAttentionMonitor(
 		{
-			collect: () => collectWatchedAgents(projectManager.getAllContexts()),
+			collect: () =>
+				collectWatchedAgents(projectManager.getAllContexts(), () =>
+					projectManager.observeTmuxPanesAsync(),
+				),
 			onTransition: (transition) => {
 				if (transition.kind === "turn_completed" && transition.featureId) {
 					projectManager
