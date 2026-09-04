@@ -353,6 +353,75 @@ describe("CodexSessionProvider", () => {
 		).toEqual(["session-b"]);
 	});
 
+	describe("correlateOwnedSession", () => {
+		it("auto-binds the single unclaimed rollout born after launch", () => {
+			const cwd = path.join(tmpDir, "solo-worktree");
+			writeSessionFile("2026/03/04/session-a.jsonl", [
+				sessionMeta("session-a", { cwd, created: "2026-03-04T10:01:00.000Z" }),
+			]);
+			const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
+
+			expect(
+				provider.correlateOwnedSession({
+					cwd,
+					knownSessionIds: new Set(),
+					launchedAtMs: Date.parse("2026-03-04T10:00:00.000Z"),
+				}),
+			).toBe("session-a");
+		});
+
+		it("refuses to guess between two unclaimed rollouts in the same worktree", () => {
+			const cwd = path.join(tmpDir, "shared-worktree");
+			writeSessionFile("2026/03/04/session-a.jsonl", [
+				sessionMeta("session-a", { cwd, created: "2026-03-04T10:01:00.000Z" }),
+			]);
+			writeSessionFile("2026/03/04/session-b.jsonl", [
+				sessionMeta("session-b", { cwd, created: "2026-03-04T10:02:00.000Z" }),
+			]);
+			const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
+
+			expect(
+				provider.correlateOwnedSession({
+					cwd,
+					knownSessionIds: new Set(),
+					launchedAtMs: Date.parse("2026-03-04T10:00:00.000Z"),
+				}),
+			).toBeUndefined();
+		});
+
+		it("ignores a rollout that predates the agent's launch", () => {
+			const cwd = path.join(tmpDir, "solo-worktree");
+			writeSessionFile("2026/03/04/session-a.jsonl", [
+				sessionMeta("session-a", { cwd, created: "2026-03-04T09:00:00.000Z" }),
+			]);
+			const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
+
+			expect(
+				provider.correlateOwnedSession({
+					cwd,
+					knownSessionIds: new Set(),
+					launchedAtMs: Date.parse("2026-03-04T10:00:00.000Z"),
+				}),
+			).toBeUndefined();
+		});
+
+		it("async twin returns the same verdict", async () => {
+			const cwd = path.join(tmpDir, "solo-worktree");
+			writeSessionFile("2026/03/04/session-a.jsonl", [
+				sessionMeta("session-a", { cwd, created: "2026-03-04T10:01:00.000Z" }),
+			]);
+			const provider = new CodexSessionProvider(tmpDir, sessionIndexPath);
+
+			await expect(
+				provider.async.correlateOwnedSession({
+					cwd,
+					knownSessionIds: new Set(),
+					launchedAtMs: Date.parse("2026-03-04T10:00:00.000Z"),
+				}),
+			).resolves.toBe("session-a");
+		});
+	});
+
 	describe("findSessionFile", () => {
 		it("finds file in nested directory by sessionId", () => {
 			writeSessionFile("2026/03/04/rollout-1709550000-sess-find.jsonl", [

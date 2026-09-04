@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import type { ProviderAttentionSignal } from "../providers/types";
+import { singleUnclaimedCandidate } from "./candidateCorrelation";
 import {
 	type CodexAppServerEvent,
 	type CodexAppServerTransport,
@@ -15,6 +16,7 @@ import {
 	readIncrementalJsonlAsync,
 } from "./incrementalJsonl";
 import type {
+	SessionCorrelationContext,
 	SessionInfo,
 	SessionProvider,
 	SessionRenameAdapter,
@@ -102,13 +104,31 @@ export class CodexSessionProvider
 	 * an exact resumable identity was the bug: it made every fresh Codex
 	 * launch try to resume a session that did not exist yet.
 	 *
-	 * Without this hook, `SessionBinder` leaves the agent unbound and Codex
-	 * launches plain (`codex`, no args); the ordinary file-backed discovery
-	 * path (`scanSessions`/`discoverSessionCandidates`, gated by the launch
-	 * baseline and worktree so no agent can adopt another's session) binds the
-	 * agent once its rollout is actually written — the same mechanism the
-	 * Claude family already relies on.
+	 * Codex launches plain (`codex`, no args) and `SessionBinder` discovers the
+	 * rollout afterwards through `scanSessions`/`correlateOwnedSession` below,
+	 * gated by the launch baseline and worktree so no agent can adopt another's
+	 * session — the same mechanism the Claude family already relies on.
 	 */
+
+	/**
+	 * Codex's rollout files carry no pid, tty, or other process-level marker
+	 * to prove which launch created a given file — unlike Hermes, which drops
+	 * a per-terminal breadcrumb. This is the strongest evidence actually
+	 * available: the single rollout that appeared in this agent's cwd after it
+	 * launched and isn't already claimed. See `singleUnclaimedCandidate` for
+	 * why a second candidate is left ambiguous rather than guessed at.
+	 */
+	correlateOwnedSession(
+		context: SessionCorrelationContext,
+	): string | undefined {
+		return singleUnclaimedCandidate(this.scanSessions(), context);
+	}
+
+	private async correlateOwnedSessionAsync(
+		context: SessionCorrelationContext,
+	): Promise<string | undefined> {
+		return singleUnclaimedCandidate(await this.async.scanSessions(), context);
+	}
 
 	/**
 	 * Reconnect to a previously bound Codex session. Only a rollout file that
@@ -162,6 +182,9 @@ export class CodexSessionProvider
 				(await this.readTitleFromSessionAsync(sessionId))
 			);
 		},
+		correlateOwnedSession: async (
+			context: SessionCorrelationContext,
+		): Promise<string | undefined> => this.correlateOwnedSessionAsync(context),
 	};
 
 	private async walkDirAsync(dir: string): Promise<SessionInfo[]> {

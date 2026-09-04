@@ -1108,16 +1108,15 @@ describe("SessionBinder", () => {
 			}
 		});
 
-		// Cas G: a *single* fresh Codex agent whose rollout materializes is not
-		// auto-bound either. CodexSessionProvider implements no
-		// correlateOwnedSession, so SessionBinder.resolveClaim has no
-		// provider-specific ownership proof and treats a lone discovered
-		// candidate exactly like an ambiguous one — the same fail-closed
-		// posture as OpenCode, not Claude's auto-bind. This locks in the
-		// corrected docs/providers/codex-app-server.md claim: earlier drafts of
-		// this PR incorrectly said file-backed discovery binds Codex "the same
-		// way the Claude family is bound", which this test would have caught.
-		it("Cas G: a single fresh Codex candidate stays ambiguous, not auto-bound (no correlateOwnedSession)", async () => {
+		// Cas G: a *single* fresh Codex agent whose rollout materializes now
+		// auto-binds. CodexSessionProvider.correlateOwnedSession reports the one
+		// unclaimed rollout that appeared in this agent's cwd after it launched
+		// (see `singleUnclaimedCandidate`) — restoring the original (pre
+		// fail-closed) codexSessionWatcher's common-case behavior for the
+		// overwhelmingly common single-agent-per-worktree case, while Cas F
+		// above proves a genuine multi-candidate collision still refuses to
+		// guess.
+		it("Cas G: a single fresh Codex candidate auto-binds via correlateOwnedSession", async () => {
 			const sessionsDir = tempDir("codex-binder-sessions-");
 			const { CodexSessionProvider } = await import(
 				"../agents/sessionProviders/codexSessionProvider"
@@ -1126,7 +1125,7 @@ describe("SessionBinder", () => {
 			expect(
 				(codexAdapter as unknown as { correlateOwnedSession?: unknown })
 					.correlateOwnedSession,
-			).toBeUndefined();
+			).toBeTypeOf("function");
 			const { projectManager, ctx } = setup([feature()]);
 			ctx.store.saveAgents("f1", [
 				agentFixture({
@@ -1149,8 +1148,8 @@ describe("SessionBinder", () => {
 			binder.reconcileAll();
 
 			const stored = ctx.store.loadAgents("f1")[0];
-			expect(stored.sessionId).toBeNull();
-			expect(stored.sessionBinding?.state).toBe("ambiguous");
+			expect(stored.sessionId).toBe("ses-for-a1");
+			expect(stored.sessionBinding?.state).toBe("bound");
 		});
 	});
 });
