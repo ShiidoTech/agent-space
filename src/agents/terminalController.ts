@@ -495,6 +495,14 @@ export class TerminalController implements vscode.Disposable {
 		const sessionName =
 			agent.tmuxSession ?? this.tmux.sessionName(feature.id, agent.id);
 		const legacySessionName = this.tmux.legacySessionName(feature.id, agent.id);
+		const shouldResume = resume && agent.hasStarted === true;
+		// Kick off the launch-note discovery (synchronous filesystem walk) now,
+		// as a microtask, so it overlaps with the tmux discovery subprocess
+		// calls below instead of running serially just before the launch —
+		// only its result is awaited later, right before it's needed.
+		const launchNotePromise = shouldResume
+			? Promise.resolve(undefined)
+			: Promise.resolve().then(() => this.buildAgentLaunchNote(feature));
 		let sessionReady = attachExisting
 			? await this.tmux.isSessionAliveAsync(sessionName)
 			: await this.tmux.adoptSessionAsync(sessionName, legacySessionName);
@@ -505,7 +513,6 @@ export class TerminalController implements vscode.Disposable {
 			| undefined;
 		if (!sessionReady) {
 			const tool = this.toolRegistry.resolveAgentToolForAgent(agent);
-			const shouldResume = resume && agent.hasStarted === true;
 			this.advanceStartupStep(feature.id, agent.id, "terminal");
 			try {
 				if (shouldResume) {
@@ -572,9 +579,7 @@ export class TerminalController implements vscode.Disposable {
 				await ensureHermesProjectSkillsTrustedAsync(cwd, agent.hermesProfile);
 			}
 
-			const launchContextNote = shouldResume
-				? undefined
-				: this.buildAgentLaunchNote(feature);
+			const launchContextNote = await launchNotePromise;
 			const launchCommand = this.withLaunchContextNote(
 				baseCommand,
 				launchContextNote,
@@ -589,7 +594,7 @@ export class TerminalController implements vscode.Disposable {
 				// synchronous call returns as soon as tmux accepts the session; all
 				// follow-up checks remain asynchronous below.
 				exec(this.tmux.createCommand(sessionName, launchCommand), { cwd });
-				this.tmux.configureSession(sessionName);
+				await this.tmux.configureSessionAsync(sessionName);
 				sessionReady = await this.tmux.isSessionAliveAsync(sessionName);
 				if (sessionReady) {
 					// The terminal itself is up; a failure from here on is the
