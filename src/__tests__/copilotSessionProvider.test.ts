@@ -182,3 +182,201 @@ describe("CopilotSessionProvider", () => {
 		expect(provider.toolId).toBe("copilot");
 	});
 });
+
+describe("CopilotSessionProvider directory layout (real store)", () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-dir-test-"));
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	function writeSessionDir(
+		sessionId: string,
+		options: {
+			cwd?: string;
+			summary?: string;
+			createdAt?: string;
+			prompt?: string;
+			startTime?: string;
+		} = {},
+	) {
+		const dir = path.join(tmpDir, sessionId);
+		fs.mkdirSync(dir, { recursive: true });
+		const lines = [
+			JSON.stringify({
+				id: "e1",
+				parentId: null,
+				timestamp: options.startTime ?? "2026-03-04T10:00:00.000Z",
+				type: "session.start",
+				data: {
+					sessionId,
+					startTime: options.startTime ?? "2026-03-04T10:00:00.000Z",
+				},
+			}),
+		];
+		if (options.prompt !== undefined) {
+			lines.push(
+				JSON.stringify({
+					id: "e2",
+					parentId: "e1",
+					timestamp: options.startTime ?? "2026-03-04T10:00:01.000Z",
+					type: "user.message",
+					data: { content: options.prompt },
+				}),
+			);
+		}
+		fs.writeFileSync(path.join(dir, "events.jsonl"), lines.join("\n"));
+		const yaml = [
+			`id: ${sessionId}`,
+			`cwd: ${options.cwd ?? "/repo/worktree"}`,
+			`summary: ${options.summary ?? ""}`,
+			`summary_count: 0`,
+			`created_at: ${options.createdAt ?? options.startTime ?? "2026-03-04T10:00:00.000Z"}`,
+			`updated_at: ${options.createdAt ?? options.startTime ?? "2026-03-04T10:00:00.000Z"}`,
+		].join("\n");
+		fs.writeFileSync(path.join(dir, "workspace.yaml"), yaml);
+	}
+
+	it("reads cwd, summary and prompt from the directory layout", () => {
+		writeSessionDir("sess-dir-1", {
+			cwd: "/repo/worktree",
+			summary: "Review Code Changes",
+			prompt: "## TASK\nImplement dark mode\n## CONSTRAINTS\nUse CSS variables",
+		});
+
+		const provider = new CopilotSessionProvider(tmpDir);
+		const sessions = provider.scanSessions();
+
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0]).toMatchObject({
+			sessionId: "sess-dir-1",
+			prompt: "Implement dark mode",
+			projectPath: "/repo/worktree",
+		});
+		expect(provider.readName("sess-dir-1")).toBe("Review Code Changes");
+		expect(provider.hasSession("sess-dir-1")).toBe(true);
+		expect(provider.hasSession("sess-nope")).toBe(false);
+	});
+
+	it("falls back to the first prompt when workspace.yaml has no summary", () => {
+		writeSessionDir("sess-nosummary", { prompt: "Fix the login page CSS" });
+
+		const provider = new CopilotSessionProvider(tmpDir);
+		expect(provider.readName("sess-nosummary")).toBe("Fix the login page CSS");
+	});
+
+	it("discovers candidates filtered by cwd, newest first", () => {
+		writeSessionDir("sess-old", {
+			cwd: "/repo/a",
+			startTime: "2026-03-04T09:00:00.000Z",
+			prompt: "old",
+		});
+		writeSessionDir("sess-new", {
+			cwd: "/repo/a",
+			startTime: "2026-03-04T11:00:00.000Z",
+			prompt: "new",
+		});
+		writeSessionDir("sess-other", { cwd: "/repo/b", prompt: "other" });
+
+		const provider = new CopilotSessionProvider(tmpDir);
+		const candidates = provider.discoverSessionCandidates(
+			"/repo/a",
+			new Set(["sess-old"]),
+		);
+
+		expect(candidates.map((c) => c.sessionId)).toEqual(["sess-new"]);
+	});
+
+	it("correlates the single unclaimed session born after launch", () => {
+		writeSessionDir("sess-owned", {
+			cwd: "/repo/a",
+			startTime: "2026-03-04T11:00:00.000Z",
+			prompt: "mine",
+		});
+
+		const provider = new CopilotSessionProvider(tmpDir);
+		const owned = provider.correlateOwnedSession({
+			cwd: "/repo/a",
+			knownSessionIds: new Set(),
+			launchedAtMs: Date.parse("2026-03-04T10:59:00.000Z"),
+		});
+		expect(owned).toBe("sess-owned");
+
+		// Predating the launch: no proof, no bind.
+		expect(
+			provider.correlateOwnedSession({
+				cwd: "/repo/a",
+				knownSessionIds: new Set(),
+				launchedAtMs: Date.parse("2026-03-05T00:00:00.000Z"),
+			}),
+		).toBeUndefined();
+	});
+
+	it("refuses to correlate when two unclaimed candidates exist", () => {
+		writeSessionDir("sess-1", { cwd: "/repo/a", prompt: "one" });
+		writeSessionDir("sess-2", { cwd: "/repo/a", prompt: "two" });
+
+		const provider = new CopilotSessionProvider(tmpDir);
+		expect(
+			provider.correlateOwnedSession({
+				cwd: "/repo/a",
+				knownSessionIds: new Set(),
+				launchedAtMs: Date.parse("2026-03-04T09:00:00.000Z"),
+			}),
+		).toBeUndefined();
+	});
+
+	it("exposes async twins for the non-blocking passes", async () => {
+		writeSessionDir("sess-async", {
+			cwd: "/repo/a",
+			summary: "Async Title",
+			prompt: "hello",
+		});
+
+		const provider = new CopilotSessionProvider(tmpDir);
+		const sessions = await provider.async.scanSessions();
+		expect(sessions.map((s) => s.sessionId)).toEqual(["sess-async"]);
+		expect(await provider.async.hasSession("sess-async")).toBe(true);
+		expect(await provider.async.hasSession("sess-nope")).toBe(false);
+		expect(await provider.async.readName("sess-async")).toBe("Async Title");
+		expect(await provider.resumeConversation("sess-async")).toBe(true);
+		expect(await provider.resumeConversation("sess-nope")).toBe(false);
+	});
+
+	it("skips session dirs without events or workspace", () => {
+		fs.mkdirSync(path.join(tmpDir, "empty-dir"));
+		const provider = new CopilotSessionProvider(tmpDir);
+		expect(provider.scanSessions()).toEqual([]);
+	});
+
+	it("skips malformed events.jsonl lines without losing the session", () => {
+		const dir = path.join(tmpDir, "sess-badline");
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(
+			path.join(dir, "events.jsonl"),
+			[
+				"not json at all",
+				JSON.stringify({
+					type: "session.start",
+					data: {
+						sessionId: "sess-badline",
+						startTime: "2026-03-04T10:00:00.000Z",
+					},
+				}),
+				JSON.stringify({
+					type: "user.message",
+					data: { content: "Surviving prompt" },
+				}),
+			].join("\n"),
+		);
+
+		const provider = new CopilotSessionProvider(tmpDir);
+		const sessions = provider.scanSessions();
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0].prompt).toBe("Surviving prompt");
+	});
+});

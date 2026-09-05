@@ -724,6 +724,8 @@ describe("Feature Finish", () => {
 				worktreePath: "/worktrees/f1",
 				force: false,
 				acceptedPullRequestHeadSha: headSha,
+				deleteBranches: false,
+				branch: "feat/f1",
 			},
 		]);
 	});
@@ -885,12 +887,15 @@ describe("Feature Finish", () => {
 				kind: "feature",
 				worktreePath: "/worktrees/f1",
 				force: true,
+				deleteBranches: false,
+				branch: "feat/f1",
 			},
 			{
 				kind: "agent",
 				agentId: "a1",
 				worktreePath: "/worktrees/a1",
 				force: false,
+				deleteBranches: false,
 			},
 		]);
 	});
@@ -912,5 +917,160 @@ describe("Feature Finish", () => {
 		expect(
 			verifySessionsStopped(sessions, { status: "known", sessions: [] }),
 		).toEqual({ status: "verified" });
+	});
+});
+
+describe("branch deletion eligibility", () => {
+	function safeDeletionSafety(featureSha: string) {
+		return {
+			worktreePath: "/worktrees/f1",
+			safe: true,
+			forceable: true,
+			insideBase: true,
+			statusObserved: true,
+			refsObserved: true,
+			integrationObserved: true,
+			localCommitsObserved: true,
+			dirty: false,
+			hasLocalCommits: false,
+			unmerged: false,
+			workingTreeStatus: "",
+			localCommitCount: 0,
+			featureSha,
+			baseSha: "2".repeat(40),
+			reasons: [],
+		};
+	}
+
+	function prIntegration(headSha: string): IntegrationEvaluation {
+		return {
+			status: "known",
+			outcome: "integrated_by_pull_request",
+			evidence: {
+				feature: { ref: "feat/f1", sha: headSha },
+				github: {
+					status: "known",
+					expectedBaseRef: "main",
+					baseMatch: true,
+					pull: {
+						number: 74,
+						url: "https://example.test/pull/74",
+						state: "merged",
+						draft: false,
+						headRef: "feat/f1",
+						headSha,
+						baseRef: "main",
+					},
+				},
+			},
+		};
+	}
+
+	it("allows branch deletion on a matched merged pull request", async () => {
+		const headSha = "3".repeat(40);
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue({
+			...safeDeletionSafety(headSha),
+			// Squash-merged tip: locally unmerged, only the matched PR proof
+			// unlocks both finish and branch deletion.
+			safe: false,
+			forceable: true,
+			unmerged: true,
+			hasLocalCommits: true,
+			localCommitCount: 1,
+			reasons: ["Branch feat/f1 is not an ancestor of main."],
+		});
+		const assessment = await assessFeatureFinish(
+			context("worktree /repo\n\nworktree /worktrees/f1\n"),
+			feature(),
+			finishEvidence(prIntegration(headSha)),
+		);
+
+		expect(assessment.canDeleteBranches).toBe(true);
+		const plan = planFeatureFinishRemovals(assessment, {
+			deleteBranches: true,
+		});
+		expect(plan).toEqual([
+			{
+				kind: "feature",
+				worktreePath: "/worktrees/f1",
+				force: false,
+				acceptedPullRequestHeadSha: headSha,
+				deleteBranches: true,
+				branch: "feat/f1",
+			},
+		]);
+	});
+
+	it("allows branch deletion on true ancestry without any PR", async () => {
+		const headSha = "4".repeat(40);
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue(
+			safeDeletionSafety(headSha),
+		);
+		const assessment = await assessFeatureFinish(
+			context("worktree /repo\n\nworktree /worktrees/f1\n"),
+			feature(),
+			finishEvidence({
+				status: "known",
+				outcome: "integrated_by_ancestry",
+				evidence: { feature: { ref: "feat/f1", sha: headSha } },
+			}),
+		);
+
+		expect(assessment.canDeleteBranches).toBe(true);
+	});
+
+	it("refuses branch deletion on unknown integration even when forceable", async () => {
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue({
+			...safeDeletionSafety("5".repeat(40)),
+			safe: false,
+			forceable: true,
+			unmerged: true,
+			hasLocalCommits: true,
+			reasons: ["Branch feat/f1 is not an ancestor of main."],
+		});
+		const assessment = await assessFeatureFinish(
+			context("worktree /repo\n\nworktree /worktrees/f1\n"),
+			feature(),
+			finishEvidence({
+				status: "unknown",
+				reason: "integration_unknown",
+				detail: "a squash merge cannot be ruled out",
+				evidence: {},
+			}),
+		);
+
+		expect(assessment.forceable).toBe(true);
+		expect(assessment.canDeleteBranches).toBe(false);
+		expect(
+			planFeatureFinishRemovals(assessment, { deleteBranches: true }),
+		).toEqual([
+			{
+				kind: "feature",
+				worktreePath: "/worktrees/f1",
+				force: true,
+				deleteBranches: false,
+				branch: "feat/f1",
+			},
+		]);
+	});
+
+	it("refuses branch deletion when the PR proof does not match", async () => {
+		const headSha = "6".repeat(40);
+		vi.spyOn(worktreeSafety, "checkWorktreeDeletionSafety").mockResolvedValue({
+			...safeDeletionSafety("7".repeat(40)),
+			safe: false,
+			forceable: true,
+			unmerged: true,
+			hasLocalCommits: true,
+			reasons: ["Branch feat/f1 is not an ancestor of main."],
+		});
+		const assessment = await assessFeatureFinish(
+			context("worktree /repo\n\nworktree /worktrees/f1\n"),
+			feature(),
+			finishEvidence(prIntegration(headSha)),
+		);
+
+		expect(assessment.safe).toBe(false);
+		expect(assessment.canDeleteBranches).toBe(false);
 	});
 });

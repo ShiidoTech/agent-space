@@ -1455,6 +1455,112 @@ export class FeatureManager {
 		};
 	}
 
+	/**
+	 * Delete the feature's local branch (and the origin branch when it
+	 * provably matches the merged proof) after the worktree is gone.
+	 * Idempotent: already-deleted refs are skipped so a retry converges.
+	 * Every destructive step is proof-gated — no proof, no `-D`, no remote
+	 * delete — and `git branch -d` stays the default safe path.
+	 *
+	 * The remote delete is atomic server-side: it carries
+	 * `--force-with-lease=refs/heads/<branch>:<provenSha>`, so the push is
+	 * rejected when the remote tip moved since our (potentially stale)
+	 * tracking ref was fetched. A stale `refs/remotes/origin/*` can never
+	 * authorize deleting someone else's commits.
+	 */
+	async deleteFinishedBranches(
+		id: string,
+		options?: { branch?: string; acceptedPullRequestHeadSha?: string },
+	): Promise<FeatureDeleteResult> {
+		const feature = this.features.find((f) => f.id === id);
+		const branch = options?.branch ?? feature?.branch;
+		if (!feature || !branch || !isSafeBranchName(branch)) {
+			return { deleted: false, reasons: ["No safe branch to delete."] };
+		}
+		const acceptedSha = options?.acceptedPullRequestHeadSha?.toLowerCase();
+		const reasons: string[] = [];
+
+		const localSha = await this.resolveRefSha(`refs/heads/${branch}`);
+		// The exact tip being deleted: proven merged either by ancestry
+		// (`-d` succeeding) or by matching the accepted PR head (`-D`).
+		let deletedTipSha: string | null = null;
+		if (localSha) {
+			const proven =
+				typeof acceptedSha === "string" &&
+				localSha.toLowerCase() === acceptedSha;
+			const deletion = proven
+				? await this.runGit(["branch", "-D", branch], this.repoRoot)
+				: await this.runGit(["branch", "-d", branch], this.repoRoot);
+			if (deletion.exitCode !== 0 || deletion.error) {
+				const detail =
+					deletion.stderr.trim() ||
+					(deletion.error?.message ?? `git branch -d ${branch} failed`);
+				return {
+					deleted: false,
+					reasons: [
+						`Local branch ${branch} was not deleted: ${detail}`,
+						...(proven
+							? []
+							: [
+									"Only a matched merged pull request proof unlocks forced deletion.",
+								]),
+					],
+				};
+			}
+			deletedTipSha = localSha;
+		}
+
+		const remoteExists =
+			(await this.resolveRefSha(`refs/remotes/origin/${branch}`)) !== null;
+		if (remoteExists) {
+			// Only the exact proven tip may go: the deleted local tip, or
+			// the accepted PR head when local was already gone. The lease
+			// is enforced by the server, not by our tracking ref.
+			const provenTip =
+				deletedTipSha?.toLowerCase() ??
+				(typeof acceptedSha === "string" ? acceptedSha : null);
+			if (typeof provenTip !== "string") {
+				return {
+					deleted: false,
+					reasons: [
+						`Remote branch origin/${branch} was preserved: no merged proof covers its tip. Run 'git fetch origin' to inspect it.`,
+					],
+				};
+			}
+			const lease = `refs/heads/${branch}:${provenTip}`;
+			const push = await this.runGit(
+				["push", `--force-with-lease=${lease}`, "origin", `:${branch}`],
+				this.repoRoot,
+			);
+			if (push.exitCode !== 0 || push.error) {
+				const detail =
+					push.stderr.trim() ||
+					push.error?.message ||
+					"lease-guarded remote delete failed";
+				reasons.push(
+					`Remote branch origin/${branch} was preserved: ${detail}. It moved since the merged proof — run 'git fetch origin' to inspect it before deleting.`,
+				);
+				return {
+					deleted: false,
+					reasons,
+					suggestedCommand: `git push --force-with-lease=${lease} origin :${branch}`,
+				};
+			}
+		}
+
+		return { deleted: true, reasons };
+	}
+
+	private async resolveRefSha(ref: string): Promise<string | null> {
+		const resolved = await this.runGit(
+			["rev-parse", "--verify", `${ref}^{commit}`],
+			this.repoRoot,
+		);
+		if (resolved.exitCode !== 0 || resolved.error) return null;
+		const sha = resolved.stdout.trim();
+		return /^[0-9a-f]{40,64}$/iu.test(sha) ? sha : null;
+	}
+
 	/** Remove an explicitly reviewed directory that Git no longer registers. */
 	async removeWorktreeResidue(
 		worktreePath: string,

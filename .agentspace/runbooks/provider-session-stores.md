@@ -153,6 +153,36 @@ Session files live under `sessionsDir` (e.g., `~/.codex/sessions/`).
 
 ---
 
+## Copilot
+
+### Session store location
+
+`~/.copilot/session-state/<sessionId>/` — one directory per session, named
+by session id (verified against a production store).
+
+### Files
+
+- `events.jsonl`: one JSON object per line:
+  `{id, parentId, timestamp, type, data}`.
+  - `type: "session.start"` → `data.sessionId`, `data.startTime`.
+  - `type: "user.message"` → prompt in
+    `data.transformedContent` (preferred) or `data.content`
+    (`## TASK\n...\n## …` template, else first line).
+  - Also present: `assistant.turn_start`, `assistant.turn_end`,
+    `assistant.message`, `tool.execution_start`, `tool.execution_complete`,
+    `subagent.*`, `abort`. These are **not** used for attention:
+    deriving a live phase from the last event would be recency inference.
+- `workspace.yaml`: flat `key: value` lines with
+  `id`, `cwd`, `summary` (display title), `summary_count`,
+  `created_at`, `updated_at`. Read with a minimal line parser (no YAML dep).
+
+### Capabilities
+
+Resume (`copilot --resume <id>`), discovery (cwd-filtered, newest first),
+naming (`summary`, else first prompt). Attention: none advertised.
+
+---
+
 ## Smoke test
 
 Validate the real stores against the contract:

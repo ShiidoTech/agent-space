@@ -156,7 +156,7 @@ export interface CodingTool {
 	enabled?: boolean;
 	args?: string[];
 	env?: Record<string, string>;
-	family?: "claude" | "codex" | "opencode" | "hermes" | "generic";
+	family?: "claude" | "codex" | "opencode" | "hermes" | "copilot" | "generic";
 	sessionsDir?: string;
 	resumeCommand?: string;
 	/** Internal adapter. Never loaded from project/user configuration. */

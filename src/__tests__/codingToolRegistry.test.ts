@@ -304,6 +304,30 @@ describe("CodingToolRegistry", () => {
 			expect(provider.capabilities.sessionNaming).toBe(false);
 			expect(provider.capabilities.sessionDiscovery).toBe(false);
 		});
+
+		it("declares copilot resumable with discovery and naming but no attention", () => {
+			const copilot = BUILTIN_PROVIDERS.find(
+				(provider) => provider.id === "copilot",
+			);
+			expect(copilot?.conversationIdentity).toMatchObject({
+				ownership: "provider_assigned",
+			});
+			expect(copilot?.capabilities).toMatchObject({
+				launch: true,
+				resume: true,
+				sessionDiscovery: true,
+				sessionNaming: true,
+			});
+			expect(copilot?.capabilities.attention).toMatchObject({
+				"attention.working": false,
+				"attention.waitingForUser": false,
+				"attention.idle": false,
+				"attention.failed": false,
+			});
+			expect(copilot?.resumeArgs?.("sess-1")).toEqual(["--resume", "sess-1"]);
+			expect(copilot?.resumeArgs?.(null)).toEqual([]);
+			expect(copilot?.sessionAdapter?.toolId).toBe("copilot");
+		});
 	});
 
 	describe("getTool", () => {
@@ -611,9 +635,22 @@ describe("CodingToolRegistry", () => {
 			expect(registry.buildResumeLaunchCommand(tool, null)).toBe("claude");
 		});
 
-		it("returns fresh launch for copilot tool (no resume support)", () => {
+		it("returns fresh launch for copilot tool without sessionId", () => {
 			const tool = registry.resolveAgentTool("copilot");
 			expect(registry.buildResumeLaunchCommand(tool)).toBe("copilot");
+		});
+
+		it("resumes the exact copilot session by id", () => {
+			const tool = registry.resolveAgentTool("copilot");
+			expect(registry.buildResumeLaunchCommand(tool, "sess-456")).toBe(
+				"copilot --resume sess-456",
+			);
+			expect(registry.buildStrictResumeLaunchCommand(tool, "sess-456")).toBe(
+				"copilot --resume sess-456",
+			);
+			expect(
+				registry.buildStrictResumeLaunchCommand(tool, null),
+			).toBeUndefined();
 		});
 
 		it("continues the latest opencode session when no sessionId is known", () => {
@@ -914,10 +951,11 @@ describe("CodingToolRegistry", () => {
 			expect(adapter?.toolId).toBe("hermes");
 		});
 
-		it("getSessionAdapterForAgent returns undefined for copilot", () => {
+		it("getSessionAdapterForAgent returns the copilot adapter", () => {
 			const agent = { toolId: "copilot" } as Agent;
 			const adapter = registry.getSessionAdapterForAgent(agent);
-			expect(adapter).toBeUndefined();
+			expect(adapter).toBeDefined();
+			expect(adapter?.toolId).toBe("copilot");
 		});
 
 		it("two agents with different profiles get different adapters", () => {

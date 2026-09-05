@@ -19,12 +19,14 @@ import {
 	resolveClaudeProjectsDir,
 } from "./sessionProviders/claudeSessionProvider";
 import { CodexSessionProvider } from "./sessionProviders/codexSessionProvider";
+import { CopilotSessionProvider } from "./sessionProviders/copilotSessionProvider";
 import { HermesSessionProvider } from "./sessionProviders/hermesSessionProvider";
 import { OpenCodeSessionProvider } from "./sessionProviders/openCodeSessionProvider";
 
 const claudeSessionAdapter = new ClaudeSessionProvider();
 const codexSessionAdapter = new CodexSessionProvider();
 const openCodeSessionAdapter = new OpenCodeSessionProvider();
+const copilotSessionAdapter = new CopilotSessionProvider();
 
 /**
  * Per-home cache for Hermes session adapters. Each Hermes home directory
@@ -136,14 +138,13 @@ export const BUILTIN_PROVIDERS: readonly CodingAgentProvider[] = [
 	},
 	{
 		id: "copilot",
-		conversationIdentity: { ownership: "unsupported" },
-		capabilities: {
-			launch: true,
-			resume: false,
-			sessionDiscovery: false,
-			sessionNaming: false,
-			attention: NO_ATTENTION_CAPABILITIES,
-		},
+		conversationIdentity: { ownership: "provider_assigned" },
+		// Session attention is deliberately NOT advertised: inferring a live
+		// phase from the last events.jsonl entry would be recency inference.
+		// Resume, discovery and naming all read durable on-disk state.
+		capabilities: fullSessionCapabilities(NO_ATTENTION_CAPABILITIES),
+		resumeArgs: (sessionId) => (sessionId ? ["--resume", sessionId] : []),
+		sessionAdapter: copilotSessionAdapter,
 	},
 	{
 		id: "hermes",
@@ -217,6 +218,11 @@ export function resolveSessionStoreDir(
 			? expandHome(sessionsDir)
 			: path.join(process.env.HOME || "~", ".codex", "sessions");
 	}
+	if (family === "copilot") {
+		return sessionsDir
+			? expandHome(sessionsDir)
+			: path.join(process.env.HOME || "~", ".copilot", "session-state");
+	}
 	if (family === "hermes") {
 		return resolveHermesHome(undefined, envHermesHome);
 	}
@@ -240,7 +246,10 @@ function providerForTool(
 	const builtin = providerById.get(id);
 	if (builtin) return builtin;
 	const sessionFamily =
-		family === "claude" || family === "codex" || family === "opencode";
+		family === "claude" ||
+		family === "codex" ||
+		family === "opencode" ||
+		family === "copilot";
 	const launchArgs =
 		family === "claude"
 			? (sessionId?: string | null) =>
@@ -259,7 +268,10 @@ function providerForTool(
 				: family === "opencode"
 					? (sessionId?: string | null) =>
 							sessionId ? ["--session", sessionId] : ["--continue"]
-					: undefined;
+					: family === "copilot"
+						? (sessionId?: string | null) =>
+								sessionId ? ["--resume", sessionId] : []
+						: undefined;
 	// One canonical store path per family, shared with `resolveSessionStoreDir`
 	// and Doctor, so the directory the adapter reads is exactly the directory
 	// whose reachability decides the capabilities and the one Doctor reports.
@@ -268,7 +280,10 @@ function providerForTool(
 		family === "claude" ? new ClaudeSessionProvider(storeDir, id) : undefined;
 	const codexSessionProvider =
 		family === "codex" ? new CodexSessionProvider(storeDir) : undefined;
-	const sessionAdapter = claudeSessionProvider ?? codexSessionProvider;
+	const copilotSessionProvider =
+		family === "copilot" ? new CopilotSessionProvider(storeDir) : undefined;
+	const sessionAdapter =
+		claudeSessionProvider ?? codexSessionProvider ?? copilotSessionProvider;
 	// A file-backed adapter is only worth anything if its store is actually
 	// reachable. Declaring sessionNaming/attention from the mere existence of an
 	// adapter let a tool point at the wrong home directory — the default
@@ -296,16 +311,27 @@ function providerForTool(
 			resume: Boolean(sessionFamily),
 			sessionDiscovery: sessionCapable,
 			sessionNaming: sessionCapable,
+			// Codex cross-process delivery and Copilot live phases are not
+			// proven: discovery/naming read durable state, attention would
+			// require inferring a live phase.
 			attention:
-				sessionCapable && family !== "codex"
+				sessionCapable && family !== "codex" && family !== "copilot"
 					? FULL_ATTENTION_CAPABILITIES
 					: NO_ATTENTION_CAPABILITIES,
 		},
 		launchArgs,
 		resumeArgs,
-		getAttentionSignal: sessionAdapter
-			? (sessionId) => sessionAdapter.readAttention(sessionId)
-			: undefined,
+		getAttentionSignal:
+			sessionAdapter && "readAttention" in sessionAdapter
+				? (sessionId) =>
+						(
+							sessionAdapter as {
+								readAttention: (
+									sessionId: string,
+								) => ProviderAttentionSignal | undefined;
+							}
+						).readAttention(sessionId)
+				: undefined,
 		// Async twin of the above — mandatory whenever attention capabilities
 		// are announced: the background attention monitor reads exclusively
 		// through the async path, so a wrapper without it would silently stop
@@ -338,7 +364,7 @@ export const BUILTIN_CODING_TOOLS: CodingTool[] = [
 		id: "copilot",
 		name: "GitHub Copilot",
 		command: "copilot",
-		family: "generic",
+		family: "copilot",
 		provider: providerById.get("copilot"),
 	},
 	{
