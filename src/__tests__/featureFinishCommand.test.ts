@@ -168,6 +168,7 @@ describe("runFeatureFinish command flow", () => {
 			safe: false,
 			forceable: false,
 			fingerprint: "fp",
+			canDeleteBranches: false,
 		});
 		const errorMessage = vi.fn(() => Promise.resolve(undefined));
 		const { ui, spy } = buildUi({
@@ -206,6 +207,7 @@ describe("runFeatureFinish command flow", () => {
 			forceable: true,
 			requiresForce: false,
 			fingerprint: "fresh",
+			canDeleteBranches: false,
 		}));
 		deps.assess = assess;
 		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
@@ -269,6 +271,7 @@ describe("runFeatureFinish command flow", () => {
 			safe: false,
 			forceable: false,
 			fingerprint: "residue",
+			canDeleteBranches: false,
 		});
 		const { ui } = buildUi({ confirmed: "Remove residue" });
 		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
@@ -327,6 +330,7 @@ describe("runFeatureFinish command flow", () => {
 			safe: false,
 			forceable: false,
 			fingerprint: "residue",
+			canDeleteBranches: false,
 		});
 		const errorMessage = vi.fn(() =>
 			Promise.resolve("Run command in terminal"),
@@ -399,6 +403,7 @@ describe("runFeatureFinish command flow", () => {
 			safe: false,
 			forceable: false,
 			fingerprint: "residue",
+			canDeleteBranches: false,
 		});
 		const errorMessage = vi.fn(() => Promise.resolve("Copy command"));
 		const { ui } = buildUi({
@@ -441,6 +446,7 @@ describe("runFeatureFinish command flow", () => {
 			safe: true,
 			forceable: true,
 			fingerprint: "fp",
+			canDeleteBranches: false,
 		});
 		const { ui } = buildUi({ confirmed: "Cancel" });
 		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
@@ -486,6 +492,7 @@ describe("runFeatureFinish command flow", () => {
 			safe: true,
 			forceable: true,
 			fingerprint: "fp",
+			canDeleteBranches: false,
 		});
 		const { ui, spy } = buildUi({ confirmed: "Finish Feature" });
 		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
@@ -530,5 +537,146 @@ describe("runFeatureFinish command flow", () => {
 		expect(deps.projectManager.notifyChange).toHaveBeenCalled();
 		expect(deps.sidebarProvider.refresh).toHaveBeenCalled();
 		expect(inProgress.has("f1")).toBe(false);
+	});
+
+	it("offers branch deletion only when proven safe, and calls it on choice", async () => {
+		const { deps } = buildDeps();
+		const headSha = "a".repeat(40);
+		deps.assess = () => ({
+			checks: [
+				{
+					kind: "feature",
+					branch: "feat/f1",
+					worktreePath: "/tmp/clean-repo",
+					disposition: "registered",
+					safe: true,
+					forceable: true,
+					requiresForce: false,
+					acceptedPullRequestHeadSha: headSha,
+					reasons: [],
+				},
+			],
+			reasons: [],
+			safe: true,
+			forceable: true,
+			fingerprint: "fp",
+			canDeleteBranches: true,
+		});
+		const { ui } = buildUi({ confirmed: "Finish and delete branches" });
+		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
+			typeof vi.fn
+		>;
+		getSnapshot.mockReturnValue({
+			integration: {
+				status: "known",
+				outcome: "integrated_by_pull_request",
+				evidence: {},
+			},
+		});
+		const deleteFinishedBranches = vi.fn(() => ({
+			deleted: true,
+			reasons: [],
+		}));
+		const forget = vi.fn();
+		const ctx = {
+			project: { repoPath: "/tmp/clean-repo" },
+			agentManager: {
+				getAgents: () => [],
+				removeAgentWorktreeForFinish: vi.fn(),
+			},
+			serviceManager: { getServices: () => [] },
+			featureManager: {
+				forgetFinishedFeature: forget,
+				removeFeatureWorktreeForFinish: vi.fn(() => ({
+					deleted: true,
+					reasons: [],
+				})),
+				deleteFinishedBranches,
+			},
+		} as never;
+
+		const outcome = await runFeatureFinish(ctx, feature(), deps, ui);
+
+		expect(outcome).toEqual({ status: "finished" });
+		expect(ui.showWarningMessage).toHaveBeenCalledWith(
+			expect.stringContaining("will be deleted"),
+			expect.objectContaining({ modal: true }),
+			"Finish and delete branches",
+			"Finish Feature",
+		);
+		expect(deleteFinishedBranches).toHaveBeenCalledWith("f1", {
+			branch: "feat/f1",
+			acceptedPullRequestHeadSha: headSha,
+		});
+		expect(forget).toHaveBeenCalledWith("f1");
+	});
+
+	it("blocks with records preserved when branch deletion fails", async () => {
+		const { deps } = buildDeps();
+		const headSha = "b".repeat(40);
+		deps.assess = () => ({
+			checks: [
+				{
+					kind: "feature",
+					branch: "feat/f1",
+					worktreePath: "/tmp/clean-repo",
+					disposition: "registered",
+					safe: true,
+					forceable: true,
+					requiresForce: false,
+					acceptedPullRequestHeadSha: headSha,
+					reasons: [],
+				},
+			],
+			reasons: [],
+			safe: true,
+			forceable: true,
+			fingerprint: "fp",
+			canDeleteBranches: true,
+		});
+		const { ui } = buildUi({ confirmed: "Finish and delete branches" });
+		const getSnapshot = deps.featureStateCoordinator.getSnapshot as ReturnType<
+			typeof vi.fn
+		>;
+		getSnapshot.mockReturnValue({
+			integration: {
+				status: "known",
+				outcome: "integrated_by_pull_request",
+				evidence: {},
+			},
+		});
+		const errorMessage = vi.fn(() => Promise.resolve(undefined));
+		const forget = vi.fn();
+		const ctx = {
+			project: { repoPath: "/tmp/clean-repo" },
+			agentManager: {
+				getAgents: () => [],
+				removeAgentWorktreeForFinish: vi.fn(),
+			},
+			serviceManager: { getServices: () => [] },
+			featureManager: {
+				forgetFinishedFeature: forget,
+				removeFeatureWorktreeForFinish: vi.fn(() => ({
+					deleted: true,
+					reasons: [],
+				})),
+				deleteFinishedBranches: vi.fn(() => ({
+					deleted: false,
+					reasons: ["Remote branch origin/feat/f1 was preserved."],
+					suggestedCommand: "git push origin --delete feat/f1",
+				})),
+			},
+		} as never;
+
+		const outcome = await runFeatureFinish(ctx, feature(), deps, {
+			...ui,
+			showErrorMessage: errorMessage,
+		} as never);
+
+		expect(outcome.status).toBe("blocked");
+		expect(forget).not.toHaveBeenCalled();
+		expect(errorMessage).toHaveBeenCalledWith(
+			expect.stringContaining("git push origin --delete feat/f1"),
+		);
 	});
 });

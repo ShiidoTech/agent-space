@@ -35,6 +35,13 @@ export interface FeatureFinishAssessment {
 	readonly safe: boolean;
 	readonly forceable: boolean;
 	readonly fingerprint: string;
+	/**
+	 * True when deleting the feature's Git branches is proven safe: the
+	 * feature check is safe and integration proves the work already landed
+	 * (merged pull request matched to the observed head, or ancestry).
+	 * Unknown/stale integration never enables this — branches stay.
+	 */
+	readonly canDeleteBranches: boolean;
 }
 
 /** Read-only, fail-closed assessment used before and after confirmation. */
@@ -163,11 +170,17 @@ export async function assessFeatureFinish(
 		const prefix = entry.kind === "feature" ? "Feature" : "Agent";
 		return entry.reasons.map((reason) => `${prefix}: ${reason}`);
 	});
+	const featureCheck = checks.find((entry) => entry.kind === "feature");
+	const canDeleteBranches = canDeleteFeatureBranches(
+		featureCheck,
+		evidence.integration,
+	);
 	return {
 		checks,
 		reasons,
 		safe: checks.every((entry) => entry.safe),
 		forceable: checks.every((entry) => entry.forceable),
+		canDeleteBranches,
 		fingerprint: JSON.stringify({
 			checks: checks.map(
 				({
@@ -192,9 +205,29 @@ export async function assessFeatureFinish(
 					acceptedPullRequestHeadSha,
 				}),
 			),
+			canDeleteBranches,
 			integration: evidence.integration,
 		}),
 	};
+}
+
+/**
+ * Branch deletion eligibility: the feature check itself must be safe, and
+ * integration must prove the branch already landed. A squash-merge leaves
+ * the local tip unmerged, so only a matched merged-PR proof (or true
+ * ancestry) unlocks deletion — never an unknown/stale state.
+ */
+function canDeleteFeatureBranches(
+	featureCheck: FeatureFinishCheck | undefined,
+	integration: IntegrationEvaluation,
+): boolean {
+	if (!featureCheck?.safe || !featureCheck.branch) return false;
+	if (integration.status !== "known") return false;
+	if (integration.outcome === "integrated_by_ancestry") return true;
+	return (
+		integration.outcome === "integrated_by_pull_request" &&
+		typeof featureCheck.acceptedPullRequestHeadSha === "string"
+	);
 }
 
 async function resolveFeatureRetentionBranch(
@@ -414,14 +447,30 @@ export interface FeatureFinishRemovalPlanEntry {
 	readonly worktreePath: string;
 	readonly force: boolean;
 	readonly acceptedPullRequestHeadSha?: string;
+	/** Delete the feature's Git branches after the worktree is gone. */
+	readonly deleteBranches: boolean;
+	readonly branch?: string;
 }
 
-/** Per-worktree plan: a risk on one check never weakens another check. */
+/**
+ * Per-worktree plan: a risk on one check never weakens another check.
+ * With `deleteBranches`, the already-removed feature entry is kept so a
+ * retry after worktree removal can still delete the branches.
+ */
 export function planFeatureFinishRemovals(
 	assessment: FeatureFinishAssessment,
+	options?: { deleteBranches?: boolean },
 ): readonly FeatureFinishRemovalPlanEntry[] {
+	const deleteBranches =
+		options?.deleteBranches === true && assessment.canDeleteBranches;
 	return assessment.checks
-		.filter((check) => check.disposition === "registered")
+		.filter(
+			(check) =>
+				check.disposition === "registered" ||
+				(deleteBranches &&
+					check.kind === "feature" &&
+					check.disposition === "already_removed"),
+		)
 		.map((check) => ({
 			kind: check.kind,
 			...(check.agentId ? { agentId: check.agentId } : {}),
@@ -429,6 +478,10 @@ export function planFeatureFinishRemovals(
 			force: check.requiresForce,
 			...(check.acceptedPullRequestHeadSha
 				? { acceptedPullRequestHeadSha: check.acceptedPullRequestHeadSha }
+				: {}),
+			deleteBranches: deleteBranches && check.kind === "feature",
+			...(check.kind === "feature" && check.branch
+				? { branch: check.branch }
 				: {}),
 		}));
 }

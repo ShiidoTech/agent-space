@@ -226,15 +226,24 @@ export async function runFeatureFinish(
 				const action = assessment.safe
 					? "Finish Feature"
 					: "Finish with known risks";
+				const deleteAction = "Finish and delete branches";
+				const canDeleteBranches = assessment.canDeleteBranches;
 				const risks = assessment.reasons.length
 					? `\n\nKnown risks and retained Git work:\n${assessment.reasons.join("\n")}`
 					: "";
+				const branchNote = canDeleteBranches
+					? "The local branch will be deleted, plus the origin branch when it matches the merged proof."
+					: "Git branches are preserved.";
 				const confirm = await ui.showWarningMessage(
-					`Finish feature "${feature.name}"?\n\nThis stops its ${ctx.agentManager.getAgents(feature.id).length} agent(s) and ${ctx.serviceManager.getServices(feature.id).length} service(s), removes ${assessment.checks.length} worktree(s), then removes the Agent Space feature record. Git branches are preserved.${risks}`,
+					`Finish feature "${feature.name}"?\n\nThis stops its ${ctx.agentManager.getAgents(feature.id).length} agent(s) and ${ctx.serviceManager.getServices(feature.id).length} service(s), removes ${assessment.checks.length} worktree(s), then removes the Agent Space feature record. ${branchNote}${risks}`,
 					{ modal: true },
+					...(canDeleteBranches ? [deleteAction] : []),
 					action,
 				);
-				if (confirm !== action) return { status: "cancelled" };
+				if (confirm !== action && confirm !== deleteAction) {
+					return { status: "cancelled" };
+				}
+				const deleteBranches = confirm === deleteAction;
 
 				// Stop execution first, but preserve every record until Git cleanup succeeds.
 				progress.report({ message: "Stopping agents and services…" });
@@ -288,7 +297,9 @@ export async function runFeatureFinish(
 					return { status: "blocked", message };
 				}
 
-				const removalPlan = planFeatureFinishRemovals(current);
+				const removalPlan = planFeatureFinishRemovals(current, {
+					deleteBranches,
+				});
 				const featureRemovalPlan = removalPlan.find(
 					(entry) => entry.kind === "feature",
 				);
@@ -310,6 +321,35 @@ export async function runFeatureFinish(
 							);
 						if (!featureRemoval.deleted) {
 							const message = `Feature "${feature.name}" was not finished:\n\n${featureRemoval.reasons.join("\n")}\n\nAll Agent Space records were preserved.`;
+							void ui.showErrorMessage(message);
+							return { status: "blocked", message };
+						}
+					} catch (error) {
+						const message = `Feature "${feature.name}" was not finished: ${messageOf(error)}. All Agent Space records were preserved.`;
+						void ui.showErrorMessage(message);
+						return { status: "error", message };
+					}
+				}
+				if (deleteBranches && featureRemovalPlan?.deleteBranches) {
+					progress.report({ message: "Removing branches…" });
+					try {
+						const branchRemoval =
+							await ctx.featureManager.deleteFinishedBranches(feature.id, {
+								...(featureRemovalPlan.branch
+									? { branch: featureRemovalPlan.branch }
+									: {}),
+								...(featureRemovalPlan.acceptedPullRequestHeadSha
+									? {
+											acceptedPullRequestHeadSha:
+												featureRemovalPlan.acceptedPullRequestHeadSha,
+										}
+									: {}),
+							});
+						if (!branchRemoval.deleted) {
+							const manual = branchRemoval.suggestedCommand
+								? `\n\nYou can finish this manually with:\n${branchRemoval.suggestedCommand}`
+								: "";
+							const message = `Feature "${feature.name}" was not finished:\n\n${branchRemoval.reasons.join("\n")}${manual}\n\nAll Agent Space records were preserved; run Finish again to retry.`;
 							void ui.showErrorMessage(message);
 							return { status: "blocked", message };
 						}

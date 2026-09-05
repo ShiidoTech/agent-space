@@ -64,6 +64,15 @@ Current provider identity findings:
   no launch option or provider-native ownership receipt was found in the CLI
   contract. Directory and creation time remain insufficient, so OpenCode also
   remains fail-closed until explicit attachment.
+- Copilot CLI exposes `--resume <sessionId>` for resume. Its store is
+  `~/.copilot/session-state/<sessionId>/` with `events.jsonl`
+  (`{id, parentId, timestamp, type, data}`; `session.start` carries
+  `data.sessionId`/`data.startTime`, `user.message` carries `content`) and a
+  flat `workspace.yaml` (`{id, cwd, summary, created_at, updated_at}`) that
+  provides both the session cwd and its display title. Resume, discovery and
+  naming read this durable on-disk state. Attention stays unsupported:
+  `assistant.turn_start/turn_end` and `tool.execution_*` events exist on disk,
+  but deriving a live phase from the last event would be recency inference.
 
 Session naming exposes a provider session title separately from the stable Agent
 Space agent name; it is not a rename of the native terminal prompt. Working means

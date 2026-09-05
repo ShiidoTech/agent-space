@@ -1455,6 +1455,105 @@ export class FeatureManager {
 		};
 	}
 
+	/**
+	 * Delete the feature's local branch (and the origin branch when it
+	 * provably matches the merged proof) after the worktree is gone.
+	 * Idempotent: already-deleted refs are skipped so a retry converges.
+	 * Every destructive step is proof-gated — no proof, no `-D`, no remote
+	 * delete — and `git branch -d` stays the default safe path.
+	 */
+	async deleteFinishedBranches(
+		id: string,
+		options?: { branch?: string; acceptedPullRequestHeadSha?: string },
+	): Promise<FeatureDeleteResult> {
+		const feature = this.features.find((f) => f.id === id);
+		const branch = options?.branch ?? feature?.branch;
+		if (!feature || !branch || !isSafeBranchName(branch)) {
+			return { deleted: false, reasons: ["No safe branch to delete."] };
+		}
+		const acceptedSha = options?.acceptedPullRequestHeadSha?.toLowerCase();
+		const reasons: string[] = [];
+
+		const localSha = await this.resolveRefSha(`refs/heads/${branch}`);
+		// The exact tip being deleted: a remote tracking ref pointing at
+		// this same commit provably contains nothing beyond it.
+		let deletedTipSha: string | null = null;
+		if (localSha) {
+			const proven =
+				typeof acceptedSha === "string" &&
+				localSha.toLowerCase() === acceptedSha;
+			const deletion = proven
+				? await this.runGit(["branch", "-D", branch], this.repoRoot)
+				: await this.runGit(["branch", "-d", branch], this.repoRoot);
+			if (deletion.exitCode !== 0 || deletion.error) {
+				const detail =
+					deletion.stderr.trim() ||
+					(deletion.error?.message ?? `git branch -d ${branch} failed`);
+				return {
+					deleted: false,
+					reasons: [
+						`Local branch ${branch} was not deleted: ${detail}`,
+						...(proven
+							? []
+							: [
+									"Only a matched merged pull request proof unlocks forced deletion.",
+								]),
+					],
+				};
+			}
+			deletedTipSha = localSha;
+		}
+
+		const remoteSha = await this.resolveRefSha(`refs/remotes/origin/${branch}`);
+		if (remoteSha) {
+			// Delete the remote branch only when its tip is exactly what we
+			// just proved merged (the deleted local tip, or the accepted PR
+			// head when local was already gone). Anything else could be
+			// someone else's work — preserve it and say how to finish manually.
+			const provenTip =
+				deletedTipSha?.toLowerCase() ??
+				(typeof acceptedSha === "string" ? acceptedSha : null);
+			if (
+				typeof provenTip !== "string" ||
+				remoteSha.toLowerCase() !== provenTip
+			) {
+				return {
+					deleted: false,
+					reasons: [
+						`Remote branch origin/${branch} does not match the merged proof and was preserved.`,
+					],
+					suggestedCommand: `git push origin --delete ${branch}`,
+				};
+			}
+			const push = await this.runGit(
+				["push", "origin", "--delete", branch],
+				this.repoRoot,
+			);
+			if (push.exitCode !== 0 || push.error) {
+				reasons.push(
+					`Remote branch origin/${branch} was not deleted: ${push.stderr.trim() || push.error?.message || "git push --delete failed"}`,
+				);
+				return {
+					deleted: false,
+					reasons,
+					suggestedCommand: `git push origin --delete ${branch}`,
+				};
+			}
+		}
+
+		return { deleted: true, reasons };
+	}
+
+	private async resolveRefSha(ref: string): Promise<string | null> {
+		const resolved = await this.runGit(
+			["rev-parse", "--verify", `${ref}^{commit}`],
+			this.repoRoot,
+		);
+		if (resolved.exitCode !== 0 || resolved.error) return null;
+		const sha = resolved.stdout.trim();
+		return /^[0-9a-f]{40,64}$/iu.test(sha) ? sha : null;
+	}
+
 	/** Remove an explicitly reviewed directory that Git no longer registers. */
 	async removeWorktreeResidue(
 		worktreePath: string,
