@@ -663,7 +663,8 @@ describe("runFeatureFinish command flow", () => {
 				deleteFinishedBranches: vi.fn(() => ({
 					deleted: false,
 					reasons: ["Remote branch origin/feat/f1 was preserved."],
-					suggestedCommand: "git push origin --delete feat/f1",
+					suggestedCommand:
+						"git push --force-with-lease=refs/heads/feat/f1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb origin :feat/f1",
 				})),
 			},
 		} as never;
@@ -676,7 +677,7 @@ describe("runFeatureFinish command flow", () => {
 		expect(outcome.status).toBe("blocked");
 		expect(forget).not.toHaveBeenCalled();
 		expect(errorMessage).toHaveBeenCalledWith(
-			expect.stringContaining("git push origin --delete feat/f1"),
+			expect.stringContaining("git push --force-with-lease="),
 		);
 	});
 });

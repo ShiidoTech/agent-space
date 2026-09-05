@@ -177,7 +177,7 @@ describe("deleteFinishedBranches (real git)", () => {
 		expect(result.deleted).toBe(false);
 	});
 
-	it("preserves a remote branch whose tip is not the proven tip", async () => {
+	it("refuses a remote delete when origin moved, even with a stale tracking ref", async () => {
 		const base = mkdtempSync(path.join(tmpdir(), "agent-space-remote-"));
 		temporaryDirectories.push(base);
 		const origin = path.join(base, "origin.git");
@@ -190,8 +190,10 @@ describe("deleteFinishedBranches (real git)", () => {
 		git(repo, "commit", "-m", "feat");
 		const localSha = git(repo, "rev-parse", "HEAD");
 		git(repo, "push", "-u", "origin", "feat/remote");
-		// A third party advances the remote branch from another clone: the
-		// local tip stays at the proven SHA, the remote moves beyond it.
+		// A third party advances the remote branch from another clone, and
+		// this repo deliberately never fetches again: its tracking ref still
+		// points at the proven SHA. The server-side lease — not the stale
+		// tracking ref — must refuse the delete.
 		const peer = path.join(base, "peer");
 		execFileSync("git", ["clone", origin, peer], { stdio: "ignore" });
 		git(peer, "config", "user.email", "test@example.com");
@@ -199,29 +201,30 @@ describe("deleteFinishedBranches (real git)", () => {
 		git(peer, "checkout", "feat/remote");
 		git(peer, "commit", "--allow-empty", "-m", "peer work");
 		git(peer, "push", "origin", "feat/remote");
+		const peerSha = git(peer, "rev-parse", "HEAD");
+		expect(peerSha).not.toBe(localSha);
 		git(repo, "checkout", "main");
 		git(repo, "merge", "--squash", "feat/remote");
 		git(repo, "commit", "-m", "squash");
-		git(repo, "fetch", "origin");
 		const manager = await managerFor(repo, "feat/remote");
 
-		// Local tip matches the proof so it goes, but the remote moved on:
-		// preserve it and say how to finish manually.
+		// Local tip matches the proof so it goes, but origin moved on:
+		// the lease rejects, the remote tip survives, records are kept.
 		const result = await manager.deleteFinishedBranches("f1", {
 			branch: "feat/remote",
 			acceptedPullRequestHeadSha: localSha,
 		});
 		expect(result.deleted).toBe(false);
-		expect(result.reasons.join("\n")).toContain(
-			"does not match the merged proof",
-		);
+		expect(result.reasons.join("\n")).toContain("moved since the merged proof");
 		expect(result.suggestedCommand).toBe(
-			"git push origin --delete feat/remote",
+			`git push --force-with-lease=refs/heads/feat/remote:${localSha.toLowerCase()} origin :feat/remote`,
 		);
 		// Local branch is gone (proven), remote tracking ref is preserved.
 		expect(git(repo, "branch", "--list", "feat/remote")).toBe("");
 		expect(
-			git(repo, "rev-parse", "--verify", "refs/remotes/origin/feat/remote"),
-		).toBeTruthy();
+			execFileSync("git", ["ls-remote", origin, "refs/heads/feat/remote"], {
+				encoding: "utf8",
+			}).trim(),
+		).toContain(peerSha);
 	});
 });
