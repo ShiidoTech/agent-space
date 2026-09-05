@@ -211,14 +211,18 @@ describe("Store — corruption quarantine (audit P0-1)", () => {
 			"{not valid json",
 		);
 
+		// A later valid save does NOT erase the durable signal: the backup
+		// stays until the user deletes it, so even a fresh instance still
+		// reports the past corruption (review blocker P0-1/P1-7).
 		store.saveFeatures([]);
-		expect(store.hasCorruption()).toBe(false);
-		// Backup survives the subsequent valid save.
-		expect(
-			fs
-				.readdirSync(tmpDir)
-				.filter((entry) => entry.startsWith("features.json.corrupt-")),
-		).toHaveLength(1);
+		expect(new Store(tmpDir).hasCorruption()).toBe(true);
+		expect(new Store(tmpDir).corruptedFiles()).toHaveLength(1);
+
+		// Deleting the backup is the acknowledgement.
+		for (const backup of backups) {
+			fs.rmSync(path.join(tmpDir, backup));
+		}
+		expect(new Store(tmpDir).hasCorruption()).toBe(false);
 	});
 
 	it("treats wrong-shape agents.json as corruption, not empty state", () => {

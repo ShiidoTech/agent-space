@@ -1028,11 +1028,11 @@ export async function activate(
 								);
 							if (launchInitialAgent && initialAgent) {
 								const agents = ctx.agentManager.getAgents(feature.id);
-								void terminalController.createTerminalAsync(
-									feature,
-									initialAgent,
-									agents.length - 1,
-								);
+								void terminalController
+									.createTerminalAsync(feature, initialAgent, agents.length - 1)
+									.catch((error) =>
+										reportUiRefreshError("newFeature initial agent", error),
+									);
 							}
 							sidebarProvider.refresh();
 							HomePanel.refreshAll();
@@ -1371,12 +1371,11 @@ export async function activate(
 
 				const agents = ctx.agentManager.getAgents(featureIdArg);
 				const agentIndex = agents.findIndex((a) => a.id === agentIdArg);
-				void terminalController.createTerminalAsync(
-					feature,
-					agent,
-					agentIndex,
-					true,
-				);
+				void terminalController
+					.createTerminalAsync(feature, agent, agentIndex, true)
+					.catch((error) =>
+						reportUiRefreshError("reopenAgent terminal", error),
+					);
 				sidebarProvider.refresh();
 				const home = HomePanel.getInstance();
 				if (home) home.refresh();

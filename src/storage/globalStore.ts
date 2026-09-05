@@ -4,6 +4,7 @@ import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import type { Project } from "../types";
 import {
 	hasCorruptBackup,
+	listCorruptBackups,
 	listTmpOrphans,
 	quarantineCorruptFile,
 } from "./storageHealth";
@@ -15,6 +16,12 @@ const LEGACY_EXTENSION_STORAGE_IDS = ["paql4711.agent-space"];
  * extension's global storage to a new directory. Preserve the existing Agent
  * Space state by copying the legacy storage once, but never overwrite data
  * already written by the new extension identity.
+ *
+ * All-or-nothing (review blocker P0-2): entries are copied into a staging
+ * directory first and published to `baseDir` only when every entry copied
+ * successfully. A partial failure leaves `baseDir` without entries, so the
+ * next startup retries the full migration instead of freezing a partial
+ * copy as the definitive state.
  */
 export function migrateLegacyExtensionStorage(
 	baseDir: string,
@@ -24,37 +31,50 @@ export function migrateLegacyExtensionStorage(
 		if (directoryHasEntries(baseDir)) return null;
 
 		const storageRoot = path.dirname(baseDir);
+		cleanStaleMigrationStaging(storageRoot, path.basename(baseDir));
 		for (const legacyStorageId of legacyStorageIds) {
 			const legacyDir = path.join(storageRoot, legacyStorageId);
-			if (!directoryHasEntries(legacyDir)) continue;
-
+			let entries: string[];
 			try {
-				fs.mkdirSync(baseDir, { recursive: true });
-			} catch (error) {
-				agentSpaceDiagnostic(
-					`legacy migration skipped: cannot create ${baseDir}: ${error instanceof Error ? error.message : "unknown error"}`,
-				);
-				return null;
+				entries = fs.readdirSync(legacyDir);
+			} catch {
+				continue;
 			}
+			if (entries.length === 0) continue;
+
+			const stagingDir = `${baseDir}.migration-${process.pid}-${Date.now()}`;
 			try {
-				for (const entry of fs.readdirSync(legacyDir)) {
-					try {
-						fs.cpSync(path.join(legacyDir, entry), path.join(baseDir, entry), {
-							recursive: true,
-							errorOnExist: true,
-							force: false,
-						});
-					} catch (error) {
-						agentSpaceDiagnostic(
-							`legacy migration skipped entry ${entry}: ${error instanceof Error ? error.message : "unknown error"}`,
-						);
-					}
+				fs.mkdirSync(stagingDir, { recursive: true });
+				for (const entry of entries) {
+					fs.cpSync(path.join(legacyDir, entry), path.join(stagingDir, entry), {
+						recursive: true,
+						errorOnExist: true,
+						force: false,
+					});
+				}
+				// Publish only after the full copy succeeded. baseDir is
+				// still entry-free here, so a failure below keeps the retry
+				// path open instead of short-circuiting it.
+				fs.mkdirSync(baseDir, { recursive: true });
+				for (const entry of entries) {
+					fs.cpSync(path.join(stagingDir, entry), path.join(baseDir, entry), {
+						recursive: true,
+						errorOnExist: true,
+						force: false,
+					});
 				}
 			} catch (error) {
 				agentSpaceDiagnostic(
-					`legacy migration aborted: ${error instanceof Error ? error.message : "unknown error"}`,
+					`legacy migration aborted, nothing published: ${error instanceof Error ? error.message : "unknown error"}`,
 				);
 				return null;
+			} finally {
+				try {
+					fs.rmSync(stagingDir, { recursive: true, force: true });
+				} catch {
+					// A leftover staging dir never blocks a retry: the next
+					// run cleans stale staging dirs and only checks baseDir.
+				}
 			}
 			return legacyDir;
 		}
@@ -65,6 +85,32 @@ export function migrateLegacyExtensionStorage(
 			`legacy migration failed: ${error instanceof Error ? error.message : "unknown error"}`,
 		);
 		return null;
+	}
+}
+
+function migrationStagingPrefix(baseName: string): string {
+	return `${baseName}.migration-`;
+}
+
+function cleanStaleMigrationStaging(
+	storageRoot: string,
+	baseName: string,
+): void {
+	try {
+		const prefix = migrationStagingPrefix(baseName);
+		for (const entry of fs.readdirSync(storageRoot)) {
+			if (!entry.startsWith(prefix)) continue;
+			try {
+				fs.rmSync(path.join(storageRoot, entry), {
+					recursive: true,
+					force: true,
+				});
+			} catch {
+				// Best-effort only; leftovers never block a retry.
+			}
+		}
+	} catch {
+		// Storage root unreadable: migration will no-op below.
 	}
 }
 
@@ -98,11 +144,13 @@ export class GlobalStore {
 	}
 
 	corruptedFiles(): string[] {
-		return [...this.corrupted];
+		return [
+			...new Set([...this.corrupted, ...listCorruptBackups(this.baseDir)]),
+		];
 	}
 
 	hasCorruption(): boolean {
-		return this.corrupted.size > 0;
+		return this.corruptedFiles().length > 0;
 	}
 
 	tmpOrphans(): string[] {

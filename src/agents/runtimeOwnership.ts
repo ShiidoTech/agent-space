@@ -146,6 +146,26 @@ const spawnLocks = new Map<string, Promise<unknown>>();
 /** A pendu spawn must never serialize its key forever (audit P1-5). */
 export const RUNTIME_SPAWN_LOCK_TIMEOUT_MS = 30_000;
 
+/**
+ * Refusal thrown when a previous spawn for the same key is still running
+ * after the wait timeout. Fail-closed by design: the new spawn never runs
+ * concurrently with the previous one — the caller must surface this and let
+ * the user retry once the in-flight spawn settles.
+ */
+export class SpawnLockTimeoutError extends Error {
+	readonly key: string;
+	readonly timeoutMs: number;
+
+	constructor(key: string, timeoutMs: number) {
+		super(
+			`Spawn refused for ${key}: a previous spawn is still running after ${timeoutMs}ms`,
+		);
+		this.name = "SpawnLockTimeoutError";
+		this.key = key;
+		this.timeoutMs = timeoutMs;
+	}
+}
+
 /** Serialize every Agent Space spawn path for one logical agent/runtime. */
 export async function withRuntimeSpawnLock<T>(
 	key: string,
@@ -153,23 +173,33 @@ export async function withRuntimeSpawnLock<T>(
 	timeoutMs = RUNTIME_SPAWN_LOCK_TIMEOUT_MS,
 ): Promise<T> {
 	const previous = spawnLocks.get(key);
+	let refused = false;
 	const current = (async () => {
 		if (previous) {
-			let timedOut = false;
-			await Promise.race([
-				previous.catch(() => undefined),
-				new Promise<void>((resolve) => {
-					const timer = setTimeout(() => {
-						timedOut = true;
-						resolve();
-					}, timeoutMs);
-					(timer as unknown as { unref?: () => void }).unref?.();
-				}),
-			]);
-			if (timedOut) {
-				agentSpaceDiagnostic(
-					`spawn lock timeout key=${key} after ${timeoutMs}ms; proceeding without waiting for the pendu spawn`,
-				);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			try {
+				const settled = await Promise.race([
+					previous.then(
+						() => true,
+						() => true,
+					),
+					new Promise<boolean>((resolve) => {
+						timer = setTimeout(() => resolve(false), timeoutMs);
+						(timer as unknown as { unref?: () => void }).unref?.();
+					}),
+				]);
+				if (!settled) {
+					// Fail closed, never double-spawn: refuse the new spawn and
+					// hand the key back to the still-running previous one so
+					// mutual exclusion holds for the next caller as well.
+					refused = true;
+					agentSpaceDiagnostic(
+						`spawn lock timeout key=${key} after ${timeoutMs}ms; refusing new spawn while the previous one is still running`,
+					);
+					throw new SpawnLockTimeoutError(key, timeoutMs);
+				}
+			} finally {
+				if (timer !== undefined) clearTimeout(timer);
 			}
 		}
 		return spawn();
@@ -178,7 +208,13 @@ export async function withRuntimeSpawnLock<T>(
 	try {
 		return await current;
 	} finally {
-		if (spawnLocks.get(key) === current) spawnLocks.delete(key);
+		if (spawnLocks.get(key) === current) {
+			if (refused && previous) {
+				spawnLocks.set(key, previous);
+			} else {
+				spawnLocks.delete(key);
+			}
+		}
 	}
 }
 

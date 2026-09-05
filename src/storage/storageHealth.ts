@@ -44,6 +44,43 @@ export function hasCorruptBackup(filePath: string): boolean {
 	}
 }
 
+/**
+ * Durable corruption signal (review blocker P0-1/P1-7): the quarantined
+ * `.corrupt-*.bak` files on disk, mapped back to their original store
+ * paths. The in-memory `corrupted` set of a Store instance dies with the
+ * instance and is cleared by the next valid save — but the backup stays
+ * until the user deletes it, so Doctor must read the disk, not the
+ * instance, to keep a past corruption visible across restarts and saves.
+ */
+export function listCorruptBackups(baseDir: string): string[] {
+	const originals = new Set<string>();
+	const collect = (dir: string) => {
+		let entries: string[] = [];
+		try {
+			if (!fs.existsSync(dir)) return;
+			entries = fs.readdirSync(dir);
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			const match = entry.match(/^(.*)\.corrupt-\d+\.bak$/);
+			if (match?.[1]) originals.add(path.join(dir, match[1]));
+		}
+	};
+	collect(baseDir);
+	try {
+		const featuresDir = path.join(baseDir, "features");
+		if (fs.existsSync(featuresDir)) {
+			for (const featureId of fs.readdirSync(featuresDir)) {
+				collect(path.join(featuresDir, featureId));
+			}
+		}
+	} catch {
+		// Best-effort: top-level findings still stand.
+	}
+	return [...originals].sort();
+}
+
 /** Non-recursive + one-level `features/<id>` scan for `*.tmp.<pid>.*` orphans. */
 export function listTmpOrphans(baseDir: string): string[] {
 	const orphans: string[] = [];

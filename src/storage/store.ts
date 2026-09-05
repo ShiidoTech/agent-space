@@ -12,6 +12,7 @@ import type {
 } from "../types";
 import {
 	hasCorruptBackup,
+	listCorruptBackups,
 	listTmpOrphans,
 	quarantineCorruptFile,
 } from "./storageHealth";
@@ -24,13 +25,19 @@ export class Store {
 		this.baseDir = baseDir;
 	}
 
-	/** Files detected as corrupt since construction (absolute paths). */
+	/**
+	 * Files detected as corrupt: the in-memory set (this session) plus the
+	 * on-disk `.corrupt-*.bak` backups (durable across restarts and valid
+	 * saves — deleting the backup is the acknowledgement).
+	 */
 	corruptedFiles(): string[] {
-		return [...this.corrupted];
+		return [
+			...new Set([...this.corrupted, ...listCorruptBackups(this.baseDir)]),
+		];
 	}
 
 	hasCorruption(): boolean {
-		return this.corrupted.size > 0;
+		return this.corruptedFiles().length > 0;
 	}
 
 	/** Stale `*.tmp.*` files left by an interrupted atomic write. */

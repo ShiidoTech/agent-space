@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { withRuntimeSpawnLock } from "../agents/runtimeOwnership";
+import {
+	SpawnLockTimeoutError,
+	withRuntimeSpawnLock,
+} from "../agents/runtimeOwnership";
 
-describe("withRuntimeSpawnLock timeout (audit P1-5)", () => {
-	it("does not wait forever for a pendu spawn", async () => {
+describe("withRuntimeSpawnLock timeout (audit P1-5, fail-closed)", () => {
+	it("refuses the new spawn instead of double-spawning", async () => {
 		const key = `audit-spawn-${Date.now()}-${Math.random()}`;
 		let openGate!: () => void;
 		const gate = new Promise<void>((resolve) => {
@@ -13,12 +16,22 @@ describe("withRuntimeSpawnLock timeout (audit P1-5)", () => {
 		await new Promise((resolve) => setTimeout(resolve, 10));
 
 		const startedAt = Date.now();
-		const second = await withRuntimeSpawnLock(key, async () => "second", 50);
-		expect(second).toBe("second");
+		await expect(
+			withRuntimeSpawnLock(key, async () => "second", 50),
+		).rejects.toBeInstanceOf(SpawnLockTimeoutError);
 		expect(Date.now() - startedAt).toBeLessThan(5_000);
 
+		// The key still belongs to the first spawn: a retry also refuses.
+		await expect(
+			withRuntimeSpawnLock(key, async () => "third", 50),
+		).rejects.toBeInstanceOf(SpawnLockTimeoutError);
+
+		// Once the first spawn settles, the key is free again.
 		openGate();
 		await expect(first).resolves.toBe("first");
+		await expect(
+			withRuntimeSpawnLock(key, async () => "fourth", 50),
+		).resolves.toBe("fourth");
 	});
 
 	it("serializes spawns on the same key in order", async () => {
