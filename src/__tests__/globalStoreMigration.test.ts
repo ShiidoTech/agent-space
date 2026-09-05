@@ -178,4 +178,28 @@ describe("migrateLegacyExtensionStorage", () => {
 			),
 		).toEqual([{ id: "legacy-project" }]);
 	});
+
+	it("publishes atomically over an empty baseDir left by an interrupted attempt", () => {
+		const root = makeStorageRoot();
+		const legacyDir = path.join(root, "paql4711.agent-space");
+		const currentDir = path.join(root, "ShiidoTech.agent-space");
+		fs.mkdirSync(legacyDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(legacyDir, "projects.json"),
+			JSON.stringify([{ id: "legacy-project" }]),
+		);
+		// An interrupted publish may leave an empty baseDir behind: the
+		// atomic rename path drops it and moves the whole staging tree.
+		fs.mkdirSync(currentDir, { recursive: true });
+
+		expect(migrateLegacyExtensionStorage(currentDir)).toBe(legacyDir);
+		expect(
+			JSON.parse(
+				fs.readFileSync(path.join(currentDir, "projects.json"), "utf-8"),
+			),
+		).toEqual([{ id: "legacy-project" }]);
+		expect(
+			fs.readdirSync(root).filter((entry) => entry.includes(".migration-")),
+		).toEqual([]);
+	});
 });

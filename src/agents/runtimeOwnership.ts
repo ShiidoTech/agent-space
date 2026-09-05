@@ -141,7 +141,12 @@ export function runtimeOwnershipKey(agent: Agent): string {
 	return `hermes:${agent.hermesProfile ?? "default"}:session:${agent.sessionId ?? `agent:${agent.featureId}:${agent.id}`}`;
 }
 
-const spawnLocks = new Map<string, Promise<unknown>>();
+interface SpawnLockEntry {
+	promise: Promise<unknown>;
+	settled: boolean;
+}
+
+const spawnLocks = new Map<string, SpawnLockEntry>();
 
 /** A pendu spawn must never serialize its key forever (audit P1-5). */
 export const RUNTIME_SPAWN_LOCK_TIMEOUT_MS = 30_000;
@@ -174,42 +179,52 @@ export async function withRuntimeSpawnLock<T>(
 ): Promise<T> {
 	const previous = spawnLocks.get(key);
 	let refused = false;
-	const current = (async () => {
-		if (previous) {
-			let timer: ReturnType<typeof setTimeout> | undefined;
-			try {
-				const settled = await Promise.race([
-					previous.then(
-						() => true,
-						() => true,
-					),
-					new Promise<boolean>((resolve) => {
-						timer = setTimeout(() => resolve(false), timeoutMs);
-						(timer as unknown as { unref?: () => void }).unref?.();
-					}),
-				]);
-				if (!settled) {
-					// Fail closed, never double-spawn: refuse the new spawn and
-					// hand the key back to the still-running previous one so
-					// mutual exclusion holds for the next caller as well.
-					refused = true;
-					agentSpaceDiagnostic(
-						`spawn lock timeout key=${key} after ${timeoutMs}ms; refusing new spawn while the previous one is still running`,
-					);
-					throw new SpawnLockTimeoutError(key, timeoutMs);
+	const entry: SpawnLockEntry = { promise: Promise.resolve(), settled: false };
+	const current = (async (): Promise<T> => {
+		try {
+			if (previous && !previous.settled) {
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					const settled = await Promise.race([
+						previous.promise.then(
+							() => true,
+							() => true,
+						),
+						new Promise<boolean>((resolve) => {
+							timer = setTimeout(() => resolve(false), timeoutMs);
+							(timer as unknown as { unref?: () => void }).unref?.();
+						}),
+					]);
+					if (!settled) {
+						// Fail closed, never double-spawn: refuse the new spawn.
+						// The key goes back to the still-running previous entry
+						// (whose own finally removes it on settle) — but only
+						// if it is genuinely still pending. Handing back an
+						// already-settled promise would pin the key until an
+						// unrelated async call cleans it, starving the sync
+						// path (withRuntimeSpawnLockSync, plain has()).
+						refused = true;
+						agentSpaceDiagnostic(
+							`spawn lock timeout key=${key} after ${timeoutMs}ms; refusing new spawn while the previous one is still running`,
+						);
+						throw new SpawnLockTimeoutError(key, timeoutMs);
+					}
+				} finally {
+					if (timer !== undefined) clearTimeout(timer);
 				}
-			} finally {
-				if (timer !== undefined) clearTimeout(timer);
 			}
+			return await spawn();
+		} finally {
+			entry.settled = true;
 		}
-		return spawn();
 	})();
-	spawnLocks.set(key, current);
+	entry.promise = current;
+	spawnLocks.set(key, entry);
 	try {
 		return await current;
 	} finally {
-		if (spawnLocks.get(key) === current) {
-			if (refused && previous) {
+		if (spawnLocks.get(key) === entry) {
+			if (refused && previous && !previous.settled) {
 				spawnLocks.set(key, previous);
 			} else {
 				spawnLocks.delete(key);

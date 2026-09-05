@@ -17,9 +17,11 @@ const LEGACY_EXTENSION_STORAGE_IDS = ["paql4711.agent-space"];
  * Space state by copying the legacy storage once, but never overwrite data
  * already written by the new extension identity.
  *
- * All-or-nothing (review blocker P0-2): entries are copied into a staging
- * directory first and published to `baseDir` only when every entry copied
- * successfully. A partial failure leaves `baseDir` without entries, so the
+ * All-or-nothing (review blockers P0-2): entries are copied into a staging
+ * directory first and published to `baseDir` with a single atomic rename —
+ * staging is a sibling of `baseDir` on the same filesystem, so publication
+ * is one namespace operation, never an entry-by-entry copy. Any failure
+ * before or during the rename leaves `baseDir` without entries, so the
  * next startup retries the full migration instead of freezing a partial
  * copy as the definitive state.
  */
@@ -52,16 +54,25 @@ export function migrateLegacyExtensionStorage(
 						force: false,
 					});
 				}
-				// Publish only after the full copy succeeded. baseDir is
-				// still entry-free here, so a failure below keeps the retry
-				// path open instead of short-circuiting it.
-				fs.mkdirSync(baseDir, { recursive: true });
-				for (const entry of entries) {
-					fs.cpSync(path.join(stagingDir, entry), path.join(baseDir, entry), {
-						recursive: true,
-						errorOnExist: true,
-						force: false,
-					});
+				// Atomic publish. baseDir is still entry-free here (checked on
+				// entry): drop it if it exists but is empty, then move the whole
+				// staging tree with one rename. If another window published a
+				// complete state first, keep it and report no migration by us.
+				try {
+					fs.rmdirSync(baseDir); // succeeds only when existing and empty
+				} catch {
+					// Missing (normal path) or non-empty (lost a race).
+				}
+				try {
+					fs.renameSync(stagingDir, baseDir);
+				} catch (error) {
+					if (directoryHasEntries(baseDir)) {
+						agentSpaceDiagnostic(
+							"legacy migration lost publish race; keeping existing state",
+						);
+						return null;
+					}
+					throw error;
 				}
 			} catch (error) {
 				agentSpaceDiagnostic(
