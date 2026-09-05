@@ -77,7 +77,7 @@
 			},
 			{
 				"command": "agentSpace.deleteFeature",
-				"title": "Finish Feature",
+				"title": "Finish Feature (Remove Worktree)",
 				"category": "Agent Space",
 				"icon": "$(trash)"
 			},
@@ -108,6 +108,51 @@
 			{
 				"command": "agentSpace.openWorkspace",
 				"title": "Open Workspace",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.openFeatureGitView",
+				"title": "Open Feature Git View",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.focusAgent",
+				"title": "Focus Agent",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.closeAgent",
+				"title": "Close Agent",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.deleteAgent",
+				"title": "Delete Agent",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.toggleIsolation",
+				"title": "Toggle Isolation",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.openProjectConfig",
+				"title": "Open Project Config",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.openConfigDocs",
+				"title": "Open Config Docs",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.updateBaseBranch",
+				"title": "Update Base Branch",
+				"category": "Agent Space"
+			},
+			{
+				"command": "agentSpace.deleteWorktreeBranch",
+				"title": "Delete Worktree Branch",
 				"category": "Agent Space"
 			},
 			{
@@ -180,12 +225,6 @@
 				"title": "Attach Provider Session",
 				"category": "Agent Space",
 				"icon": "$(link-external)"
-			},
-			{
-				"command": "agentSpace.openWorkspace",
-				"title": "Open Feature Home",
-				"category": "Agent Space",
-				"icon": "$(window)"
 			},
 			{
 				"command": "agentSpace.openHome",

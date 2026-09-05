@@ -8,6 +8,7 @@ import type { CodingToolRegistry } from "./codingToolRegistry";
 import {
 	RuntimeOwnershipGuard,
 	runtimeOwnershipKey,
+	SpawnLockTimeoutError,
 	withRuntimeSpawnLock,
 } from "./runtimeOwnership";
 import { sessionIsProven } from "./sessionProven";
@@ -83,7 +84,23 @@ export async function restoreAgentRuntimes(
 			const agents = ctx.agentManager.getAgentsReadModel(feature.id);
 			const ordered = [...agents].sort(byCreatedAt);
 			for (const agent of ordered) {
-				const outcome = await restoreAgentRuntime(ctx, feature, agent, deps);
+				let outcome: RuntimeRestoreOutcome | undefined;
+				try {
+					outcome = await restoreAgentRuntime(ctx, feature, agent, deps);
+				} catch (error) {
+					// Fail-closed refusal, never a double spawn: another spawn for
+					// this agent is still in flight. Record it as blocked with a
+					// stable reason instead of aborting the whole restore pass.
+					if (!(error instanceof SpawnLockTimeoutError)) throw error;
+					outcome = {
+						projectId: ctx.project.id,
+						featureId: feature.id,
+						agentId: agent.id,
+						agentName: agent.name,
+						kind: "blocked",
+						reason: "spawn-in-progress",
+					};
+				}
 				if (!outcome) continue;
 				report.considered += 1;
 				report[outcome.kind].push(outcome);

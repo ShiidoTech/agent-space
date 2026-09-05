@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { getThemeColors } from "../constants/colors";
+import { reportUiRefreshError } from "../diagnostics/agentSpaceDiagnostics";
 import {
 	buildProjectKnowledgeLaunchNote,
 	discoverProjectKnowledge,
@@ -909,10 +910,14 @@ export class TerminalController implements vscode.Disposable {
 
 			if (isAlive) {
 				// Tmux session alive — just reattach
-				void this.createTerminalAsync(feature, agent, i);
+				void this.createTerminalAsync(feature, agent, i).catch((error) =>
+					reportUiRefreshError("reattach cold terminal", error),
+				);
 			} else {
 				// Tmux session dead — respawn with resume command
-				void this.createTerminalAsync(feature, agent, i, true);
+				void this.createTerminalAsync(feature, agent, i, true).catch((error) =>
+					reportUiRefreshError("respawn cold terminal", error),
+				);
 			}
 		}
 	}

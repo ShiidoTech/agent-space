@@ -160,15 +160,28 @@ export function _resetCommandExistsCache(): void {
 	commandExistsCache.clear();
 }
 
+/**
+ * Drop all cached environment probes (command availability + Git Bash path)
+ * so the next check hits the live filesystem. Doctor calls this before
+ * probing: a CLI installed after activation must not stay `missing`.
+ */
+export function refreshCommandCache(): void {
+	commandExistsCache.clear();
+	cachedBashPath = undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Exec helpers
 // ---------------------------------------------------------------------------
 
-export function getExecOptions(cwd?: string): ExecSyncOptions {
+export function getExecOptions(
+	cwd?: string,
+	timeoutMs = 30_000,
+): ExecSyncOptions {
 	const opts: ExecSyncOptions = {
 		encoding: "utf-8",
 		stdio: ["ignore", "pipe", "ignore"],
-		timeout: 30_000,
+		timeout: timeoutMs,
 	};
 
 	if (isWindows()) {
@@ -185,32 +198,38 @@ export function getExecOptions(cwd?: string): ExecSyncOptions {
 	return opts;
 }
 
-export function exec(cmd: string, opts?: { cwd?: string }): string {
+export function exec(
+	cmd: string,
+	opts?: { cwd?: string; timeoutMs?: number },
+): string {
 	recordSubprocessCall(categorizeCommand(cmd));
-	return execSync(cmd, getExecOptions(opts?.cwd)) as string;
+	return execSync(cmd, getExecOptions(opts?.cwd, opts?.timeoutMs)) as string;
 }
 
 export function execFile(
 	file: string,
 	args: readonly string[],
-	opts?: { cwd?: string },
+	opts?: { cwd?: string; timeoutMs?: number },
 ): string {
 	recordSubprocessCall(categorizeCommand(file));
 	const bashPath = isWindows() ? findGitBash() : null;
 	if (bashPath) {
 		return execFileSync(bashPath, ["-lc", 'exec "$0" "$@"', file, ...args], {
-			...getExecOptions(opts?.cwd),
+			...getExecOptions(opts?.cwd, opts?.timeoutMs),
 			shell: false,
 		} as ExecFileSyncOptions) as string;
 	}
 
 	return execFileSync(file, args, {
-		...getExecOptions(opts?.cwd),
+		...getExecOptions(opts?.cwd, opts?.timeoutMs),
 		shell: false,
 	} as ExecFileSyncOptions) as string;
 }
 
-export function execSilent(cmd: string, opts?: { cwd?: string }): boolean {
+export function execSilent(
+	cmd: string,
+	opts?: { cwd?: string; timeoutMs?: number },
+): boolean {
 	try {
 		exec(cmd, opts);
 		return true;

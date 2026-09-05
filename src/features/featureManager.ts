@@ -214,6 +214,7 @@ export class FeatureManager {
 						cwd: feature.worktreePath,
 						encoding: "utf-8",
 						stdio: ["ignore", "pipe", "pipe"],
+						timeout: 5_000,
 					}),
 				).trim();
 				if (isWorktree !== "true") {
@@ -232,6 +233,7 @@ export class FeatureManager {
 							cwd: feature.worktreePath,
 							encoding: "utf-8",
 							stdio: ["ignore", "pipe", "pipe"],
+							timeout: 5_000,
 						}),
 					).trim();
 				} catch {
@@ -284,6 +286,7 @@ export class FeatureManager {
 					cwd: this.repoRoot,
 					encoding: "utf-8",
 					stdio: ["ignore", "pipe", "pipe"],
+					timeout: 5_000,
 				}),
 			).trim();
 			if (!detected || detected === "HEAD") {
