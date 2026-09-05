@@ -16,6 +16,7 @@ import { TmuxIntegration } from "./agents/tmux";
 import {
 	configureAgentSpaceDiagnostics,
 	configureSqliteFallbackDiagnostics,
+	reportUiRefreshError,
 } from "./diagnostics/agentSpaceDiagnostics";
 import { setPerfProfilerEnabled } from "./diagnostics/perfProfiler";
 import {
@@ -752,7 +753,9 @@ export async function activate(
 		if (scope?.structural === false) {
 			featureStateCoordinator
 				.reconcilePresence()
-				.catch(() => {})
+				.catch((error) =>
+					reportUiRefreshError("project-change reconcilePresence", error),
+				)
 				.then(() => {
 					sidebarProvider.refreshState();
 					HomePanel.refreshLive(scope);
@@ -1020,7 +1023,9 @@ export async function activate(
 									sidebarProvider.refresh();
 									HomePanel.refreshAll();
 								})
-								.catch(() => {});
+								.catch((error) =>
+									reportUiRefreshError("newFeature reconcileFeature", error),
+								);
 							if (launchInitialAgent && initialAgent) {
 								const agents = ctx.agentManager.getAgents(feature.id);
 								void terminalController.createTerminalAsync(

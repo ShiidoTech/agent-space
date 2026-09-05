@@ -91,6 +91,19 @@ export interface DoctorInput {
 	homeDir?: string;
 	agents?: DoctorAgentProbe[];
 	unknownProjectAgentIds?: DoctorUnknownAgentIds[];
+	/**
+	 * Persistence health collected by the caller from the live stores
+	 * (audit P1-7). Corrupted files are quarantined as `*.corrupt-*.bak`
+	 * next to the original; Doctor surfaces them instead of letting a
+	 * silent empty state pass as healthy.
+	 */
+	storageHealth?: StorageHealthInput;
+}
+
+export interface StorageHealthInput {
+	corruptedFiles: string[];
+	tmpOrphans: string[];
+	diskFreeMb?: number | null;
 }
 
 export interface ProjectConfigProbe {
@@ -120,6 +133,8 @@ export interface DoctorDeps {
 	commandFunctional?(command: "git" | "tmux"): boolean;
 	pathReadable(targetPath: string): boolean;
 	pathWritable?(targetPath: string): boolean;
+	/** Free disk space in MiB for the filesystem holding `targetPath`, null when unknown. */
+	diskFreeMb?(targetPath: string): number | null;
 	readProjectConfig(repoPath: string): ProjectConfigProbe;
 	/**
 	 * Resolve the project's operational knowledge (instructions + runbooks).
@@ -237,18 +252,33 @@ export const defaultDoctorDeps: DoctorDeps = {
 			return false;
 		}
 	},
+	diskFreeMb(targetPath) {
+		try {
+			const stats = fs.statfsSync(targetPath);
+			return Math.floor(
+				(Number(stats.bavail) * Number(stats.bsize)) / (1024 * 1024),
+			);
+		} catch {
+			return null;
+		}
+	},
 	readProjectConfig: defaultReadProjectConfig,
 	readProjectKnowledge(repoPath) {
 		return discoverProjectKnowledge(repoPath, loadProjectConfig(repoPath));
 	},
 	isGitRepo(repoPath) {
-		return execSilent("git rev-parse --is-inside-work-tree", { cwd: repoPath });
+		return execSilent("git rev-parse --is-inside-work-tree", {
+			cwd: repoPath,
+			timeoutMs: 5_000,
+		});
 	},
 	currentBranch(repoPath) {
 		try {
 			return (
-				exec("git rev-parse --abbrev-ref HEAD", { cwd: repoPath }).trim() ||
-				null
+				exec("git rev-parse --abbrev-ref HEAD", {
+					cwd: repoPath,
+					timeoutMs: 5_000,
+				}).trim() || null
 			);
 		} catch {
 			return null;
@@ -260,9 +290,11 @@ export const defaultDoctorDeps: DoctorDeps = {
 		return (
 			execSilent(`git show-ref --verify --quiet ${shellQuote(local)}`, {
 				cwd: repoPath,
+				timeoutMs: 5_000,
 			}) ||
 			execSilent(`git show-ref --verify --quiet ${shellQuote(remote)}`, {
 				cwd: repoPath,
+				timeoutMs: 5_000,
 			})
 		);
 	},
@@ -308,6 +340,48 @@ function renderSection(title: string, checks: DoctorCheck[]): string[] {
 	}
 	lines.push("");
 	return lines;
+}
+
+/**
+ * Surfaces quarantined store corruption and interrupted-write leftovers
+ * (audit P0-1/P1-7). A corrupt `features.json` that fell back to `[]` must
+ * read as an error here, never as a healthy empty workspace.
+ */
+function buildStorageHealthChecks(
+	input: DoctorInput,
+	homeDir: string,
+): DoctorCheck[] {
+	const checks: DoctorCheck[] = [];
+	const health = input.storageHealth;
+	if (!health) {
+		return checks;
+	}
+
+	if (health.corruptedFiles.length === 0) {
+		add(checks, "ok", "Store integrity", "no quarantined store files");
+	} else {
+		for (const file of health.corruptedFiles) {
+			add(
+				checks,
+				"error",
+				"Corrupt store file",
+				`${redactHome(file, homeDir)} failed to parse; the raw bytes were preserved as \`${redactHome(file, homeDir)}.corrupt-*.bak\` and the live state fell back to empty`,
+				"Inspect the .corrupt-*.bak backup, restore or re-create the state, then delete the backup; until then saves build on the empty fallback.",
+			);
+		}
+	}
+
+	if (health.tmpOrphans.length > 0) {
+		add(
+			checks,
+			"warn",
+			"Interrupted writes",
+			`${health.tmpOrphans.length} stale tmp file${health.tmpOrphans.length === 1 ? "" : "s"} left by interrupted atomic saves (${redactHome(health.tmpOrphans[0], homeDir)}${health.tmpOrphans.length > 1 ? ", …" : ""})`,
+			"Delete the *.tmp.* files once no Agent Space window is writing; they are never read back.",
+		);
+	}
+
+	return checks;
 }
 
 /**
@@ -528,7 +602,24 @@ export function runDoctor(
 				? undefined
 				: "Grant the extension access to its global storage directory, then rerun Doctor.",
 		);
+
+		const diskFreeMb = input.storageHealth?.diskFreeMb
+			? input.storageHealth.diskFreeMb
+			: (deps.diskFreeMb?.(input.persistencePath) ?? null);
+		if (diskFreeMb !== null) {
+			add(
+				systemChecks,
+				diskFreeMb < 100 ? "error" : diskFreeMb < 1024 ? "warn" : "ok",
+				"Persistence disk space",
+				`${diskFreeMb} MiB free`,
+				diskFreeMb < 1024
+					? "Free disk space before Agent Space writes grow; a full disk turns atomic saves into failures."
+					: undefined,
+			);
+		}
 	}
+
+	const storageHealthChecks = buildStorageHealthChecks(input, homeDir);
 
 	let availableToolCount = 0;
 	for (const tool of input.tools) {
@@ -756,6 +847,7 @@ export function runDoctor(
 		...configChecks,
 		...toolChecks,
 		...projectChecks,
+		...storageHealthChecks,
 		...agentChecks,
 	];
 	const errors = checks.filter((check) => check.level === "error").length;
@@ -776,6 +868,7 @@ export function runDoctor(
 		...renderSection("Agent Space", configChecks),
 		...renderSection("Coding tools", toolChecks),
 		...renderSection("Projects", projectChecks),
+		...renderSection("Persistence", storageHealthChecks),
 		...renderSection("Agent sessions", agentChecks),
 	].join("\n");
 

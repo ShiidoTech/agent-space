@@ -1024,6 +1024,7 @@ export class AgentManager {
 				cwd: this.repoRoot,
 				encoding: "utf-8",
 				stdio: ["ignore", "pipe", "ignore"],
+				timeout: 5_000,
 			}).trim();
 		} catch {
 			branch = "main";

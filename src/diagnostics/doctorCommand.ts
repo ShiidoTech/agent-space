@@ -9,8 +9,12 @@ import {
 import { GlobalStore } from "../storage/globalStore";
 import { Store } from "../storage/store";
 import type { Project } from "../types";
-import { commandExists } from "../utils/platform";
-import type { DoctorAgentProbe, DoctorUnknownAgentIds } from "./doctor";
+import { commandExists, refreshCommandCache } from "../utils/platform";
+import type {
+	DoctorAgentProbe,
+	DoctorUnknownAgentIds,
+	StorageHealthInput,
+} from "./doctor";
 import { defaultDoctorDeps, runDoctor } from "./doctor";
 
 /**
@@ -24,9 +28,15 @@ export function probeAgents(
 	storagePath: string,
 	projects: Project[],
 	toolRegistry: CodingToolRegistry,
-): { agents: DoctorAgentProbe[]; unknown: DoctorUnknownAgentIds[] } {
+): {
+	agents: DoctorAgentProbe[];
+	unknown: DoctorUnknownAgentIds[];
+	storageHealth: StorageHealthInput;
+} {
 	const agents: DoctorAgentProbe[] = [];
 	const unknown: DoctorUnknownAgentIds[] = [];
+	const corruptedFiles: string[] = [];
+	const tmpOrphans: string[] = [];
 
 	for (const project of projects) {
 		const config = loadProjectConfig(project.repoPath);
@@ -46,6 +56,8 @@ export function probeAgents(
 			featureManager.getBaseFeature(project.id),
 			...store.loadFeatures(),
 		];
+		corruptedFiles.push(...store.corruptedFiles());
+		tmpOrphans.push(...store.tmpOrphans());
 		for (const feature of features) {
 			for (const agent of store.loadAgents(feature.id)) {
 				// Resolve through the agent's frozen profile so a Hermes agent
@@ -113,12 +125,15 @@ export function probeAgents(
 		}
 	}
 
-	return { agents, unknown };
+	return { agents, unknown, storageHealth: { corruptedFiles, tmpOrphans } };
 }
 
 export function registerDoctorCommand(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		vscode.commands.registerCommand("agentSpace.doctor", async () => {
+			// Never report stale tool availability: a CLI installed after
+			// activation must be visible to this probe (audit P1-7).
+			refreshCommandCache();
 			const config = vscode.workspace.getConfiguration("agentSpace");
 			const storagePath = context.globalStorageUri.fsPath;
 			const globalStore = new GlobalStore(storagePath, {
@@ -153,6 +168,16 @@ export function registerDoctorCommand(context: vscode.ExtensionContext): void {
 					),
 					agents: probed.agents,
 					unknownProjectAgentIds: probed.unknown,
+					storageHealth: {
+						corruptedFiles: [
+							...globalStore.corruptedFiles(),
+							...probed.storageHealth.corruptedFiles,
+						],
+						tmpOrphans: [
+							...globalStore.tmpOrphans(),
+							...probed.storageHealth.tmpOrphans,
+						],
+					},
 				},
 				{ ...defaultDoctorDeps, commandExists },
 			);

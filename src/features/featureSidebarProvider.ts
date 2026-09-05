@@ -22,6 +22,7 @@ import {
 	ICON_RESTART,
 	ICON_STOP,
 } from "../constants/icons";
+import { reportUiRefreshError } from "../diagnostics/agentSpaceDiagnostics";
 import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import { recordFullRebuild } from "../diagnostics/webviewRebuildDiagnostics";
 import type {
@@ -202,13 +203,15 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 
 	/** Full HTML rebuild — used for initial load and structural changes (feature create/delete). */
 	refresh(): void {
-		this.refreshAsync().catch(() => {});
+		this.refreshAsync().catch((error) =>
+			reportUiRefreshError("sidebar refresh", error),
+		);
 	}
 
 	/** Update live state without replacing the webview DOM or its local UI state. */
 	refreshState(): void {
 		measurePerfAsync("sidebar.refreshState", () => this.sendUpdate()).catch(
-			() => {},
+			(error) => reportUiRefreshError("sidebar refreshState", error),
 		);
 	}
 

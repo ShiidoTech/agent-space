@@ -179,3 +179,57 @@ describe("Store — services", () => {
 		expect(store.loadServices("f1")).toEqual([]);
 	});
 });
+
+describe("Store — corruption quarantine (audit P0-1)", () => {
+	let tmpDir: string;
+	let store: Store;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "store-corrupt-"));
+		store = new Store(tmpDir);
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("quarantines corrupt features.json instead of losing it on save", () => {
+		fs.writeFileSync(
+			path.join(tmpDir, "features.json"),
+			"{not valid json",
+			"utf-8",
+		);
+		expect(store.loadFeatures()).toEqual([]);
+		expect(store.hasCorruption()).toBe(true);
+		const corrupted = store.corruptedFiles();
+		expect(corrupted).toHaveLength(1);
+		const backups = fs
+			.readdirSync(tmpDir)
+			.filter((entry) => entry.startsWith("features.json.corrupt-"));
+		expect(backups).toHaveLength(1);
+		expect(fs.readFileSync(path.join(tmpDir, backups[0]), "utf-8")).toContain(
+			"{not valid json",
+		);
+
+		store.saveFeatures([]);
+		expect(store.hasCorruption()).toBe(false);
+		// Backup survives the subsequent valid save.
+		expect(
+			fs
+				.readdirSync(tmpDir)
+				.filter((entry) => entry.startsWith("features.json.corrupt-")),
+		).toHaveLength(1);
+	});
+
+	it("treats wrong-shape agents.json as corruption, not empty state", () => {
+		const dir = path.join(tmpDir, "features", "f1");
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(
+			path.join(dir, "agents.json"),
+			JSON.stringify({ agents: "nope" }),
+			"utf-8",
+		);
+		expect(store.loadAgents("f1")).toEqual([]);
+		expect(store.hasCorruption()).toBe(true);
+	});
+});

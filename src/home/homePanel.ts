@@ -10,7 +10,10 @@ import type { TerminalController } from "../agents/terminalController";
 import type { TmuxIntegration } from "../agents/tmux";
 import { TERMINAL_COLOR_HEX, TERMINAL_COLOR_MAP } from "../constants/colors";
 import { ICON_BRAND } from "../constants/icons";
-import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
+import {
+	agentSpaceDiagnostic,
+	reportUiRefreshError,
+} from "../diagnostics/agentSpaceDiagnostics";
 import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import { recordFullRebuild } from "../diagnostics/webviewRebuildDiagnostics";
 import {
@@ -256,7 +259,7 @@ export class HomePanel {
 		this.panel.reveal(vscode.ViewColumn.One, true);
 		measurePerfAsync("Home.refreshLive", () =>
 			this.sendRuntimeUpdateAsync(),
-		).catch(() => {});
+		).catch((error) => reportUiRefreshError("home showFeature", error));
 		this.panel.webview.html = this.getFeatureHtml(featureId);
 		agentSpaceDiagnostic(
 			`focus feature:${featureId} local-render ${Date.now() - startedAt}ms`,
@@ -340,11 +343,11 @@ export class HomePanel {
 		if (this.currentFeatureId) {
 			measurePerfAsync("Home.refreshLive", () =>
 				this.sendRuntimeUpdateAsync(),
-			).catch(() => {});
+			).catch((error) => reportUiRefreshError("home refreshLiveState", error));
 		}
 		measurePerfAsync("Home.refreshLive.fleet", () =>
 			this.sendFleetUpdateAsync(),
-		).catch(() => {});
+		).catch((error) => reportUiRefreshError("home fleet update", error));
 	}
 
 	/**

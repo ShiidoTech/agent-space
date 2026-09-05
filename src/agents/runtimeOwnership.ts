@@ -1,3 +1,4 @@
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import type {
 	ProjectContext,
 	ProjectManager,
@@ -142,14 +143,35 @@ export function runtimeOwnershipKey(agent: Agent): string {
 
 const spawnLocks = new Map<string, Promise<unknown>>();
 
+/** A pendu spawn must never serialize its key forever (audit P1-5). */
+export const RUNTIME_SPAWN_LOCK_TIMEOUT_MS = 30_000;
+
 /** Serialize every Agent Space spawn path for one logical agent/runtime. */
 export async function withRuntimeSpawnLock<T>(
 	key: string,
 	spawn: () => Promise<T>,
+	timeoutMs = RUNTIME_SPAWN_LOCK_TIMEOUT_MS,
 ): Promise<T> {
 	const previous = spawnLocks.get(key);
 	const current = (async () => {
-		if (previous) await previous.catch(() => undefined);
+		if (previous) {
+			let timedOut = false;
+			await Promise.race([
+				previous.catch(() => undefined),
+				new Promise<void>((resolve) => {
+					const timer = setTimeout(() => {
+						timedOut = true;
+						resolve();
+					}, timeoutMs);
+					(timer as unknown as { unref?: () => void }).unref?.();
+				}),
+			]);
+			if (timedOut) {
+				agentSpaceDiagnostic(
+					`spawn lock timeout key=${key} after ${timeoutMs}ms; proceeding without waiting for the pendu spawn`,
+				);
+			}
+		}
 		return spawn();
 	})();
 	spawnLocks.set(key, current);

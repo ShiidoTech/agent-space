@@ -93,4 +93,43 @@ describe("migrateLegacyExtensionStorage", () => {
 		expect(store.getProjects()).toEqual([]);
 		expect(fs.existsSync(currentDir)).toBe(false);
 	});
+
+	it("quarantines corrupt projects.json and keeps a backup across save", () => {
+		const root = makeStorageRoot();
+		const currentDir = path.join(root, "ShiidoTech.agent-space");
+		fs.mkdirSync(currentDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(currentDir, "projects.json"),
+			"{corrupt",
+			"utf-8",
+		);
+
+		const store = new GlobalStore(currentDir, { migrateLegacy: false });
+		expect(store.getProjects()).toEqual([]);
+		expect(store.hasCorruption()).toBe(true);
+		const backups = fs
+			.readdirSync(currentDir)
+			.filter((entry) => entry.startsWith("projects.json.corrupt-"));
+		expect(backups).toHaveLength(1);
+
+		store.saveProjects([]);
+		expect(store.hasCorruption()).toBe(false);
+		expect(
+			fs
+				.readdirSync(currentDir)
+				.filter((entry) => entry.startsWith("projects.json.corrupt-")),
+		).toHaveLength(1);
+	});
+
+	it("never throws from the constructor when migration hits ENOSPC/EACCES", () => {
+		const root = makeStorageRoot();
+		// A regular file where the storage root should be: every mkdir/readdir
+		// inside migration fails, but nothing may throw to the caller.
+		const blocker = path.join(root, "blocker");
+		fs.writeFileSync(blocker, "block", "utf-8");
+		const currentDir = path.join(blocker, "ShiidoTech.agent-space");
+
+		expect(migrateLegacyExtensionStorage(currentDir)).toBeNull();
+		expect(() => new GlobalStore(currentDir)).not.toThrow();
+	});
 });

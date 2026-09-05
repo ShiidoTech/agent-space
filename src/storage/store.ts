@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
 import type {
 	Agent,
 	CompanionState,
@@ -9,21 +10,65 @@ import type {
 	FeatureServices,
 	Service,
 } from "../types";
+import {
+	hasCorruptBackup,
+	listTmpOrphans,
+	quarantineCorruptFile,
+} from "./storageHealth";
 
 export class Store {
 	private readonly baseDir: string;
+	private readonly corrupted = new Set<string>();
 
 	constructor(baseDir: string) {
 		this.baseDir = baseDir;
 	}
 
+	/** Files detected as corrupt since construction (absolute paths). */
+	corruptedFiles(): string[] {
+		return [...this.corrupted];
+	}
+
+	hasCorruption(): boolean {
+		return this.corrupted.size > 0;
+	}
+
+	/** Stale `*.tmp.*` files left by an interrupted atomic write. */
+	tmpOrphans(): string[] {
+		return listTmpOrphans(this.baseDir);
+	}
+
+	private noteCorruption(filePath: string, raw: string | null): void {
+		const backup = quarantineCorruptFile(filePath, raw);
+		this.corrupted.add(filePath);
+		agentSpaceDiagnostic(
+			`corrupt store file quarantined: ${filePath}${backup ? ` -> ${backup}` : ""}`,
+		);
+	}
+
+	private guardedWrite(filePath: string, data: string): void {
+		if (this.corrupted.has(filePath) && !hasCorruptBackup(filePath)) {
+			quarantineCorruptFile(filePath);
+		}
+		this.atomicWriteSync(filePath, data);
+		this.corrupted.delete(filePath);
+	}
+
 	loadFeatures(): Feature[] {
 		const filePath = path.join(this.baseDir, "features.json");
+		let raw: string;
 		try {
-			const raw = fs.readFileSync(filePath, "utf-8");
+			raw = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			return [];
+		}
+		try {
 			const state: CompanionState = JSON.parse(raw);
+			if (!state || !Array.isArray(state.features))
+				throw new Error("bad shape");
 			return state.features;
 		} catch {
+			this.noteCorruption(filePath, raw);
 			return [];
 		}
 	}
@@ -32,7 +77,7 @@ export class Store {
 		this.ensureDir(this.baseDir);
 		const filePath = path.join(this.baseDir, "features.json");
 		const state: CompanionState = { features };
-		this.atomicWriteSync(filePath, JSON.stringify(state, null, "\t"));
+		this.guardedWrite(filePath, JSON.stringify(state, null, "\t"));
 	}
 
 	loadAgents(featureId: string): Agent[] {
@@ -42,11 +87,18 @@ export class Store {
 			featureId,
 			"agents.json",
 		);
+		let raw: string;
 		try {
-			const raw = fs.readFileSync(filePath, "utf-8");
+			raw = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			return [];
+		}
+		try {
 			const data: FeatureAgents = JSON.parse(raw);
+			if (!data || !Array.isArray(data.agents)) throw new Error("bad shape");
 			return data.agents;
 		} catch {
+			this.noteCorruption(filePath, raw);
 			return [];
 		}
 	}
@@ -56,7 +108,7 @@ export class Store {
 		this.ensureDir(dir);
 		const filePath = path.join(dir, "agents.json");
 		const data: FeatureAgents = { agents };
-		this.atomicWriteSync(filePath, JSON.stringify(data, null, "\t"));
+		this.guardedWrite(filePath, JSON.stringify(data, null, "\t"));
 	}
 
 	/**
@@ -72,11 +124,19 @@ export class Store {
 			featureId,
 			"review-inbox.json",
 		);
+		let raw: string;
 		try {
-			const raw = fs.readFileSync(filePath, "utf-8");
+			raw = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			return {};
+		}
+		try {
 			const data: FeatureReviewInbox = JSON.parse(raw);
+			if (!data || typeof data.pending !== "object" || data.pending === null)
+				throw new Error("bad shape");
 			return data.pending ?? {};
 		} catch {
+			this.noteCorruption(filePath, raw);
 			return {};
 		}
 	}
@@ -86,7 +146,7 @@ export class Store {
 		this.ensureDir(dir);
 		const filePath = path.join(dir, "review-inbox.json");
 		const data: FeatureReviewInbox = { pending };
-		this.atomicWriteSync(filePath, JSON.stringify(data, null, "\t"));
+		this.guardedWrite(filePath, JSON.stringify(data, null, "\t"));
 	}
 
 	loadServices(featureId: string): Service[] {
@@ -96,11 +156,18 @@ export class Store {
 			featureId,
 			"services.json",
 		);
+		let raw: string;
 		try {
-			const raw = fs.readFileSync(filePath, "utf-8");
+			raw = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			return [];
+		}
+		try {
 			const data: FeatureServices = JSON.parse(raw);
+			if (!data || !Array.isArray(data.services)) throw new Error("bad shape");
 			return data.services;
 		} catch {
+			this.noteCorruption(filePath, raw);
 			return [];
 		}
 	}
@@ -110,7 +177,7 @@ export class Store {
 		this.ensureDir(dir);
 		const filePath = path.join(dir, "services.json");
 		const data: FeatureServices = { services };
-		this.atomicWriteSync(filePath, JSON.stringify(data, null, "\t"));
+		this.guardedWrite(filePath, JSON.stringify(data, null, "\t"));
 	}
 
 	deleteFeatureData(featureId: string): void {
@@ -124,8 +191,27 @@ export class Store {
 
 	private atomicWriteSync(filePath: string, data: string): void {
 		const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
-		fs.writeFileSync(tmpPath, data, "utf-8");
-		fs.renameSync(tmpPath, filePath);
+		try {
+			fs.writeFileSync(tmpPath, data, "utf-8");
+			try {
+				const fd = fs.openSync(tmpPath, "r");
+				try {
+					fs.fsyncSync(fd);
+				} finally {
+					fs.closeSync(fd);
+				}
+			} catch {
+				// fsync is best-effort (e.g. non-POSIX FS); the rename below still applies.
+			}
+			fs.renameSync(tmpPath, filePath);
+		} catch (error) {
+			try {
+				if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
+			} catch {
+				// Ignore cleanup failures; the orphan is reported via tmpOrphans().
+			}
+			throw error;
+		}
 	}
 
 	private ensureDir(dir: string): void {

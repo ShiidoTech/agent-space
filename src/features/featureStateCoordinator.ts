@@ -1,7 +1,10 @@
 import * as path from "node:path";
 import type { Disposable } from "vscode";
 import type { TmuxPaneObservation, TmuxPanesObservation } from "../agents/tmux";
-import { agentSpaceDiagnostic } from "../diagnostics/agentSpaceDiagnostics";
+import {
+	agentSpaceDiagnostic,
+	reportUiRefreshError,
+} from "../diagnostics/agentSpaceDiagnostics";
 import { measurePerfAsync } from "../diagnostics/perfProfiler";
 import type { FeatureGitProjectObservation } from "../git/featureGitInspector";
 import {
@@ -872,7 +875,10 @@ export class FeatureStateCoordinator implements Disposable {
 				.then((health) =>
 					this.acceptReferenceHealth(projectGeneration, ctx.project.id, health),
 				)
-				.catch(() => undefined);
+				.catch((error) => {
+					reportUiRefreshError("reference branch health", error);
+					return undefined;
+				});
 		}
 		const projectObservation = await ctx.featureGitInspector.observeProject(
 			ctx.project.repoPath,
@@ -894,7 +900,10 @@ export class FeatureStateCoordinator implements Disposable {
 						inventory,
 					),
 				)
-				.catch(() => undefined);
+				.catch((error) => {
+					reportUiRefreshError("worktree inventory", error);
+					return undefined;
+				});
 		} else if (this.worktreeInventories.has(ctx.project.id)) {
 			// The worktree list can no longer be observed: transition a previously
 			// known inventory to unknown instead of letting it appear stale-known.

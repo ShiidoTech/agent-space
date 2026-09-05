@@ -282,4 +282,42 @@ describe("runDoctor", () => {
 		expect(report.markdown).toContain("knowledge reference");
 		expect(report.markdown).toContain(".agentspace/runbooks/gone.md");
 	});
+
+	it("reports quarantined store corruption as an error, not healthy empty state", () => {
+		const report = runDoctor(
+			input({
+				persistencePath:
+					"/home/alice/.config/Code/User/globalStorage/shiidotech.agent-space",
+				storageHealth: {
+					corruptedFiles: ["/home/alice/store/projects.json"],
+					tmpOrphans: [],
+				},
+			}),
+			deps({ diskFreeMb: () => 5000 }),
+		);
+
+		expect(report.errors).toBe(1);
+		expect(report.markdown).toContain("Persistence");
+		expect(report.markdown).toContain("Corrupt store file");
+		expect(report.markdown).toContain(".corrupt-*.bak");
+		expect(report.markdown).not.toContain("/home/alice");
+	});
+
+	it("warns on interrupted-write tmp orphans and low disk space", () => {
+		const report = runDoctor(
+			input({
+				persistencePath: "/home/alice/store",
+				storageHealth: {
+					corruptedFiles: [],
+					tmpOrphans: ["/home/alice/store/features.json.tmp.123.456"],
+				},
+			}),
+			deps({ diskFreeMb: () => 50 }),
+		);
+
+		expect(report.errors).toBe(1);
+		expect(report.warnings).toBe(1);
+		expect(report.markdown).toContain("Interrupted writes");
+		expect(report.markdown).toContain("Persistence disk space");
+	});
 });
