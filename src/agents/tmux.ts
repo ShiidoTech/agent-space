@@ -186,6 +186,7 @@ export class TmuxIntegration {
 		try {
 			exec(`tmux set-option -t "${sessionName}" status off`);
 			exec(`tmux set-option -t "${sessionName}" mouse on`);
+			exec("tmux unbind-key -T root MouseDown3Pane");
 			this.ensureNativeScroll();
 		} catch {
 			// Session may not exist
@@ -197,6 +198,7 @@ export class TmuxIntegration {
 			await Promise.all([
 				execAsync(`tmux set-option -t "${sessionName}" status off`),
 				execAsync(`tmux set-option -t "${sessionName}" mouse on`),
+				execAsync("tmux unbind-key -T root MouseDown3Pane"),
 			]);
 			await this.ensureNativeScrollAsync();
 		} catch {
