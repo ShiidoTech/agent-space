@@ -861,6 +861,145 @@ describe("FeatureStateCoordinator", () => {
 		).toBe(false);
 	});
 
+	it("reuses a cached merged PR without re-querying GitHub when the local head advances", async () => {
+		const readResult = (stdout: string) => ({
+			argv: [],
+			cwd: "/repo",
+			exitCode: 0,
+			signal: null,
+			stdout,
+			stderr: "",
+		});
+		const deliverySha = "4".repeat(40);
+		let activeSha = "2".repeat(40);
+		const active = {
+			...feature(),
+			branch: "feat/feature_cockpit",
+			primaryBranchRef: "feat/audit_and_go",
+			branchLinks: [
+				{
+					ref: "feat/audit_and_go",
+					role: "primary" as const,
+					linkedAt: "2026-08-12T00:00:00.000Z",
+					source: "reflog_checkout" as const,
+				},
+				{
+					ref: "feat/feature_cockpit",
+					role: "continuation" as const,
+					linkedAt: "2026-08-12T09:35:00.000Z",
+					source: "reflog_checkout" as const,
+					relation: {
+						kind: "descends_from" as const,
+						ref: "feat/audit_and_go",
+					},
+				},
+			],
+		};
+		const observeActive = (sha: string) => ({
+			ref: "feat/feature_cockpit",
+			sha,
+		});
+		const inspect = vi.fn(
+			async ({ featureBranch }: { featureBranch: string }) => {
+				if (featureBranch === "feat/feature_cockpit") {
+					return {
+						...git(active),
+						feature: known(observeActive(activeSha)),
+						head: known(observeActive(activeSha)),
+					};
+				}
+				return git(featureBranch === "main" ? baseFeature() : feature());
+			},
+		);
+		const fixture = setup(inspect);
+		fixture.setFeatures([
+			{
+				...active,
+				primaryBranchRef: undefined,
+				branchLinks: undefined,
+			},
+		]);
+		fixture.context.featureManager.getFeatures = vi.fn(() => [active]);
+		fixture.context.gitClient.read = vi.fn(async (args: readonly string[]) => {
+			if (args[0] === "config") {
+				return readResult(
+					"remote.origin.url https://github.com/ShiidoTech/agent-space.git\n",
+				);
+			}
+			if (args[0] === "rev-parse" && args[2]?.startsWith("feat/audit_and_go")) {
+				return readResult(`${deliverySha}\n`);
+			}
+			return readResult("main\n");
+		});
+		const listPullRequests = vi.fn(async () => ({
+			status: "ok" as const,
+			pulls: [
+				{
+					number: 74,
+					html_url: "https://github.com/ShiidoTech/agent-space/pull/74",
+					state: "closed" as const,
+					merged: true,
+					merged_at: "2026-08-17T09:00:00Z",
+					draft: false,
+					head: { ref: "feat/audit_and_go", sha: deliverySha },
+					base: { ref: "main" },
+				},
+			],
+		}));
+		const backend = {
+			auth: vi.fn(async () => ({
+				state: "authenticated" as const,
+				source: "env" as const,
+				token: "test",
+			})),
+			listPullRequests,
+		} satisfies PullRequestBackend;
+		const coordinator = new FeatureStateCoordinator(fixture.manager, {
+			createGithubBackend: () => backend,
+			referenceBranchRemote: {
+				observe: vi.fn(async () => ({
+					status: "missing" as const,
+					observedAt: "2026-08-12T00:00:00.000Z",
+					provenance: {
+						source: "remote_head" as const,
+						ref: "refs/heads/main",
+						backend: "test",
+					},
+				})),
+			},
+		});
+
+		await coordinator.reconcile();
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+				resolution: {
+					outcome: "selected",
+					pull: { state: "merged" },
+				},
+			}),
+		);
+		expect(listPullRequests).toHaveBeenCalledWith(
+			expect.objectContaining({ head: "feat/audit_and_go" }),
+		);
+		const queriesAfterFirstPass = listPullRequests.mock.calls.length;
+
+		activeSha = "9".repeat(40);
+		await coordinator.reconcile();
+		await vi.waitFor(() =>
+			expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+				queriedHeadSha: deliverySha,
+			}),
+		);
+		expect(coordinator.getSnapshot("f1")?.github).toMatchObject({
+			resolution: {
+				outcome: "selected",
+				pull: { state: "merged" },
+			},
+		});
+		expect(listPullRequests.mock.calls.length).toBe(queriesAfterFirstPass);
+		coordinator.dispose();
+	});
+
 	it("selects the merged PR from the active branch and models deliveredVia", async () => {
 		const readResult = (stdout: string) => ({
 			argv: [],

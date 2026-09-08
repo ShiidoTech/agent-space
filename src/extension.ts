@@ -1494,7 +1494,8 @@ export async function activate(
 						},
 						featureStateCoordinator: {
 							getSnapshot: (id) => featureStateCoordinator.getSnapshot(id),
-							reconcile: () => featureStateCoordinator.reconcile(),
+							reconcileFeature: (id) =>
+								featureStateCoordinator.reconcileFeature(id),
 						},
 						tmux: {
 							sessionName: (f, a) => tmux.sessionName(f, a),

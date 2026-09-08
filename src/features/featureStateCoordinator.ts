@@ -175,6 +175,16 @@ export class FeatureStateCoordinator implements Disposable {
 	private githubRefreshSequence = 0;
 	private githubObservations = new Map<string, GitHubObservation>();
 	private githubFallbacks = new Map<string, GitHubObservation>();
+	/**
+	 * Terminal merged-PR observations keyed per delivery vector
+	 * (`repoPath\u0000featureId\u0000deliveryBranch`). A merged PR is an
+	 * immutable GitHub fact: while the local Git evidence stays coherent with
+	 * the delivered branch (feature head == delivery head), reusing it here
+	 * skips the redundant GitHub API query on every deep pass. An explicit
+	 * refresh (`invalidateGithubFeature`) clears it so the user can force a
+	 * re-query at any time.
+	 */
+	private terminalMergedGithub = new Map<string, GitHubObservation>();
 	private githubObservationGenerations = new Map<string, number>();
 	/**
 	 * Feature IDs whose worktree directory was detected as absent from the
@@ -253,6 +263,7 @@ export class FeatureStateCoordinator implements Disposable {
 		this.githubObservations.clear();
 		this.githubFallbacks.clear();
 		this.githubObservationGenerations.clear();
+		this.terminalMergedGithub.clear();
 	}
 
 	getSnapshot(featureId: string): FeatureSnapshot | undefined {
@@ -1272,23 +1283,41 @@ export class FeatureStateCoordinator implements Disposable {
 			inspectionBranch,
 		);
 		let github = this.githubObservations.get(githubKey);
+		let skipGithubRefresh = false;
 		if (!github) {
-			github = this.githubFallbacks.get(githubKey);
-			if (!github) {
-				github = unavailableGithub(ctx.project.repoPath);
-				this.githubFallbacks.set(githubKey, github);
+			const terminal = this.terminalMergedGithub.get(
+				this.terminalMergedKey(
+					ctx.project.repoPath,
+					feature.id,
+					deliveryBranch,
+				),
+			);
+			if (
+				terminal &&
+				this.isCoherentMergedDelivery(terminal, delivery, git.feature)
+			) {
+				github = terminal;
+				skipGithubRefresh = true;
+			} else {
+				github = this.githubFallbacks.get(githubKey);
+				if (!github) {
+					github = unavailableGithub(ctx.project.repoPath);
+					this.githubFallbacks.set(githubKey, github);
+				}
 			}
 		}
-		this.deferGithubObservation(
-			ctx,
-			feature,
-			deliveryBranch,
-			deliveryHeadSha,
-			activeHeadSha,
-			activeIsContinuation,
-			baseRef,
-			inspectionBranch,
-		);
+		if (!skipGithubRefresh) {
+			this.deferGithubObservation(
+				ctx,
+				feature,
+				deliveryBranch,
+				deliveryHeadSha,
+				activeHeadSha,
+				activeIsContinuation,
+				baseRef,
+				inspectionBranch,
+			);
+		}
 		const delivered = withDeliveredVia(delivery, feature, github, git.feature);
 		const mergedHead =
 			github.status === "known" &&
@@ -1378,6 +1407,23 @@ export class FeatureStateCoordinator implements Disposable {
 				}
 				this.githubObservations.set(key, observation);
 				this.githubFallbacks.delete(key);
+				// A merged PR is a terminal GitHub fact: keep it stable per
+				// delivery vector so re-observing after the feature head
+				// advances (or any other SSA change) never re-queries GitHub.
+				if (
+					observation.status === "known" &&
+					observation.resolution.outcome === "selected" &&
+					observation.resolution.pull.state === "merged"
+				) {
+					this.terminalMergedGithub.set(
+						this.terminalMergedKey(
+							ctx.project.repoPath,
+							feature.id,
+							deliveryBranch,
+						),
+						observation,
+					);
+				}
 				// The GitHub cache now has fresh evidence for this one feature;
 				// re-run its deep observation to publish it (scoped, no fan-out).
 				if (observation.status !== "unavailable") {
@@ -1411,6 +1457,9 @@ export class FeatureStateCoordinator implements Disposable {
 		for (const key of this.githubRefreshes.keys()) {
 			if (key.startsWith(prefix)) this.githubRefreshes.delete(key);
 		}
+		for (const key of this.terminalMergedGithub.keys()) {
+			if (key.startsWith(prefix)) this.terminalMergedGithub.delete(key);
+		}
 		this.githubServices.get(repoPath)?.invalidate();
 	}
 
@@ -1432,6 +1481,58 @@ export class FeatureStateCoordinator implements Disposable {
 			baseRef ?? "",
 			activeBranchRef,
 		].join("\u0000");
+	}
+
+	/** Stable key for a terminal merged-PR observation, i.e. it deliberately
+	 * ignores the volatile delivery/active SHAs so it survives the feature head
+	 * advancing after the merge. */
+	private terminalMergedKey(
+		repoPath: string,
+		featureId: string,
+		deliveryBranch: string,
+	): string {
+		return [repoPath, featureId, deliveryBranch].join("\u0000");
+	}
+
+	/**
+	 * A cached merged-PR observation may only be reused if the branch context
+	 * that produced it is unchanged. A merged fact is terminal, but the branch
+	 * it was queried against decides what GitHub can report for the current
+	 * state:
+	 * - merged on the delivery branch itself: reusable while that branch still
+	 *   points at the merged head (nothing pushed after the merge), even if the
+	 *   active continuation branch advances;
+	 * - merged on the active (continuation) branch: reusable only while that
+	 *   same branch is still checked out at the merged head — switching to a
+	 *   different branch must re-query GitHub.
+	 */
+	private isCoherentMergedDelivery(
+		terminal: GitHubObservation,
+		delivery: FeatureDeliveryObservation,
+		feature: GitObservation<ObservedCommit>,
+	): boolean {
+		if (
+			terminal.status !== "known" ||
+			terminal.resolution.outcome !== "selected" ||
+			terminal.resolution.pull.state !== "merged"
+		) {
+			return false;
+		}
+		const mergedSha = terminal.resolution.pull.headSha;
+		const queriedBranch = terminal.queriedBranch;
+		if (queriedBranch === delivery.branchRef) {
+			return (
+				delivery.head.status === "known" &&
+				sameSha(delivery.head.value.sha, mergedSha)
+			);
+		}
+		if (queriedBranch && feature.status === "known") {
+			return (
+				feature.value.ref === queriedBranch &&
+				sameSha(feature.value.sha, mergedSha)
+			);
+		}
+		return false;
 	}
 
 	/**

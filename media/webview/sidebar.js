@@ -277,9 +277,6 @@ window.addEventListener("message", function (event) {
 				needsFullRefresh = true;
 				continue;
 			}
-			var featureFleet = card.querySelector('[data-fleet-feature="' + feat.id + '"]');
-			if (featureFleet && typeof feat.fleetLabel === "string") featureFleet.textContent = feat.fleetLabel;
-
 			// Update the same human-facing Feature summary used by the full page.
 			if (!feat.isBase && feat.statusLabel && feat.statusTone) {
 				var badge = card.querySelector('[data-status-badge="' + feat.id + '"]');

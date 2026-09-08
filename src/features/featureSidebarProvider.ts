@@ -261,7 +261,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 				statusLabel?: string;
 				statusTone?: string;
 				statusDetail?: string;
-				fleetLabel: string;
 				isBase: boolean;
 				agents: SidebarAgent[];
 				services: SidebarService[];
@@ -283,16 +282,12 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					const agents = this.snapshotAgents(snapshot);
 					const services = this.snapshotServices(snapshot);
 					const summary = this.presentSidebarSummary(snapshot);
-					const fleet = projectSnapshotFleetRollup([snapshot], (agent) =>
-						ctx.agentManager.observeCached(agent),
-					);
 					return {
 						id: snapshot.feature.id,
 						branch: snapshot.feature.branch,
 						statusLabel: summary?.label,
 						statusTone: summary?.tone,
 						statusDetail: summary?.detail,
-						fleetLabel: formatFleetRollup(fleet),
 						isBase: snapshot.feature.id.startsWith("base:"),
 						agentsKnown: snapshot.runtime.agents.status === "known",
 						servicesKnown: snapshot.runtime.services.status === "known",
@@ -616,9 +611,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 			services.filter((s) => s.status === "running").length;
 
 		const summary = this.presentSidebarSummary(snapshot);
-		const fleet = projectSnapshotFleetRollup([snapshot], (agent) =>
-			this.observeAgentCached(feature.id, agent),
-		);
 		const bodyHtml = this.renderSnapshotCardBody(snapshot, agents, services);
 		const count = this.snapshotRuntimeKnown(snapshot)
 			? totalCount > 0
@@ -635,7 +627,6 @@ export class FeatureSidebarProvider implements vscode.WebviewViewProvider {
 					${checkoutBranch ? `<span class="feature-branch-line feature-checkout-line" title="Branch currently checked out in the worktree"><span class="feature-branch-label">checkout</span> ${this.escapeHtml(checkoutBranch)}</span>` : ""}
 				</span>
 				${summary ? `<span class="status-badge status-${summary.tone}" data-status-badge="${feature.id}" title="${this.escapeHtml(summary.detail ?? summary.label)}">${this.escapeHtml(summary.label)}</span>` : ""}
-				<span class="fleet-rollup-label" data-fleet-feature="${feature.id}">${this.escapeHtml(formatFleetRollup(fleet))}</span>
 				<span class="collapse-count" id="collapse-count-${feature.id}">${count}</span>
 				<button class="delete-btn" onclick="deleteFeature(event, '${feature.id}')" title="Finish Feature">${ICON_DELETE}</button>
 			</div>

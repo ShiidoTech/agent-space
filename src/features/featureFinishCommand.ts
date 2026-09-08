@@ -30,7 +30,7 @@ export interface FeatureFinishDeps {
 	};
 	readonly featureStateCoordinator: Pick<
 		FeatureStateCoordinator,
-		"getSnapshot" | "reconcile"
+		"getSnapshot" | "reconcileFeature"
 	>;
 	readonly tmux: Pick<TmuxIntegration, "sessionName" | "legacySessionName">;
 	readonly terminalController: Pick<TerminalController, "killFeatureTerminals">;
@@ -142,12 +142,12 @@ export async function runFeatureFinish(
 					deps.featureStateCoordinator.getSnapshot(feature.id);
 				if (!snapshot) {
 					progress.report({ message: "Checking integration…" });
-					await deps.featureStateCoordinator.reconcile();
+					await deps.featureStateCoordinator.reconcileFeature(feature.id);
 					snapshot = deps.featureStateCoordinator.getSnapshot(feature.id);
 				}
 				if (snapshot?.integration.status === "unknown") {
 					progress.report({ message: "Refreshing integration evidence…" });
-					await deps.featureStateCoordinator.reconcile();
+					await deps.featureStateCoordinator.reconcileFeature(feature.id);
 					snapshot = deps.featureStateCoordinator.getSnapshot(feature.id);
 				}
 				if (!snapshot) {
