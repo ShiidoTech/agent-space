@@ -40,10 +40,33 @@ before experimenting with any alternative launch or install route.
      leaks into the archive;
    - the packaged `extension/dist/extension.js` hash differs from the local
      built bundle.
-5. Install the generated VSIX in VS Code Insiders:
+5. Install the generated VSIX in VS Code Insiders.
+
+   **WSL remote context (the common case when running from WSL):**
+   `code-insiders` resolves to the Windows client shim, which will fail with
+   `code: 'Extract'` because the VSIX cannot be extracted through drvfs.
+   Use the WSL server CLI instead:
+
+   ```bash
+   # Find the active server commit directory
+   SERVER_COMMIT=$(ls ~/.vscode-server-insiders/bin/ | grep -v '\.' | head -1)
+   SERVER_CLI=~/.vscode-server-insiders/bin/$SERVER_COMMIT/bin/code-server-insiders
+
+   # Install — MUST use an absolute WSL path (relative paths resolve to Windows)
+   $SERVER_CLI --install-extension <worktree>/agent-space-<version>.vsix --force
+   ```
+
+   If the error says `Please restart VS Code before reinstalling Agent Space`,
+   a live VS Code window is holding the extension lock — ask the user to
+   reload the window, then retry.
+
+   **Native Windows / non-WSL:**
    `code-insiders --install-extension <worktree>/agent-space-<version>.vsix --force`
-6. Verify the installed identity instead of relying on the installer exit code:
-   `code-insiders --list-extensions --show-versions` must contain
+
+6. Verify the installed identity instead of relying on the installer exit code.
+   Use the same CLI used in step 5:
+   `$SERVER_CLI --list-extensions --show-versions` (WSL) or
+   `code-insiders --list-extensions --show-versions` (native) must contain
    `shiidotech.agent-space@<version>`.
 7. Reload the Insiders window (`Developer: Reload Window`) and verify the
    extension activates (`Agent Space` activity-bar icon, or
@@ -66,11 +89,12 @@ turn the failed canonical check green.
   `VSCODE_IPC_HOOK_CLI` env var points to a stale socket from a previous
   session. Quick fix: repoint it to the newest socket:
   `export VSCODE_IPC_HOOK_CLI=$(ls -t /run/user/1000/vscode-ipc-*.sock | head -1)`.
-  If that does not work, the validated fallback on 2026-08-12 was to resolve
-  the active remote CLI with `readlink -f "$(command -v code-insiders)"`, use
-  the sibling `../code-server-insiders` binary to install and list the
-  extension, then verify the installed bundle hash. This path is
-  installation-specific: never hard-code the Insiders commit directory.
+  If that does not work, the validated fallback on 2026-08-12 was to find the
+  WSL server CLI at `~/.vscode-server-insiders/bin/<commit>/bin/code-server-insiders`
+  (list `~/.vscode-server-insiders/bin/` to get the commit hash) and use it to
+  install and list the extension with an **absolute WSL path** to the VSIX,
+  then verify the installed bundle hash. This path is installation-specific:
+  never hard-code the Insiders commit directory.
 - If `npm run package` fails before `vsce package` runs (e.g. Bun cannot create
   its temporary/cache directory on a read-only filesystem during `bun install`),
   first record the failure. The network-based emergency fallback on 2026-08-12

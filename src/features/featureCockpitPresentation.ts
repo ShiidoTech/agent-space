@@ -309,6 +309,14 @@ function presentSummary(
 		snapshot.integration.status === "known" &&
 		snapshot.integration.outcome === "integrated_by_ancestry"
 	) {
+		const merged = mergedPullRequest(snapshot);
+		if (merged) {
+			return {
+				label: "Integrated by PR",
+				tone: "normal",
+				detail: `PR #${merged.number} merged into ${merged.baseRef} · the Feature revision is present in the local target branch.`,
+			};
+		}
 		return {
 			label: "Integrated locally",
 			tone: "normal",
@@ -358,6 +366,22 @@ function presentCompletionProof(snapshot: FeatureSnapshot): string {
 		return `PR #${github.resolution.pull.number} merged${local ? ` · ${local}` : ""}`;
 	}
 	return local ?? "Integration is proven and the working tree is clean.";
+}
+
+function mergedPullRequest(
+	snapshot: FeatureSnapshot,
+): { number: number; baseRef: string } | undefined {
+	const github = snapshot.github;
+	if (
+		github.status === "known" &&
+		github.resolution.outcome === "selected" &&
+		github.resolution.matches.baseRef &&
+		github.resolution.pull.state === "merged"
+	) {
+		const pull = github.resolution.pull;
+		return { number: pull.number, baseRef: pull.baseRef };
+	}
+	return undefined;
 }
 
 function presentWork(snapshot: FeatureSnapshot): FeatureCockpitWork {
@@ -580,7 +604,9 @@ function presentIntegration(
 		case "not_integrated":
 			return { label: "Not integrated", tone: "warning" };
 		case "integrated_by_ancestry":
-			return { label: "Integrated into local base", tone: "normal" };
+			return mergedPullRequest(snapshot)
+				? { label: "Integrated by PR", tone: "normal" }
+				: { label: "Integrated into local base", tone: "normal" };
 		case "integrated_by_pull_request":
 			return { label: "Integrated by PR", tone: "normal" };
 		case "integrated_to_other_base":

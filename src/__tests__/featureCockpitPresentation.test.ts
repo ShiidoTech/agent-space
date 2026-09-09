@@ -717,6 +717,33 @@ describe("presentFeatureCockpit", () => {
 		});
 	});
 
+	it("presents an ancestrally integrated feature as Integrated by PR when a merged PR is observed but remote freshness is not proven", () => {
+		const base = withPull(
+			snapshot({
+				integration: {
+					status: "known",
+					outcome: "integrated_by_ancestry",
+					evidence: {},
+				},
+			}),
+			pull("merged"),
+		);
+
+		expect(presentFeatureCockpit(base).primaryAction.kind).toBe(
+			"open_workspace",
+		);
+		expect(presentFeatureCockpit(base).summary).toEqual({
+			label: "Integrated by PR",
+			tone: "normal",
+			detail:
+				"PR #74 merged into main · the Feature revision is present in the local target branch.",
+		});
+		expect(presentFeatureCockpit(base).delivery.integration).toEqual({
+			label: "Integrated by PR",
+			tone: "normal",
+		});
+	});
+
 	it("labels uncommitted worktree changes as In progress, not Needs you", () => {
 		const result = presentFeatureCockpit({
 			...snapshot(),

@@ -72,7 +72,7 @@ function buildDeps(overrides: Partial<FeatureFinishDeps> = {}): {
 		},
 		featureStateCoordinator: {
 			getSnapshot: vi.fn(() => undefined),
-			reconcile: vi.fn(() => Promise.resolve()),
+			reconcileFeature: vi.fn(() => Promise.resolve()),
 		},
 		tmux: {
 			sessionName: vi.fn((f, a) => `tmux-${f}-${a}`),
@@ -104,9 +104,8 @@ describe("runFeatureFinish command flow", () => {
 	it("reports an immediate checking phase even when no snapshot exists, and reconciles once", async () => {
 		const { deps, inProgress } = buildDeps();
 		const { ui, spy } = buildUi();
-		const reconcile = deps.featureStateCoordinator.reconcile as ReturnType<
-			typeof vi.fn
-		>;
+		const reconcileFeature = deps.featureStateCoordinator
+			.reconcileFeature as ReturnType<typeof vi.fn>;
 
 		// First report of "Checking feature…" must happen even when the
 		// snapshot is missing; the fallback reconcile is also a visible phase.
@@ -118,7 +117,7 @@ describe("runFeatureFinish command flow", () => {
 		);
 
 		expect(spy.reports[0]).toBe("Checking feature…");
-		expect(reconcile).toHaveBeenCalledTimes(1);
+		expect(reconcileFeature).toHaveBeenCalledTimes(1);
 		expect(inProgress.has("f1")).toBe(false);
 	});
 
@@ -247,7 +246,9 @@ describe("runFeatureFinish command flow", () => {
 		const outcome = await runFeatureFinish(ctx, feature(), deps, ui);
 
 		expect(outcome.status).toBe("finished");
-		expect(deps.featureStateCoordinator.reconcile).toHaveBeenCalledTimes(1);
+		expect(deps.featureStateCoordinator.reconcileFeature).toHaveBeenCalledTimes(
+			1,
+		);
 		expect(assess).toHaveBeenCalledTimes(2);
 	});
 
