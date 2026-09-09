@@ -375,6 +375,7 @@ function mergedPullRequest(
 	if (
 		github.status === "known" &&
 		github.resolution.outcome === "selected" &&
+		github.resolution.matches.baseRef &&
 		github.resolution.pull.state === "merged"
 	) {
 		const pull = github.resolution.pull;

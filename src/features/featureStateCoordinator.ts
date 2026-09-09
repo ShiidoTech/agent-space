@@ -1290,6 +1290,7 @@ export class FeatureStateCoordinator implements Disposable {
 					ctx.project.repoPath,
 					feature.id,
 					deliveryBranch,
+					baseRef,
 				),
 			);
 			if (
@@ -1420,6 +1421,7 @@ export class FeatureStateCoordinator implements Disposable {
 							ctx.project.repoPath,
 							feature.id,
 							deliveryBranch,
+							baseRef,
 						),
 						observation,
 					);
@@ -1490,8 +1492,9 @@ export class FeatureStateCoordinator implements Disposable {
 		repoPath: string,
 		featureId: string,
 		deliveryBranch: string,
+		baseRef: string | undefined,
 	): string {
-		return [repoPath, featureId, deliveryBranch].join("\u0000");
+		return [repoPath, featureId, deliveryBranch, baseRef ?? ""].join("\u0000");
 	}
 
 	/**
@@ -1528,6 +1531,15 @@ export class FeatureStateCoordinator implements Disposable {
 		}
 		if (queriedBranch && feature.status === "known") {
 			return (
+				// A merged PR on the active continuation branch is only proof
+				// while that branch is a valid continuation of the delivery
+				// branch. `observeGithub` only queries the active branch when
+				// `activeIsContinuation` holds, so the cache must re-check it:
+				// if the historical branch was rewritten and is no longer an
+				// ancestor of the active checkout, the merge is no longer
+				// attributable to this delivery vector.
+				delivery.activeRelation.status === "known" &&
+				delivery.activeRelation.value.isAncestor &&
 				feature.value.ref === queriedBranch &&
 				sameSha(feature.value.sha, mergedSha)
 			);
