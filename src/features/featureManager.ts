@@ -1062,6 +1062,27 @@ export class FeatureManager {
 	}
 
 	/**
+	 * Fail-closed inventory check over `git worktree list --porcelain`.
+	 * Unknown (Git failure) means registered so callers stay fail-closed.
+	 */
+	private async isWorktreePathRegistered(
+		worktreePath: string,
+	): Promise<boolean> {
+		const inventory = await this.runGit(
+			["worktree", "list", "--porcelain"],
+			this.repoRoot,
+		);
+		if (inventory.exitCode !== 0 || inventory.error) return true;
+		const resolved = path.resolve(worktreePath);
+		for (const line of inventory.stdout.split(/\r?\n/)) {
+			if (!line.startsWith("worktree ")) continue;
+			if (path.resolve(line.slice("worktree ".length).trim()) === resolved)
+				return true;
+		}
+		return false;
+	}
+
+	/**
 	 * Evaluate whether a feature can be removed without losing work. Returns
 	 * the combined reasons across the feature worktree. Safe to call before
 	 * any destructive step.
@@ -1376,6 +1397,28 @@ export class FeatureManager {
 	): Promise<FeatureDeleteResult> {
 		const feature = this.features.find((f) => f.id === id);
 		if (!feature) return { deleted: false, reasons: [] };
+
+		// Already-removed fast path: the worktree directory is gone from disk
+		// and Git no longer registers it, so there is no working tree to
+		// protect (uncommitted changes cannot exist in a missing directory)
+		// and no `git worktree remove` to run. The Git branch itself is
+		// preserved here — branch deletion stays proof-gated in
+		// deleteFinishedBranches. Without this, a worktree deleted outside
+		// Agent Space traps the Feature record forever: `git status` fails,
+		// the checkout is unobservable, and even `--force` stays unavailable
+		// because safety is unobservable.
+		if (feature.worktreePath && !fs.existsSync(feature.worktreePath)) {
+			if (!(await this.isWorktreePathRegistered(feature.worktreePath))) {
+				return { deleted: true, reasons: [] };
+			}
+			// Stale registration for a missing directory: pruning only drops
+			// metadata Git already considers prunable, never user files.
+			await this.runGit(["worktree", "prune"], this.repoRoot);
+			if (!(await this.isWorktreePathRegistered(feature.worktreePath))) {
+				return { deleted: true, reasons: [] };
+			}
+			// Still registered: fall through to the fail-closed path below.
+		}
 
 		const force = options?.force === true;
 		const safety = await this.getDeletionSafety(feature);

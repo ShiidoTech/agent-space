@@ -783,30 +783,40 @@ describe("FeatureManager", () => {
 
 	describe("deleteFeature", () => {
 		it("can remove the worktree while preserving records for a resumable finish", async () => {
+			// Real worktree base inside the tmp dir so the removal exercises
+			// git safety instead of the already-removed fast path.
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const feature = manager.createFeature("resumable", "shared");
+			const feature = fm.createFeature("resumable", "shared");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
 			mockCleanMergedDeletion();
 
-			expect(
-				await manager.removeFeatureWorktreeForFinish(feature.id),
-			).toMatchObject({
-				deleted: true,
-			});
-			expect(manager.getFeature(feature.id)).toBeDefined();
+			expect(await fm.removeFeatureWorktreeForFinish(feature.id)).toMatchObject(
+				{
+					deleted: true,
+				},
+			);
+			expect(fm.getFeature(feature.id)).toBeDefined();
 			expect(store.loadFeatures()).toHaveLength(1);
 
-			manager.forgetFinishedFeature(feature.id);
-			expect(manager.getFeature(feature.id)).toBeUndefined();
+			fm.forgetFinishedFeature(feature.id);
+			expect(fm.getFeature(feature.id)).toBeUndefined();
 		});
 
 		it("removes feature and worktree", async () => {
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const feature = manager.createFeature("to-delete", "shared");
+			const feature = fm.createFeature("to-delete", "shared");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
 
 			mockCleanMergedDeletion();
-			await manager.deleteFeature(feature.id);
+			await fm.deleteFeature(feature.id);
 
-			expect(manager.getFeatures()).toHaveLength(0);
+			expect(fm.getFeatures()).toHaveLength(0);
 			expect(mockExecFile).toHaveBeenCalledWith(
 				"git",
 				expect.arrayContaining(["worktree", "remove", feature.worktreePath]),
@@ -840,13 +850,17 @@ describe("FeatureManager", () => {
 		});
 
 		it("uses exact merged-PR evidence without weakening Git worktree protection", async () => {
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const feature = manager.createFeature("squash-merged", "shared");
+			const feature = fm.createFeature("squash-merged", "shared");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
 			mockExecSync.mockReset();
 			mockCleanSquashMergedDeletion();
 
 			expect(
-				await manager.removeFeatureWorktreeForFinish(feature.id, {
+				await fm.removeFeatureWorktreeForFinish(feature.id, {
 					acceptedPullRequestHeadSha: featureSha,
 				}),
 			).toMatchObject({ deleted: true, reasons: [] });
@@ -861,8 +875,12 @@ describe("FeatureManager", () => {
 		});
 
 		it("rejects stale merged-PR evidence when the working tree becomes dirty", async () => {
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const feature = manager.createFeature("dirty-after-review", "shared");
+			const feature = fm.createFeature("dirty-after-review", "shared");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
 			mockExecSync.mockReset();
 			mockExecFileGit((argv) => {
 				if (argv[0] === "status") return { stdout: " M changed.ts" };
@@ -888,7 +906,7 @@ describe("FeatureManager", () => {
 			});
 
 			await expect(
-				manager.removeFeatureWorktreeForFinish(feature.id, {
+				fm.removeFeatureWorktreeForFinish(feature.id, {
 					acceptedPullRequestHeadSha: featureSha,
 				}),
 			).rejects.toThrow("no longer matches");
@@ -916,6 +934,97 @@ describe("FeatureManager", () => {
 			const result = await fm.removeFeatureWorktreeForFinish(feature.id);
 
 			expect(result.deleted).toBe(true);
+		});
+
+		it("treats a worktree missing from disk and git inventory as already removed", async () => {
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = fm.createFeature("vanished", "shared");
+			// Do NOT create the worktree directory and report an empty git
+			// inventory: even stale PR evidence must not block convergence.
+			mockExecFileGit((argv) => {
+				if (argv[0] === "worktree" && argv[1] === "list") return { stdout: "" };
+				return {};
+			});
+
+			const result = await fm.removeFeatureWorktreeForFinish(feature.id, {
+				acceptedPullRequestHeadSha: "d".repeat(40),
+			});
+
+			expect(result.deleted).toBe(true);
+			const removeCalls = mockExecFile.mock.calls.filter(
+				([file, args]) =>
+					file === "git" &&
+					Array.isArray(args) &&
+					args[0] === "worktree" &&
+					args[1] === "remove",
+			);
+			expect(removeCalls).toHaveLength(0);
+		});
+
+		it("prunes a stale registration for a missing worktree directory", async () => {
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = fm.createFeature("stale-entry", "shared");
+			// Directory missing but Git still registers it until pruned.
+			let pruned = false;
+			mockExecFileGit((argv) => {
+				if (argv[0] === "worktree" && argv[1] === "list") {
+					return {
+						stdout: pruned
+							? ""
+							: `worktree ${feature.worktreePath}\nHEAD deadbeef\n`,
+					};
+				}
+				if (argv[0] === "worktree" && argv[1] === "prune") {
+					pruned = true;
+					return { stdout: "" };
+				}
+				return {};
+			});
+
+			const result = await fm.removeFeatureWorktreeForFinish(feature.id);
+
+			expect(result.deleted).toBe(true);
+			expect(pruned).toBe(true);
+		});
+
+		it("stays fail-closed when the worktree inventory is unavailable", async () => {
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
+			mockExecSync.mockReturnValue(Buffer.from(""));
+			const feature = fm.createFeature("unknown-inventory", "shared");
+			// Directory missing and `git worktree list` failing: fall through
+			// to the fail-closed safety path instead of assuming removal.
+			mockExecFileGit((argv) => {
+				if (argv[0] === "worktree") {
+					return {
+						error: Object.assign(new Error("git unavailable"), {
+							code: 128,
+						}),
+					};
+				}
+				if (argv[0] === "status") return { stdout: " M changed.ts" };
+				if (argv[0] === "rev-parse") {
+					const ref = argv[2] ?? "";
+					if (ref.includes(`${feature.branch}^{commit}`))
+						return { stdout: featureSha };
+					if (ref.includes("^{commit}")) return { stdout: baseSha };
+					return {};
+				}
+				if (argv[0] === "merge-base") return { stdout: "" };
+				if (argv[0] === "rev-list") return { stdout: "0" };
+				return {};
+			});
+
+			await expect(
+				fm.removeFeatureWorktreeForFinish(feature.id),
+			).rejects.toThrow("Cannot delete feature");
 		});
 
 		it("blocks when git worktree remove fails and path still exists", async () => {
@@ -1230,8 +1339,12 @@ describe("FeatureManager", () => {
 			mockExecSync.mockReturnValueOnce("");
 			// createFeature worktree add
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const fm = configManager({ baseBranch: "main" });
+			// Tmp worktree base so the live directory is inside the base.
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
 			const feature = fm.createFeature("dirty-one", "shared", "feature");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
 
 			mockExecSync.mockReset();
 			// deletion safety: observe the linked checkout, then its dirty status.
@@ -1261,8 +1374,11 @@ describe("FeatureManager", () => {
 
 		it("deletes clean features without --force", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const fm = configManager({ baseBranch: "main" });
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
 			const feature = fm.createFeature("clean-one", "shared", "feature");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
 
 			mockExecSync.mockReset();
 			mockCleanMergedDeletion();
@@ -1288,8 +1404,11 @@ describe("FeatureManager", () => {
 
 		it("deletes a clean feature when persisted links lag the active checkout", async () => {
 			mockExecSync.mockReturnValue(Buffer.from(""));
-			const fm = configManager({ baseBranch: "main" });
+			const fm = new FeatureManager(store, tmpDir, tmpDir, {
+				baseBranch: "main",
+			});
 			const feature = fm.createFeature("stale-links", "shared", "feature");
+			fs.mkdirSync(feature.worktreePath, { recursive: true });
 			feature.branch = "feature/old-stale-links";
 			feature.branchLinks = [
 				{
